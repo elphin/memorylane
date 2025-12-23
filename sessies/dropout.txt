@@ -1,0 +1,33 @@
+> lees nu @sessies\221225_3.txt voor de laatste context
+  ⎿  Read sessies\221225_3.txt (1056 lines)
+
+● Ik heb de sessie context gelezen. Hier is een samenvatting van waar we waren:
+
+  Voltooide taken:
+  - Foto's vullen nu hele kaart (cover mode)
+  - Hover overlay met caption/titel + drop shadow
+  - Type labels verwijderd van kaarten
+  - Rounded corners van 12px naar 6px
+  - Drag-and-drop foto's op canvas toegevoegd
+
+  Openstaande taken:
+  1. ☐ Event blocks in jaar overzicht fixen (verdwenen)
+  2. ☐ Tekst items: ctrl+resize (alleen kaart)
+  3. ☐ Tekst items: dubbelklik auto-size
+  4. ☐ Knop: canvas schalen zodat alle items in view passen
+  5. ☐ Knop: items ordenen/bij elkaar + toggle terug
+  6. ☐ Jaren zonder content verbergen
+
+  Er waren debug logs toegevoegd om het event blocks probleem te onderzoeken. Laat me eerst de dev server starten op poort 5199 en dan verder gaan met het debuggen van de event blocks.
+
+● Bash(cd K:/Cursor/memorylane && powershell -Command "Get-Process node -ErrorAction SilentlyContinue | Stop-Process
+      -Force" 2>/dev/null; sleep 2; npm run dev -- --por…)
+  ⎿  Running in the background (↓ to manage)
+
+✶ Fixen event blocks in jaar overzicht… (esc to interrupt · ctrl+t to hide todos)
+  ⎿  ☐ Fix event blocks in jaar overzicht
+     ☐ Tekst items: ctrl+resize (alleen kaart)
+     ☐ Tekst items: dubbelklik auto-size
+     ☐ Knop: canvas schalen zodat alle items in view passen
+     ☐ Knop: items ordenen/bij elkaar + toggle terug
+     ☐ Jaren zonder content verbergen

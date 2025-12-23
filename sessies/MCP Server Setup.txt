@@ -1,0 +1,876 @@
+
+╭─── Claude Code v2.0.74 ──────────────────────────────────────────────────────────────────────────────────────────────╮
+│                                                    │ Tips for getting started                                        │
+│                  Welcome back Jim!                 │ Run /init to create a CLAUDE.md file with instructions for Cla… │
+│                                                    │ ─────────────────────────────────────────────────────────────── │
+│                     * ▐▛███▜▌ *                    │ Recent activity                                                 │
+│                    * ▝▜█████▛▘ *                   │ No recent activity                                              │
+│                     *  ▘▘ ▝▝  *                    │                                                                 │
+│                                                    │                                                                 │
+│   Opus 4.5 · Claude Max · info@elphinstone.nl's    │                                                                 │
+│   Organization                                     │                                                                 │
+│                K:\Cursor\memorylane                │                                                                 │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+> /init
+
+● Search(pattern: "CLAUDE.md")
+  ⎿  Found 0 files
+
+● Search(pattern: "README.md")
+  ⎿  Found 0 files
+
+● Search(pattern: ".cursor/rules/*")
+  ⎿  Found 0 files
+
+● Search(pattern: ".cursorrules")
+  ⎿  Found 0 files
+
+● Search(pattern: ".github/copilot-instructions.md")
+  ⎿  Found 0 files
+
+● Search(pattern: "package.json")
+  ⎿  Found 0 files
+
+● Search(pattern: "**/package.json")
+  ⎿  Found 0 files
+
+● Let me explore the codebase to understand its structure.
+
+● Bash(ls -la)
+  ⎿  total 16
+     drwxr-xr-x 1 Jim 197121    0 Dec 21 19:15 .
+     drwxr-xr-x 1 Jim 197121    0 Dec 21 19:15 ..
+     -rw-r--r-- 1 Jim 197121 7667 Dec 21 19:15 prd.md
+
+● Search(pattern: "**/*.*")
+  ⎿  Found 1 file (ctrl+o to expand)
+
+● I see this is a new project with only a PRD (Product Requirements Document). Let me read it to understand what this project is about.
+
+● Read(prd.md)
+  ⎿  Read 386 lines
+
+● This is a new project with only a PRD (Product Requirements Document) for a "Zoomable Memory Timeline App" called Lifeline. Since there's no actual codebase yet - just a requirements document - I'll create a CLAUDE.md that captures the key architectural decisions and technology choices from the PRD that will guide future development.
+
+● Write(CLAUDE.md)
+  ⎿  Wrote 1 lines to CLAUDE.md
+     # CLAUDE.md
+     This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+     ## Project Overview
+     **Lifeline** (working title) - A local-first desktop & mobile app for navigating personal memories through a
+     zoomable timeline interface. The core principle is semantic zoom over time with canvas-based events.
+     ## Technology Stack (from PRD)
+
+● I've created the CLAUDE.md file. Since this is a greenfield project with only a PRD, I focused on:
+
+  1. Technology stack - Tauri, PixiJS, SQLite as specified in the PRD
+  2. Core data model - The Event-centric architecture where everything is an Event
+  3. Semantic zoom levels - The key UX concept with L0-L3 views
+  4. Performance requirements - 60fps, LOD rendering, viewport virtualization
+  5. Sync architecture - Local-first with async cloud sync
+  6. Design principles - Key decisions that differentiate this from typical apps
+
+  I intentionally kept it concise since there's no actual code yet. As the codebase develops, this file should be expanded with:
+  - Build/test/lint commands
+  - Directory structure
+  - Specific coding patterns used
+  - Environment setup instructions
+
+> Welke hosting is geschikt voor de techstack; vercel of railway?
+Maar ondertussen bouwen we hem eerst gewoon lokaal om de mvp te testen.
+
+● Hosting: Voor deze stack is Railway geschikter dan Vercel.
+
+  Waarom:
+  - Dit is een Tauri desktop app - de app zelf draait lokaal, niet in de cloud
+  - De cloud-component (uit de PRD) is alleen voor de sync-backend: user auth, metadata sync, media opslag
+  - Railway kan persistent backend services draaien + database hosting
+  - Vercel is geoptimaliseerd voor serverless/static sites, niet voor sync-backends met state
+
+  Maar: voor de MVP heb je geen hosting nodig. De hele app werkt offline met lokale SQLite - dat is het local-first principe.
+
+  ---
+  Wil je dat ik het project opzet? Dan zou ik beginnen met:
+
+  1. Tauri + React/Vite project initialiseren
+  2. SQLite database setup (via tauri-plugin-sql of better-sqlite3)
+  3. PixiJS canvas voor de timeline rendering
+  4. Basis datamodel (Event, Item, CanvasItem)
+
+  Zal ik starten met de project setup?
+
+> Ja, start met de project setup
+
+● Bash(node --version && npm --version)
+  ⎿  v22.13.1
+     11.0.0
+
+● Bash(cargo --version && rustc --version)
+  ⎿  Error: Exit code 127
+     /usr/bin/bash: line 1: cargo: command not found
+
+● Bash(where cargo 2>nul || echo "Cargo not found")
+  ⎿  Cargo not found
+
+● Bash(cmd /c "cargo --version" 2>&1 || echo "Not found via cmd either")
+  ⎿  Running in the background (↓ to manage)
+
+> gebruik even een ongewone poort zodat het niet interfeert met mijn andere apps
+
+● Read(C:\Users\Jim\AppData\Local\Temp\claude\K--Cursor-memorylane\tasks\b253f7e.output)
+  ⎿  Read 4 lines
+
+● Bash(powershell -Command "cargo --version" 2>&1)
+  ⎿  Error: Exit code 1
+     cargo : The term 'cargo' is not recognized as the name of a cmdlet, function, script file, or operable program.
+     Check
+     the spelling of the name, or if a path was included, verify that the path is correct and try again.
+     At line:1 char:1
+     + cargo --version
+     + ~~~~~
+         + CategoryInfo          : ObjectNotFound: (cargo:String) [], CommandNotFoundException
+         + FullyQualifiedErrorId : CommandNotFoundException
+
+● Rust is niet geïnstalleerd - dat is nodig voor Tauri.
+
+  Installeer Rust: https://rustup.rs (download en run rustup-init.exe)
+
+  Ondertussen zet ik het frontend project op (React + Vite + PixiJS). Zodra Rust geïnstalleerd is, voegen we Tauri toe.
+
+● Bash(cd K:/Cursor/memorylane && npm create vite@latest . -- --template react-ts 2>&1)
+  ⎿  > npx
+     > create-vite . --template react-ts
+
+     └  Operation cancelled
+
+● Bash(cd K:/Cursor/memorylane && ls -la)
+  ⎿  total 21
+     drwxr-xr-x 1 Jim 197121    0 Dec 21 19:20 .
+     drwxr-xr-x 1 Jim 197121    0 Dec 21 19:15 ..
+     … +3 lines (ctrl+o to expand)
+
+● Bash(cd K:/Cursor/memorylane && rm -f nul)
+  ⎿  (No content)
+
+● Bash(cd K:/Cursor/memorylane && echo '{"name": "lifeline", "private": true, "version": "0.0.1", "type":   timeout: 3m
+      "module", "scripts": {"dev": "vite --port 5199", "build": "ts…)                                       0s
+
+  ⎿  added 69 packages, and audited 70 packages in 8s
+
+     9 packages are looking for funding
+     … +3 lines (ctrl+o to expand)
+
+● Bash(cd K:/Cursor/memorylane && npm install pixi.js @pixi/react)
+  ⎿  added 18 packages, and audited 88 packages in 9s
+
+     10 packages are looking for funding
+     … +3 lines (ctrl+o to expand)
+
+● Bash(cd K:/Cursor/memorylane && npm install sql.js uuid && npm install -D @types/uuid)
+  ⎿  added 2 packages, and audited 90 packages in 2s
+
+     11 packages are looking for funding
+     … +10 lines (ctrl+o to expand)
+
+● Bash(cd K:/Cursor/memorylane && mkdir -p src/components src/models src/db src/hooks src/timeline)
+  ⎿  (No content)
+
+● Write(index.html)
+  ⎿  Wrote 1 lines to index.html
+     <!DOCTYPE html>
+     <html lang="en">
+       <head>
+         <meta charset="UTF-8" />
+         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+         <title>Lifeline</title>
+         <style>
+           * {
+             margin: 0;
+             padding: 0;
+
+● Write(vite.config.ts)
+  ⎿  Wrote 1 lines to vite.config.ts
+     import { defineConfig } from 'vite'
+     import react from '@vitejs/plugin-react'
+     export default defineConfig({
+       plugins: [react()],
+       server: {
+         port: 5199,
+       },
+       optimizeDeps: {
+         exclude: ['sql.js'],
+
+● Write(tsconfig.json)
+  ⎿  Wrote 1 lines to tsconfig.json
+     {
+       "compilerOptions": {
+         "target": "ES2020",
+         "useDefineForClassFields": true,
+         "lib": ["ES2020", "DOM", "DOM.Iterable"],
+         "module": "ESNext",
+         "skipLibCheck": true,
+         "moduleResolution": "bundler",
+         "allowImportingTsExtensions": true,
+         "resolveJsonModule": true,
+
+● Write(tsconfig.node.json)
+  ⎿  Wrote 1 lines to tsconfig.node.json
+     {
+       "compilerOptions": {
+         "composite": true,
+         "skipLibCheck": true,
+         "module": "ESNext",
+         "moduleResolution": "bundler",
+         "allowSyntheticDefaultImports": true
+       },
+       "include": ["vite.config.ts"]
+     }
+
+● Write(src\models\types.ts)
+  ⎿  Wrote 1 lines to src\models\types.ts
+     export type EventType = 'year' | 'period' | 'event' | 'item'
+     export type ItemType = 'text' | 'photo' | 'video' | 'link'
+     export interface Event {
+       id: string
+       type: EventType
+       title?: string
+       startAt: string // ISO date
+       endAt?: string // ISO date
+       parentId?: string
+
+● Write(src\db\database.ts)
+  ⎿  Wrote 1 lines to src\db\database.ts
+     import initSqlJs, { Database } from 'sql.js'
+     import { Event, Item, CanvasItem } from '../models/types'
+     import { v4 as uuidv4 } from 'uuid'
+     let db: Database | null = null
+     const SCHEMA = `
+       CREATE TABLE IF NOT EXISTS events (
+         id TEXT PRIMARY KEY,
+         type TEXT NOT NULL CHECK(type IN ('year', 'period', 'event', 'item')),
+
+● Write(src\vite-env.d.ts)
+  ⎿  Wrote 1 lines to src\vite-env.d.ts
+     /// <reference types="vite/client" />
+
+● Write(src\timeline\Timeline.tsx)
+  ⎿  Wrote 1 lines to src\timeline\Timeline.tsx
+     import { useEffect, useRef, useState, useCallback } from 'react'
+     import { Application, Container, Graphics, Text, TextStyle } from 'pixi.js'
+     import { Event, ZoomLevel, ViewState } from '../models/types'
+     import { getEventsByType } from '../db/database'
+     const YEAR_WIDTH = 200
+     const YEAR_HEIGHT = 80
+     const YEAR_GAP = 20
+     interface TimelineProps {
+
+● Write(src\App.tsx)
+  ⎿  Wrote 1 lines to src\App.tsx
+     import { useEffect, useState } from 'react'
+     import { Timeline } from './timeline/Timeline'
+     import { initDatabase } from './db/database'
+     import { Event } from './models/types'
+     export default function App() {
+       const [isLoading, setIsLoading] = useState(true)
+       const [error, setError] = useState<string | null>(null)
+       const [selectedEvent, setSelectedEvent] = useState<Event | null>(null)
+
+● Write(src\main.tsx)
+  ⎿  Wrote 1 lines to src\main.tsx
+     import { StrictMode } from 'react'
+     import { createRoot } from 'react-dom/client'
+     import App from './App'
+     createRoot(document.getElementById('root')!).render(
+       <StrictMode>
+         <App />
+       </StrictMode>
+     )
+
+● Read(CLAUDE.md)
+  ⎿  Read 66 lines
+
+● Update(CLAUDE.md)
+  ⎿  Added 8 lines
+       2
+       3  This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+       4
+       5 +## Development Commands
+       6 +
+       7 +```bash
+       8 +npm run dev      # Start dev server on port 5199
+       9 +npm run build    # TypeScript check + production build
+      10 +npm run preview  # Preview production build
+      11 +```
+      12 +
+      13  ## Project Overview
+      14
+      15  **Lifeline** (working title) - A local-first desktop & mobile app for navigating personal memories
+          through a zoomable timeline interface. The core principle is semantic zoom over time with canvas-based
+           events.
+
+● Update(CLAUDE.md)
+  ⎿  Added 16 lines, removed 5 lines
+      14
+      15  **Lifeline** (working title) - A local-first desktop & mobile app for navigating personal memories
+          through a zoomable timeline interface. The core principle is semantic zoom over time with canvas-based
+           events.
+      16
+      17 -## Technology Stack (from PRD)
+      17 +## Technology Stack
+      18
+      19 -- **Framework:** Tauri (preferred) or Electron with web stack
+      20 -- **Rendering:** Canvas/WebGL (PixiJS recommended) - no DOM for main canvas
+      21 -- **Local Database:** SQLite (local-first, works fully offline)
+      22 -- **Platforms:** Desktop-first (macOS, Windows), mobile later
+      19 +- **Build:** Vite + React + TypeScript
+      20 +- **Rendering:** PixiJS (WebGL canvas) - DOM only for overlays
+      21 +- **Database:** sql.js (SQLite in browser), will migrate to Tauri SQLite plugin
+      22 +- **Desktop:** Tauri (requires Rust - not yet integrated)
+      23
+      24 +## Project Structure
+      25 +
+      26 +```
+      27 +src/
+      28 +├── models/types.ts    # Data types (Event, Item, CanvasItem, ViewState)
+      29 +├── db/database.ts     # SQLite schema and CRUD operations
+      30 +├── timeline/          # PixiJS timeline rendering
+      31 +├── components/        # React UI components (overlays, panels)
+      32 +└── hooks/             # React hooks
+      33 +```
+      34 +
+      35  ## Architecture
+      36
+      37  ### Core Data Model
+
+● Bash(cd K:/Cursor/memorylane && npm run dev 2>&1 &)
+  ⎿  Running in the background (↓ to manage)
+
+● Bash(sleep 3 && cat C:/Users/Jim/AppData/Local/Temp/claude/K--Cursor-memorylane/tasks/b28c63c.output) timeout: 10s
+  ⎿  > lifeline@0.0.1 dev
+     > vite --port 5199
+     … +5 lines (ctrl+o to expand)
+
+● Project is opgezet en draait op http://localhost:5199
+
+  Wat er nu is:
+
+  | Component                 | Status                  |
+  |---------------------------|-------------------------|
+  | Vite + React + TypeScript | Werkt                   |
+  | PixiJS timeline           | Basis L0 view (jaren)   |
+  | SQLite database           | Schema + CRUD operaties |
+  | Zoom/pan                  | Scroll + Ctrl+Scroll    |
+
+  Structuur:
+  src/
+  ├── models/types.ts     # Event, Item, CanvasItem types
+  ├── db/database.ts      # SQLite schema + queries
+  ├── timeline/Timeline.tsx # PixiJS rendering
+  ├── App.tsx
+  └── main.tsx
+
+  Nog te doen voor volledige MVP:
+  1. Installeer Rust via https://rustup.rs voor Tauri integratie
+  2. Voeg Tauri toe: npm create tauri-app (na Rust install)
+  3. Bouw L1/L2/L3 zoom levels uit
+  4. Event canvas editing (drag & drop items)
+  5. Media import (foto's, video's)
+
+  Open http://localhost:5199 om de timeline te zien. Je kunt horizontaal scrollen en Ctrl+scroll om te zoomen.
+
+> rust is geïnstalleerd, voeg tauri toe
+ik zie overigens niets op de pagina. Helemaal zwart
+
+● Bash(cat C:/Users/Jim/AppData/Local/Temp/claude/K--Cursor-memorylane/tasks/b28c63c.output)
+  ⎿  > lifeline@0.0.1 dev
+     > vite --port 5199
+     … +5 lines (ctrl+o to expand)
+
+● Het probleem is waarschijnlijk sql.js WASM loading. Laat me dat fixen en tegelijk Tauri toevoegen.
+
+● Bash(cd K:/Cursor/memorylane && npm install @tauri-apps/cli@latest @tauri-apps/api@latest -D)
+  ⎿  added 3 packages, and audited 94 packages in 3s
+
+     13 packages are looking for funding
+     … +3 lines (ctrl+o to expand)
+
+● Read(package.json)
+  ⎿  Read 1 line
+
+● Update(package.json)
+  ⎿  Added 1 line, removed 1 line
+      1 -{"name":"lifeline","private":true,"version":"0.0.1","type":"module","scripts":{"dev":"vite --port
+        -5199","build":"tsc && vite build","preview":"vite
+        -preview"},"dependencies":{"@pixi/react":"^8.0.5","@types/react":"^19.2.7","@types/react-dom":"^19.2.3",
+        -"@vitejs/plugin-react":"^5.1.2","pixi.js":"^8.14.3","react":"^19.2.3","react-dom":"^19.2.3","sql.js":"^
+        -1.13.0","typescript":"^5.9.3","uuid":"^13.0.0","vite":"^7.3.0"},"devDependencies":{"@tauri-apps/api":"^
+        -2.9.1","@tauri-apps/cli":"^2.9.6","@types/uuid":"^10.0.0"}}
+      1   No newline at end of file
+      2 +{"name":"lifeline","private":true,"version":"0.0.1","type":"module","scripts":{"dev":"vite --port
+        +5199","build":"tsc && vite build","preview":"vite
+        +preview","tauri":"tauri"},"dependencies":{"@pixi/react":"^8.0.5","@types/react":"^19.2.7","@types/react
+        +-dom":"^19.2.3","@vitejs/plugin-react":"^5.1.2","pixi.js":"^8.14.3","react":"^19.2.3","react-dom":"^19.
+        +2.3","sql.js":"^1.13.0","typescript":"^5.9.3","uuid":"^13.0.0","vite":"^7.3.0"},"devDependencies":{"@ta
+        +uri-apps/api":"^2.9.1","@tauri-apps/cli":"^2.9.6","@types/uuid":"^10.0.0"}}
+      3   No newline at end of file
+
+● Bash(cd K:/Cursor/memorylane && npx tauri init --app-name lifeline --window-title Lifeline --dev-url
+      http://localhost:5199 --before-dev-command "npm run dev" --befor…)
+  ⎿  (No content)
+
+● Bash(ls -la K:/Cursor/memorylane/src-tauri 2>&1)
+  ⎿  total 19
+     drwxr-xr-x 1 Jim 197121   0 Dec 21 20:21 .
+     drwxr-xr-x 1 Jim 197121   0 Dec 21 20:21 ..
+     … +7 lines (ctrl+o to expand)
+
+● Tauri is toegevoegd. Nu de zwarte pagina fixen - probleem is sql.js WASM loading. Laat me de database code aanpassen.
+
+● Bash(mkdir -p K:/Cursor/memorylane/public && cp K:/Cursor/memorylane/node_modules/sql.js/dist/sql-wasm.wasm
+      K:/Cursor/memorylane/public/)
+  ⎿  (No content)
+
+● Read(src\db\database.ts)
+  ⎿  Read 237 lines
+
+● Update(src\db\database.ts)
+  ⎿  Added 1 line, removed 1 line
+      49    if (db) return db
+      50
+      51    const SQL = await initSqlJs({
+      52 -    locateFile: (file) => `https://sql.js.org/dist/${file}`,
+      52 +    locateFile: () => '/sql-wasm.wasm',
+      53    })
+      54
+      55    db = new SQL.Database()
+
+● Read(src-tauri\tauri.conf.json)
+  ⎿  Read 38 lines
+
+● Kill Shell(Kill shell: b28c63c)
+  ⎿  Shell b28c63c killed
+
+● Read(src\timeline\Timeline.tsx)
+  ⎿  Read 191 lines
+
+● Ik zie het probleem - race condition in de Timeline. Laat me het fixen:
+
+● Write(src\timeline\Timeline.tsx)
+  ⎿  Added 65 lines, removed 54 lines
+      14  export function Timeline({ onEventSelect }: TimelineProps) {
+      15    const containerRef = useRef<HTMLDivElement>(null)
+      16    const appRef = useRef<Application | null>(null)
+      17 +  const [isReady, setIsReady] = useState(false)
+      18    const [viewState, setViewState] = useState<ViewState>({
+      19      zoomLevel: ZoomLevel.L0_Lifeline,
+      20      centerX: 0,
+     ...
+      25    // Load year events
+      26    useEffect(() => {
+      27      const yearEvents = getEventsByType('year')
+      28 +    console.log('Loaded years:', yearEvents)
+      29      setYears(yearEvents)
+      30    }, [])
+      31
+     ...
+      35      const app = new Application()
+      36
+      37      const initApp = async () => {
+      38 -      await app.init({
+      39 -        background: '#0a0a0f',
+      40 -        resizeTo: containerRef.current!,
+      41 -        antialias: true,
+      42 -        resolution: window.devicePixelRatio || 1,
+      43 -        autoDensity: true,
+      44 -      })
+      38 +      try {
+      39 +        await app.init({
+      40 +          background: '#0a0a0f',
+      41 +          resizeTo: containerRef.current!,
+      42 +          antialias: true,
+      43 +          resolution: window.devicePixelRatio || 1,
+      44 +          autoDensity: true,
+      45 +        })
+      46
+      47 -      containerRef.current!.appendChild(app.canvas as HTMLCanvasElement)
+      48 -      appRef.current = app
+      49 -
+      50 -      renderTimeline(app, years, viewState)
+      47 +        containerRef.current!.appendChild(app.canvas as HTMLCanvasElement)
+      48 +        appRef.current = app
+      49 +        setIsReady(true)
+      50 +        console.log('PixiJS initialized')
+      51 +      } catch (err) {
+      52 +        console.error('Failed to initialize PixiJS:', err)
+      53 +      }
+      54      }
+      55
+      56      initApp()
+     ...
+       57      }
+       58    }, [])
+       59
+       60 -  // Re-render when years or viewState change
+       60 +  // Re-render when ready, years, or viewState change
+       61    useEffect(() => {
+       62 -    if (!appRef.current || years.length === 0) return
+       63 -    renderTimeline(appRef.current, years, viewState)
+       64 -  }, [years, viewState])
+       62 +    if (!isReady || !appRef.current) return
+       63 +    console.log('Rendering timeline with', years.length, 'years')
+       64 +    renderTimeline(appRef.current, years, viewState, onEventSelect, setViewState)
+       65 +  }, [isReady, years, viewState, onEventSelect])
+       66
+       67 -  const renderTimeline = useCallback((app: Application, events: Event[], state: ViewState) => {
+       68 -    app.stage.removeChildren()
+       69 -
+       70 -    const timelineContainer = new Container()
+       71 -    timelineContainer.x = app.screen.width / 2 + state.centerX
+       72 -    timelineContainer.y = app.screen.height / 2 + state.centerY
+       73 -    timelineContainer.scale.set(state.scale)
+       74 -
+       75 -    // Calculate total width
+       76 -    const totalWidth = events.length * (YEAR_WIDTH + YEAR_GAP) - YEAR_GAP
+       77 -
+       78 -    // Draw timeline line
+       79 -    const line = new Graphics()
+       80 -    line.moveTo(-totalWidth / 2 - 50, 0)
+       81 -    line.lineTo(totalWidth / 2 + 50, 0)
+       82 -    line.stroke({ width: 2, color: 0x333344 })
+       83 -    timelineContainer.addChild(line)
+       84 -
+       85 -    // Draw year blocks
+       86 -    events.forEach((event, index) => {
+       87 -      const x = -totalWidth / 2 + index * (YEAR_WIDTH + YEAR_GAP)
+       88 -      const yearBlock = createYearBlock(event, x, state.zoomLevel, () => {
+       89 -        onEventSelect?.(event)
+       90 -        setViewState((prev) => ({
+       91 -          ...prev,
+       92 -          zoomLevel: ZoomLevel.L1_Year,
+       93 -          focusedEventId: event.id,
+       94 -        }))
+       95 -      })
+       96 -      timelineContainer.addChild(yearBlock)
+       97 -    })
+       98 -
+       99 -    app.stage.addChild(timelineContainer)
+      100 -  }, [onEventSelect])
+      101 -
+       67    // Handle wheel for pan/zoom
+       68    const handleWheel = useCallback((e: WheelEvent) => {
+       69      e.preventDefault()
+     ...
+      110          scale: Math.max(0.1, Math.min(5, prev.scale * zoomFactor)),
+      111        }))
+      112      } else {
+      113 -      // Pan
+      113 +      // Pan horizontally with scroll wheel
+      114        setViewState((prev) => ({
+      115          ...prev,
+      116 -        centerX: prev.centerX - e.deltaX,
+      117 -        centerY: prev.centerY - e.deltaY,
+      116 +        centerX: prev.centerX - (e.deltaY || e.deltaX),
+      117        }))
+      118      }
+      119    }, [])
+     ...
+      139    )
+      140  }
+      141
+      142 +function renderTimeline(
+      143 +  app: Application,
+      144 +  events: Event[],
+      145 +  state: ViewState,
+      146 +  onEventSelect?: (event: Event) => void,
+      147 +  setViewState?: React.Dispatch<React.SetStateAction<ViewState>>
+      148 +) {
+      149 +  app.stage.removeChildren()
+      150 +
+      151 +  const timelineContainer = new Container()
+      152 +  timelineContainer.x = app.screen.width / 2 + state.centerX
+      153 +  timelineContainer.y = app.screen.height / 2 + state.centerY
+      154 +  timelineContainer.scale.set(state.scale)
+      155 +
+      156 +  // Calculate total width
+      157 +  const totalWidth = events.length * (YEAR_WIDTH + YEAR_GAP) - YEAR_GAP
+      158 +
+      159 +  // Draw timeline line
+      160 +  const line = new Graphics()
+      161 +  line.moveTo(-totalWidth / 2 - 50, 0)
+      162 +  line.lineTo(totalWidth / 2 + 50, 0)
+      163 +  line.stroke({ width: 2, color: 0x333344 })
+      164 +  timelineContainer.addChild(line)
+      165 +
+      166 +  // Draw year blocks
+      167 +  events.forEach((event, index) => {
+      168 +    const x = -totalWidth / 2 + index * (YEAR_WIDTH + YEAR_GAP)
+      169 +    const yearBlock = createYearBlock(event, x, () => {
+      170 +      onEventSelect?.(event)
+      171 +      setViewState?.((prev) => ({
+      172 +        ...prev,
+      173 +        zoomLevel: ZoomLevel.L1_Year,
+      174 +        focusedEventId: event.id,
+      175 +      }))
+      176 +    })
+      177 +    timelineContainer.addChild(yearBlock)
+      178 +  })
+      179 +
+      180 +  app.stage.addChild(timelineContainer)
+      181 +}
+      182 +
+      183  function createYearBlock(
+      184    event: Event,
+      185    x: number,
+      186 -  _zoomLevel: ZoomLevel,
+      186    onClick: () => void
+      187  ): Container {
+      188    const container = new Container()
+
+● Bash(cd K:/Cursor/memorylane && npm run dev 2>&1 &)
+  ⎿  Running in the background (↓ to manage)
+
+● Bash(sleep 3 && cat C:/Users/Jim/AppData/Local/Temp/claude/K--Cursor-memorylane/tasks/b5f2f5f.output) timeout: 10s
+  ⎿  > lifeline@0.0.1 dev
+     > vite --port 5199
+     … +7 lines (ctrl+o to expand)
+
+● Dev server draait nu op http://localhost:5200
+
+  Refresh de browser en check de console (F12) voor errors. Je zou nu jaren moeten zien (2015-2025).
+
+  Tauri is klaar. Om de desktop app te starten:
+
+  npm run tauri dev
+
+  Laat me de CLAUDE.md updaten met de Tauri commands:
+
+● Read(CLAUDE.md)
+  ⎿  Read 85 lines
+
+● Update(CLAUDE.md)
+  ⎿  Added 4 lines, removed 3 lines
+       5  ## Development Commands
+       6
+       7  ```bash
+       8 -npm run dev      # Start dev server on port 5199
+       9 -npm run build    # TypeScript check + production build
+      10 -npm run preview  # Preview production build
+       8 +npm run dev          # Start web dev server (port 5199)
+       9 +npm run tauri dev    # Start Tauri desktop app (with hot reload)
+      10 +npm run build        # TypeScript check + production build
+      11 +npm run tauri build  # Build desktop app installer
+      12  ```
+      13
+      14  ## Project Overview
+
+● Update(CLAUDE.md)
+  ⎿  Added 2 lines, removed 2 lines
+      19
+      20  - **Build:** Vite + React + TypeScript
+      21  - **Rendering:** PixiJS (WebGL canvas) - DOM only for overlays
+      22 -- **Database:** sql.js (SQLite in browser), will migrate to Tauri SQLite plugin
+      23 -- **Desktop:** Tauri (requires Rust - not yet integrated)
+      22 +- **Database:** sql.js (SQLite in browser for dev), Tauri SQLite plugin for production
+      23 +- **Desktop:** Tauri 2.x (Rust backend)
+      24
+      25  ## Project Structure
+      26
+
+● Update(CLAUDE.md)
+  ⎿  Added 5 lines
+      31  ├── timeline/          # PixiJS timeline rendering
+      32  ├── components/        # React UI components (overlays, panels)
+      33  └── hooks/             # React hooks
+      34 +
+      35 +src-tauri/
+      36 +├── src/main.rs        # Tauri Rust backend entry point
+      37 +├── Cargo.toml         # Rust dependencies
+      38 +└── tauri.conf.json    # Tauri configuration
+      39  ```
+      40
+      41  ## Architecture
+
+> database.ts:1 Uncaught SyntaxError: The requested module '/node_modules/sql.js/dist/sql-wasm.js?v=cfad4f2d' does
+not provide an export named 'default' (at database.ts:1:8)Understand this error
+favicon.ico:1  GET http://localhost:5199/favicon.ico 404 (Not Found)
+
+● Update(src\db\database.ts)
+  ⎿  Added 2 lines, removed 1 line
+      1 -import initSqlJs, { Database } from 'sql.js'
+      1 +import initSqlJs from 'sql.js'
+      2 +import type { Database } from 'sql.js'
+      3  import { Event, Item, CanvasItem } from '../models/types'
+      4  import { v4 as uuidv4 } from 'uuid'
+      5
+
+● Update(src\db\database.ts)
+  ⎿  Added 3 lines, removed 1 line
+      1 -import initSqlJs from 'sql.js'
+      1 +import * as SqlJs from 'sql.js'
+      2  import type { Database } from 'sql.js'
+      3 +
+      4 +const initSqlJs = SqlJs.default || SqlJs
+      5  import { Event, Item, CanvasItem } from '../models/types'
+      6  import { v4 as uuidv4 } from 'uuid'
+      7
+
+● Update(src\db\database.ts)
+  ⎿  Added 2 lines, removed 2 lines
+       1  import * as SqlJs from 'sql.js'
+       2  import type { Database } from 'sql.js'
+       3 -
+       4 -const initSqlJs = SqlJs.default || SqlJs
+       3  import { Event, Item, CanvasItem } from '../models/types'
+       4  import { v4 as uuidv4 } from 'uuid'
+       5
+       6 +const initSqlJs = (SqlJs as { default?: typeof SqlJs }).default || SqlJs
+       7 +
+       8  let db: Database | null = null
+       9
+      10  const SCHEMA = `
+
+● De sql.js ESM import is lastig. Laat me een andere aanpak proberen:
+
+● Read(src\db\database.ts)
+  ⎿  Read 240 lines
+
+● Write(src\db\database.ts)
+  ⎿  Added 6 lines, removed 5 lines
+      1 -import * as SqlJs from 'sql.js'
+      2 -import type { Database } from 'sql.js'
+      1 +import type { Database, SqlJsStatic } from 'sql.js'
+      2  import { Event, Item, CanvasItem } from '../models/types'
+      3  import { v4 as uuidv4 } from 'uuid'
+      4
+      5 -const initSqlJs = (SqlJs as { default?: typeof SqlJs }).default || SqlJs
+      6 -
+      5  let db: Database | null = null
+      6 +let SQL: SqlJsStatic | null = null
+      7
+      8  const SCHEMA = `
+      9    CREATE TABLE IF NOT EXISTS events (
+     ...
+      51  export async function initDatabase(): Promise<Database> {
+      52    if (db) return db
+      53
+      54 -  const SQL = await initSqlJs({
+      54 +  // Dynamic import for sql.js
+      55 +  const initSqlJs = (await import('sql.js')).default
+      56 +
+      57 +  SQL = await initSqlJs({
+      58      locateFile: () => '/sql-wasm.wasm',
+      59    })
+      60
+
+● Refresh de browser (http://localhost:5200). De sql.js import zou nu moeten werken met dynamic import.
+
+  Check de browser console (F12) voor eventuele nieuwe errors.
+
+● Bash(powershell -Command "cargo --version")
+  ⎿  Error: Exit code 1
+     cargo : The term 'cargo' is not recognized as the name of a cmdlet, function, script file, or operable program.
+     Check
+     the spelling of the name, or if a path was included, verify that the path is correct and try again.
+     At line:1 char:1
+     + cargo --version
+     + ~~~~~
+         + CategoryInfo          : ObjectNotFound: (cargo:String) [], CommandNotFoundException
+         + FullyQualifiedErrorId : CommandNotFoundException
+
+● Rust lijkt niet in het PATH te staan. Na installatie moet je meestal je terminal herstarten. Kun je een nieuwe terminal openen en proberen:
+
+  cargo --version
+
+  Als dat werkt, kun je dan npm run tauri dev uitvoeren.
+
+  Ondertussen: werkt de browser versie nu? (http://localhost:5200) Je zou jaren 2015-2025 moeten zien die je kunt pannen met scroll.
+
+> installHook.js:1 Failed to initialize database: TypeError: initSqlJs is not a function
+    at initDatabase (database.ts:55:15)
+overrideMethod @ installHook.js:1
+(anonymous) @ App.tsx:15
+Promise.catch
+(anonymous) @ App.tsx:14
+react_stack_bottom_frame @ react-dom_client.js?v=8a6d15e4:18567
+runWithFiberInDEV @ react-dom_client.js?v=8a6d15e4:997
+commitHookEffectListMount @ react-dom_client.js?v=8a6d15e4:9411
+commitHookPassiveMountEffects @ react-dom_client.js?v=8a6d15e4:9465
+reconnectPassiveEffects @ react-dom_client.js?v=8a6d15e4:11273
+recursivelyTraverseReconnectPassiveEffects @ react-dom_client.js?v=8a6d15e4:11240
+reconnectPassiveEffects @ react-dom_client.js?v=8a6d15e4:11317
+doubleInvokeEffectsOnFiber @ react-dom_client.js?v=8a6d15e4:13339
+runWithFiberInDEV @ react-dom_client.js?v=8a6d15e4:997
+recursivelyTraverseAndDoubleInvokeEffectsInDEV @ react-dom_client.js?v=8a6d15e4:13312
+commitDoubleInvokeEffectsInDEV @ react-dom_client.js?v=8a6d15e4:13347
+flushPassiveEffects @ react-dom_client.js?v=8a6d15e4:13157
+(ano
+
+● Update(src\db\database.ts)
+  ⎿  Added 3 lines, removed 2 lines
+      50    if (db) return db
+      51
+      52    // Dynamic import for sql.js
+      53 -  const initSqlJs = (await import('sql.js')).default
+      53 +  const sqlJsModule = await import('sql.js')
+      54 +  const initSqlJs = sqlJsModule.default ?? sqlJsModule
+      55
+      56 -  SQL = await initSqlJs({
+      56 +  SQL = await (initSqlJs as typeof sqlJsModule.default)({
+      57      locateFile: () => '/sql-wasm.wasm',
+      58    })
+      59
+
+● Refresh de browser. Als dat nog niet werkt, laat me de vite config aanpassen:
+
+● Read(vite.config.ts)
+  ⎿  Read 16 lines
+
+● Update(vite.config.ts)
+  ⎿  Removed 3 lines
+       6    server: {
+       7      port: 5199,
+       8    },
+       9 -  optimizeDeps: {
+      10 -    exclude: ['sql.js'],
+      11 -  },
+       9    build: {
+      10      target: 'esnext',
+      11    },
+
+● Kill Shell(Kill shell: b5f2f5f)
+  ⎿  Shell b5f2f5f killed
+
+● Bash(cd K:/Cursor/memorylane && rm -rf node_modules/.vite && npm run dev 2>&1 &)
+  ⎿  Running in the background (↓ to manage)
+
+● Bash(sleep 4 && cat C:/Users/Jim/AppData/Local/Temp/claude/K--Cursor-memorylane/tasks/b012a94.output) timeout: 10s
+  ⎿  > lifeline@0.0.1 dev
+     > vite --port 5199
+     … +7 lines (ctrl+o to expand)
+
+● Probeer nu http://localhost:5201 (nieuwe poort).
+
+  Als het nog steeds niet werkt, laat me dan sql.js vervangen door een simpele in-memory store zodat we verder kunnen met de UI. We kunnen later SQLite toevoegen via Tauri's native plugin.
+
+> claude mcp add context7 -- npx -y @upstash/context7-mcp --api-key "ctx7sk-9fa275d7-5c03-4fcd-8063-09a831fb7208"
+
+● Bash(claude mcp add context7 -- npx -y @upstash/context7-mcp --api-key                                    timeout: 1m
+      "ctx7sk-9fa275d7-5c03-4fcd-8063-09a831fb7208")                                                        0s
+  ⎿ Added stdio MCP server context7 with command: npx -y @upstash/context7-mcp --api-key ctx7sk-9fa275d7-5c03-4fcd-
+    8063-09a831fb7208 to local config
+    File modified: C:\Users\Jim\.claude.json [project: K:\Cursor\memorylane]
+
+
+● Context7 MCP is toegevoegd.
+
+  Werkt de app nu op http://localhost:5201? Of zal ik sql.js vervangen door een simpele in-memory store zodat we door kunnen?
+
+> /mcp
+  ⎿  No MCP servers configured. Please run /doctor if this is unexpected. Otherwise, run `claude mcp` or visit https://code.claude.com/docs/en/mcp to learn more.
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+> 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions  · 2 background tasks                    ✗ Auto-update failed · Try claude doctor or npm i -g
+  on                                                             @anthropic-ai/claude-code
