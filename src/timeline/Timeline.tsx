@@ -209,7 +209,8 @@ export const Timeline = forwardRef<TimelineRef, TimelineProps>(function Timeline
           (item) => handleDeleteItemRef.current?.(item),
           (item) => handleEditItemRef.current?.(item),
           data.textScale,
-          data.canvasItem?.scale ?? 1
+          data.canvasItem?.scale ?? 1,
+          data.canvasItem?.zIndex ?? 0
         )
       }
 
@@ -450,7 +451,7 @@ export const Timeline = forwardRef<TimelineRef, TimelineProps>(function Timeline
     if (items.length === 0) return
 
     // Calculate bounding box of all items
-    // Items are positioned at their top-left corner (x, y), not centered
+    // Items are positioned at their CENTER (x, y) due to pivot being centered
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
 
     items.forEach(item => {
@@ -458,14 +459,14 @@ export const Timeline = forwardRef<TimelineRef, TimelineProps>(function Timeline
       const x = canvasItem?.x ?? 0
       const y = canvasItem?.y ?? 0
       const scale = canvasItem?.scale ?? 1
-      const width = CANVAS_ITEM_WIDTH * scale
-      const height = CANVAS_ITEM_HEIGHT * scale
+      const halfWidth = (CANVAS_ITEM_WIDTH * scale) / 2
+      const halfHeight = (CANVAS_ITEM_HEIGHT * scale) / 2
 
-      // x,y is top-left corner, so bounds are x to x+width and y to y+height
-      minX = Math.min(minX, x)
-      maxX = Math.max(maxX, x + width)
-      minY = Math.min(minY, y)
-      maxY = Math.max(maxY, y + height)
+      // x,y is CENTER of item, so bounds extend from center
+      minX = Math.min(minX, x - halfWidth)
+      maxX = Math.max(maxX, x + halfWidth)
+      minY = Math.min(minY, y - halfHeight)
+      maxY = Math.max(maxY, y + halfHeight)
     })
 
     // Add padding
@@ -500,7 +501,7 @@ export const Timeline = forwardRef<TimelineRef, TimelineProps>(function Timeline
   }, [getActiveState])
 
   // Arrange items as collage or restore to original positions
-  const arrangedPositionsRef = useRef<Map<string, { x: number; y: number; scale: number; rotation: number; textScale?: number }> | null>(null)
+  const arrangedPositionsRef = useRef<Map<string, { x: number; y: number; scale: number; rotation: number; zIndex: number; textScale?: number }> | null>(null)
   const isArrangedRef = useRef(false)
 
   // Generate a beautiful photo collage layout - no overlap, no rotation
@@ -576,28 +577,106 @@ export const Timeline = forwardRef<TimelineRef, TimelineProps>(function Timeline
       return positions
     }
 
-    // 7+ items - dynamic grid layout
-    // Calculate optimal grid dimensions
-    const cols = Math.ceil(Math.sqrt(itemCount * 1.5))  // Slightly wider than square
-    const rows = Math.ceil(itemCount / cols)
+    // 7+ items - creative masonry-style layout with varying sizes
+    // Use a pseudo-random but deterministic pattern based on item count
+    const patterns = [
+      // Pattern 1: Large hero + scattered smaller items
+      () => {
+        // First item is large hero in center-left
+        positions.push({ x: -itemW * 0.6, y: 0, scale: 1.4, rotation: -2, zIndex: itemCount - 1 })
 
-    // Calculate total grid size
-    const gridW = cols * itemW + (cols - 1) * gap
-    const gridH = rows * itemH + (rows - 1) * gap
+        // Distribute remaining items around the hero
+        const remaining = itemCount - 1
+        const angleStep = (Math.PI * 1.5) / remaining
+        const baseRadius = itemW * 1.2
 
-    // Starting position (top-left of grid, centered)
-    const startX = -gridW / 2 + itemW / 2
-    const startY = -gridH / 2 + itemH / 2
+        for (let i = 0; i < remaining; i++) {
+          const angle = -Math.PI * 0.75 + i * angleStep
+          const radius = baseRadius + (i % 2) * itemW * 0.3
+          const x = Math.cos(angle) * radius + itemW * 0.2
+          const y = Math.sin(angle) * radius
+          const scale = 0.7 + (i % 3) * 0.15
+          const rotation = (i % 2 === 0 ? 1 : -1) * (2 + i % 3)
+          positions.push({ x, y, scale, rotation, zIndex: i })
+        }
+      },
 
-    for (let i = 0; i < itemCount; i++) {
-      const col = i % cols
-      const row = Math.floor(i / cols)
+      // Pattern 2: Pinterest-style staggered columns (3 columns)
+      () => {
+        const colHeights = [0, 0, 0]
+        const colX = [-itemW - gap, 0, itemW + gap]
 
-      const x = startX + col * (itemW + gap)
-      const y = startY + row * (itemH + gap)
+        for (let i = 0; i < itemCount; i++) {
+          // Find shortest column
+          const minCol = colHeights.indexOf(Math.min(...colHeights))
+          const scale = 0.8 + (i % 4) * 0.15
+          const scaledH = itemH * scale
 
-      positions.push({ x, y, scale: 1, rotation: 0, zIndex: i })
-    }
+          const x = colX[minCol]
+          const y = colHeights[minCol] + scaledH / 2 - itemH * 1.5
+          const rotation = (i % 3 - 1) * 1.5
+
+          positions.push({ x, y, scale, rotation, zIndex: i })
+          colHeights[minCol] += scaledH + gap
+        }
+      },
+
+      // Pattern 3: Scattered organic layout
+      () => {
+        // Golden ratio spiral-ish placement
+        const phi = 1.618033988749
+
+        for (let i = 0; i < itemCount; i++) {
+          const angle = i * phi * Math.PI * 0.5
+          const radius = Math.sqrt(i + 1) * itemW * 0.4
+          const x = Math.cos(angle) * radius
+          const y = Math.sin(angle) * radius * 0.7
+          const scale = 1.2 - (i / itemCount) * 0.4
+          const rotation = (i % 2 === 0 ? 1 : -1) * (i % 5)
+
+          positions.push({ x, y, scale, rotation, zIndex: itemCount - 1 - i })
+        }
+      },
+
+      // Pattern 4: Diagonal cascade
+      () => {
+        const diagStep = itemW * 0.7
+        const startX = -(itemCount / 2) * diagStep * 0.5
+        const startY = -(itemCount / 2) * diagStep * 0.3
+
+        for (let i = 0; i < itemCount; i++) {
+          const x = startX + i * diagStep * 0.5
+          const y = startY + i * diagStep * 0.3
+          const scale = 1.1 - (i % 3) * 0.15
+          const rotation = -3 + (i % 4) * 1.5
+
+          positions.push({ x, y, scale, rotation, zIndex: i })
+        }
+      },
+
+      // Pattern 5: Two rows with alternating sizes
+      () => {
+        const itemsPerRow = Math.ceil(itemCount / 2)
+        const rowGap = itemH * 0.9
+
+        for (let i = 0; i < itemCount; i++) {
+          const row = i < itemsPerRow ? 0 : 1
+          const col = row === 0 ? i : i - itemsPerRow
+          const colsInRow = row === 0 ? itemsPerRow : itemCount - itemsPerRow
+
+          const offsetX = (col - (colsInRow - 1) / 2) * (itemW * 0.85)
+          const offsetY = (row - 0.5) * rowGap
+          const scale = (row === 0 ? 1 : 0.85) + (col % 2) * 0.1
+          const rotation = (col % 2 === 0 ? 1 : -1) * 2
+
+          positions.push({ x: offsetX, y: offsetY, scale, rotation, zIndex: i })
+        }
+      }
+    ]
+
+    // Select pattern based on item count for variety
+    const patternIndex = itemCount % patterns.length
+    patterns[patternIndex]()
 
     return positions
   }
@@ -623,6 +702,7 @@ export const Timeline = forwardRef<TimelineRef, TimelineProps>(function Timeline
           y: canvasItem?.y ?? 0,
           scale: canvasItem?.scale ?? 1,
           rotation: canvasItem?.rotation ?? 0,
+          zIndex: canvasItem?.zIndex ?? 0,
           textScale: canvasItem?.textScale,
         })
       })
@@ -658,7 +738,7 @@ export const Timeline = forwardRef<TimelineRef, TimelineProps>(function Timeline
 
       isArrangedRef.current = true
     } else {
-      // Restore original positions, scale, rotation and textScale
+      // Restore original positions, scale, rotation, zIndex and textScale
       if (arrangedPositionsRef.current) {
         items.forEach(item => {
           const saved = arrangedPositionsRef.current!.get(item.id)
@@ -670,7 +750,7 @@ export const Timeline = forwardRef<TimelineRef, TimelineProps>(function Timeline
               y: saved.y,
               scale: saved.scale,
               rotation: saved.rotation,
-              zIndex: 0,
+              zIndex: saved.zIndex,
               textScale: saved.textScale,
             })
           }
@@ -696,7 +776,8 @@ export const Timeline = forwardRef<TimelineRef, TimelineProps>(function Timeline
         (item) => handleDeleteItemRef.current?.(item),
         (item) => handleEditItemRef.current?.(item),
         data.textScale,
-        data.canvasItem?.scale ?? 1
+        data.canvasItem?.scale ?? 1,
+        data.canvasItem?.zIndex ?? 0
       )
     }
     cullingManagerRef.current = new ViewportCullingManager(activeState.container, createItemBlockById)
@@ -734,7 +815,8 @@ export const Timeline = forwardRef<TimelineRef, TimelineProps>(function Timeline
         (item) => handleDeleteItemRef.current?.(item),
         (item) => handleEditItemRef.current?.(item),
         data.textScale,
-        data.canvasItem?.scale ?? 1
+        data.canvasItem?.scale ?? 1,
+        data.canvasItem?.zIndex ?? 0
       )
     }
     cullingManagerRef.current = new ViewportCullingManager(activeState.container, createItemBlockById)
@@ -1036,7 +1118,8 @@ export const Timeline = forwardRef<TimelineRef, TimelineProps>(function Timeline
           (item) => handleDeleteItemRef.current?.(item),
           (item) => handleEditItemRef.current?.(item),
           data.textScale,
-          data.canvasItem?.scale ?? 1
+          data.canvasItem?.scale ?? 1,
+          data.canvasItem?.zIndex ?? 0
         )
       }
       cullingManagerRef.current = new ViewportCullingManager(activeState.container, createItemBlockById)
@@ -2436,7 +2519,8 @@ function buildL2View(
       textScale = undefined
     }
 
-    const itemBlock = createCanvasItemBlock(item, event.id, isDraggingItemRef, onItemClick, onDeleteItem, onEditItem, textScale, scale)
+    const zIndex = canvasItem?.zIndex ?? 0
+    const itemBlock = createCanvasItemBlock(item, event.id, isDraggingItemRef, onItemClick, onDeleteItem, onEditItem, textScale, scale, zIndex)
     itemBlock.x = x
     itemBlock.y = y
     itemBlock.scale.set(scale)
@@ -2453,7 +2537,8 @@ function createCanvasItemBlock(
   onDeleteItem?: (item: Item) => void,
   onEditItem?: (item: Item) => void,
   textScale?: number,  // For text items: inner text scale (used with ctrl+resize)
-  itemScale: number = 1  // Canvas item scale, used to determine thumbnail size
+  itemScale: number = 1,  // Canvas item scale, used to determine thumbnail size
+  initialZIndex: number = 0  // Original zIndex to preserve when saving
 ): Container {
   const cont = new Container()
   cont.pivot.set(CANVAS_ITEM_WIDTH / 2, CANVAS_ITEM_HEIGHT / 2)
@@ -3033,7 +3118,7 @@ function createCanvasItemBlock(
         y: cont.y,
         scale: cont.scale.x,
         rotation: cont.rotation,
-        zIndex: 0,
+        zIndex: initialZIndex,
         textScale: _contentTextRef ? _contentTextRef.scale.x : undefined,
       })
       resizeDragData = null
@@ -3050,7 +3135,7 @@ function createCanvasItemBlock(
         y: cont.y,
         scale: cont.scale.x,
         rotation: cont.rotation,
-        zIndex: 0,
+        zIndex: initialZIndex,
         textScale: _contentTextRef ? _contentTextRef.scale.x : undefined,
       })
       resizeDragData = null
@@ -3147,7 +3232,7 @@ function createCanvasItemBlock(
           y: cont.y,
           scale: cont.scale.x,
           rotation: cont.rotation,
-          zIndex: 0,
+          zIndex: initialZIndex,
           textScale: _contentTextRef ? _contentTextRef.scale.x : undefined,
         })
       } else {
@@ -3172,7 +3257,7 @@ function createCanvasItemBlock(
             y: cont.y,
             scale: 1,
             rotation: cont.rotation,
-            zIndex: 0,
+            zIndex: initialZIndex,
             textScale: undefined,
           })
         } else {
@@ -3198,7 +3283,7 @@ function createCanvasItemBlock(
           y: cont.y,
           scale: cont.scale.x,
           rotation: cont.rotation,
-          zIndex: 0,
+          zIndex: initialZIndex,
           textScale: _contentTextRef ? _contentTextRef.scale.x : undefined,
         })
       }

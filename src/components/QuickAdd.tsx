@@ -183,7 +183,7 @@ async function generateThumbnail(file: File, maxSize: number = 256): Promise<{ t
 }
 
 export const QuickAdd = forwardRef<QuickAddRef, QuickAddProps>(function QuickAdd(
-  { currentYearId, currentEventId, currentEventDate, onMemoryAdded },
+  { currentYearId: _currentYearId, currentEventId, currentEventDate, onMemoryAdded },
   ref
 ) {
   // Use parent event date if available, otherwise today
@@ -485,6 +485,64 @@ export const QuickAdd = forwardRef<QuickAddRef, QuickAddProps>(function QuickAdd
           featuredPhotoId: newItem.id,
         })
       }
+
+      // Create canvas position for the new item
+      const { upsertCanvasItem, getItemsByEvent, getCanvasItems } = await import('../db/database')
+      const existingItems = getItemsByEvent(targetEventId).filter(i => i.id !== newItem.id)
+      const existingCanvasItems = getCanvasItems(targetEventId)
+
+      // Calculate smart position for new item
+      const ITEM_WIDTH = 200
+      const ITEM_HEIGHT = 150
+      const GAP = 24
+
+      let newX = 0
+      let newY = 0
+
+      if (existingItems.length === 0) {
+        // First item: center at origin
+        newX = 0
+        newY = 0
+      } else {
+        // Find the rightmost item and place new item next to it
+        // Or start a new row if too wide
+        const MAX_ROW_WIDTH = 1200
+        let maxX = -Infinity
+        let maxY = -Infinity
+        let rightmostY = 0
+
+        existingItems.forEach(item => {
+          const canvasItem = existingCanvasItems.find(ci => ci.itemId === item.id)
+          const x = canvasItem?.x ?? 0
+          const y = canvasItem?.y ?? 0
+          if (x > maxX) {
+            maxX = x
+            rightmostY = y
+          }
+          maxY = Math.max(maxY, y)
+        })
+
+        // Place next to rightmost item, or start new row
+        if (maxX + ITEM_WIDTH + GAP > MAX_ROW_WIDTH / 2) {
+          // Start new row
+          newX = -(existingItems.length % 4) * (ITEM_WIDTH + GAP) / 2
+          newY = maxY + ITEM_HEIGHT + GAP
+        } else {
+          // Place next to rightmost
+          newX = maxX + ITEM_WIDTH + GAP
+          newY = rightmostY
+        }
+      }
+
+      upsertCanvasItem({
+        eventId: targetEventId,
+        itemId: newItem.id,
+        x: newX,
+        y: newY,
+        scale: 1,
+        rotation: 0,
+        zIndex: existingItems.length,
+      })
 
       // Show toast
       setToast('Herinnering opgeslagen')
