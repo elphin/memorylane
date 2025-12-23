@@ -21,7 +21,9 @@
       "mcp__chrome-devtools__click",
       "Bash(npm run tauri:*)",
       "Bash(npm run:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(gh repo create:*)"
     ]
   }
 }

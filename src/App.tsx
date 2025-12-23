@@ -1222,6 +1222,7 @@ export default function App() {
           item={viewingPhoto.item}
           allItems={viewingPhotoItems}
           eventTitle={events.find(e => e.id === viewingPhoto.eventId)?.title || ''}
+          eventStartDate={events.find(e => e.id === viewingPhoto.eventId)?.startAt}
           onClose={handleClosePhotoViewer}
           onDelete={handlePhotoDelete}
           onSave={handlePhotoSave}

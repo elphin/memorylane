@@ -95,6 +95,7 @@ interface PhotoViewerProps {
   item: Item
   allItems: Item[]  // All photos in the same event for navigation
   eventTitle: string
+  eventStartDate?: string  // Event's startAt date, used as default for happenedAt
   onClose: () => void
   onDelete: (item: Item) => void
   onSave: (item: Item, updates: { caption?: string; happenedAt?: string; place?: Item['place']; people?: string[] }) => void
@@ -122,11 +123,19 @@ export function PhotoViewer({
   item,
   allItems,
   eventTitle,
+  eventStartDate,
   onClose,
   onDelete,
   onSave,
   onNavigate,
 }: PhotoViewerProps) {
+  // Helper to get default date from item or event
+  const getDefaultDate = (itm: Item) => {
+    if (itm.happenedAt) return itm.happenedAt.split('T')[0]
+    if (eventStartDate) return eventStartDate.split('T')[0]
+    return ''
+  }
+
   const [imageUrl, setImageUrl] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isEditing, setIsEditing] = useState(false)
@@ -136,7 +145,7 @@ export function PhotoViewer({
   // Metadata panel state
   const [showMetadata, setShowMetadata] = useState(false)
   const [isEditingMetadata, setIsEditingMetadata] = useState(false)
-  const [editDate, setEditDate] = useState(item.happenedAt?.split('T')[0] || '')
+  const [editDate, setEditDate] = useState(getDefaultDate(item))
   const [editTime, setEditTime] = useState(item.happenedAt?.split('T')[1]?.substring(0, 5) || '')
   const [editLocationLabel, setEditLocationLabel] = useState(item.place?.label || '')
   const [editPeople, setEditPeople] = useState(item.people?.join(', ') || '')
@@ -198,12 +207,12 @@ export function PhotoViewer({
 
     loadImage()
     setEditCaption(item.caption || '')
-    // Update metadata state when item changes
-    setEditDate(item.happenedAt?.split('T')[0] || '')
+    // Update metadata state when item changes - default to event start date if no happenedAt
+    setEditDate(getDefaultDate(item))
     setEditTime(item.happenedAt?.split('T')[1]?.substring(0, 5) || '')
     setEditLocationLabel(item.place?.label || '')
     setEditPeople(item.people?.join(', ') || '')
-  }, [item])
+  }, [item, eventStartDate])
 
   // Generate shuffled order when starting slideshow with shuffle
   useEffect(() => {
