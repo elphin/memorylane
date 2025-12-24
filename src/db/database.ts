@@ -754,9 +754,11 @@ export function createItem(item: Omit<Item, 'id'>): Item {
   })
 
   try {
+    // For text items, also store content in body_text field
+    const bodyText = item.itemType === 'text' ? item.content : null
     db!.run(
-      `INSERT INTO items (id, event_id, item_type, content, caption, happened_at, place_lat, place_lng, place_label, people)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO items (id, event_id, item_type, content, caption, happened_at, place_lat, place_lng, place_label, people, body_text)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         item.eventId,
@@ -768,6 +770,7 @@ export function createItem(item: Omit<Item, 'id'>): Item {
         item.place?.lng ?? null,
         item.place?.label ?? null,
         item.people ? JSON.stringify(item.people) : null,
+        bodyText,
       ]
     )
     console.log('Item inserted successfully:', id)
@@ -777,7 +780,12 @@ export function createItem(item: Omit<Item, 'id'>): Item {
   }
 
   saveToStorage()
-  return { ...item, id }
+  // Return item with bodyText set for text items
+  return {
+    ...item,
+    id,
+    bodyText: item.itemType === 'text' ? item.content : undefined,
+  }
 }
 
 export function getEventById(eventId: string): Event | null {
@@ -958,12 +966,20 @@ export function updateItem(itemId: string, updates: {
 }): void {
   if (!db) return
 
+  // Get item to check type (for body_text handling)
+  const item = getItemById(itemId)
+
   const setClauses: string[] = []
   const values: unknown[] = []
 
   if ('content' in updates && updates.content !== undefined) {
     setClauses.push('content = ?')
     values.push(updates.content)
+    // For text items, also update body_text
+    if (item?.itemType === 'text') {
+      setClauses.push('body_text = ?')
+      values.push(updates.content)
+    }
   }
   if ('caption' in updates) {
     setClauses.push('caption = ?')
@@ -1451,4 +1467,193 @@ export function getItemBySlug(eventId: string, slug: string): Item | null {
     filePath: row[14] as string | undefined,
     mediaPath: row[15] as string | undefined,
   }
+}
+
+// ============================================================================
+// Search Functionality
+// ============================================================================
+
+export interface SearchResult {
+  type: 'event' | 'item'
+  id: string
+  title: string           // Event title or item caption
+  preview: string         // Preview text
+  itemType?: ItemType     // For items: photo, text, video, link
+  eventId?: string        // For items: parent event ID
+  eventTitle?: string     // For items: parent event title
+  date?: string           // Date for display
+  matchedField: string    // Which field matched the query
+  thumbnailContent?: string // For photos: content for thumbnail
+}
+
+export interface SearchFilters {
+  type?: 'all' | 'events' | 'items'
+  itemTypes?: ItemType[]
+  startDate?: string
+  endDate?: string
+}
+
+/**
+ * Search across all events and items
+ * Returns combined results sorted by relevance
+ */
+export function searchMemories(query: string, filters?: SearchFilters): SearchResult[] {
+  if (!db || !query.trim()) return []
+
+  const searchTerm = `%${query.trim().toLowerCase()}%`
+  const results: SearchResult[] = []
+
+  // Search events (unless filtering to items only)
+  if (!filters?.type || filters.type === 'all' || filters.type === 'events') {
+    const eventStmt = db.prepare(`
+      SELECT id, type, title, description, location_label, start_at, end_at
+      FROM events
+      WHERE type != 'year'
+        AND (
+          LOWER(title) LIKE ?
+          OR LOWER(description) LIKE ?
+          OR LOWER(location_label) LIKE ?
+        )
+      ORDER BY start_at DESC
+      LIMIT 25
+    `)
+    eventStmt.bind([searchTerm, searchTerm, searchTerm])
+
+    while (eventStmt.step()) {
+      const row = eventStmt.get()
+      const title = row[2] as string | null
+      const description = row[3] as string | null
+      const location = row[4] as string | null
+      const startAt = row[5] as string
+      const endAt = row[6] as string | null
+
+      // Determine which field matched
+      let matchedField = 'title'
+      if (title && title.toLowerCase().includes(query.toLowerCase())) {
+        matchedField = 'title'
+      } else if (description && description.toLowerCase().includes(query.toLowerCase())) {
+        matchedField = 'description'
+      } else if (location && location.toLowerCase().includes(query.toLowerCase())) {
+        matchedField = 'location'
+      }
+
+      // Format date range
+      let dateStr = startAt ? new Date(startAt).toLocaleDateString('nl-NL', {
+        day: 'numeric', month: 'short', year: 'numeric'
+      }) : ''
+      if (endAt && endAt !== startAt) {
+        dateStr += ` - ${new Date(endAt).toLocaleDateString('nl-NL', {
+          day: 'numeric', month: 'short'
+        })}`
+      }
+
+      results.push({
+        type: 'event',
+        id: row[0] as string,
+        title: title || 'Untitled Event',
+        preview: description?.slice(0, 100) || (location ? `📍 ${location}` : ''),
+        date: dateStr,
+        matchedField,
+      })
+    }
+    eventStmt.free()
+  }
+
+  // Search items (unless filtering to events only)
+  if (!filters?.type || filters.type === 'all' || filters.type === 'items') {
+    // Build item type filter
+    let itemTypeFilter = ''
+    if (filters?.itemTypes && filters.itemTypes.length > 0) {
+      const types = filters.itemTypes.map(t => `'${t}'`).join(', ')
+      itemTypeFilter = `AND i.item_type IN (${types})`
+    }
+
+    const itemStmt = db.prepare(`
+      SELECT i.id, i.item_type, i.caption, i.body_text, i.content, i.happened_at,
+             i.place_label, i.people, i.event_id,
+             e.title as event_title
+      FROM items i
+      LEFT JOIN events e ON i.event_id = e.id
+      WHERE (
+        LOWER(i.caption) LIKE ?
+        OR LOWER(i.body_text) LIKE ?
+        OR LOWER(i.place_label) LIKE ?
+        OR LOWER(i.people) LIKE ?
+      )
+      ${itemTypeFilter}
+      ORDER BY i.happened_at DESC
+      LIMIT 25
+    `)
+    itemStmt.bind([searchTerm, searchTerm, searchTerm, searchTerm])
+
+    while (itemStmt.step()) {
+      const row = itemStmt.get()
+      const itemType = row[1] as ItemType
+      const caption = row[2] as string | null
+      const bodyText = row[3] as string | null
+      const content = row[4] as string
+      const happenedAt = row[5] as string | null
+      const placeLabel = row[6] as string | null
+      const people = row[7] as string | null
+      const eventId = row[8] as string
+      const eventTitle = row[9] as string | null
+
+      // Determine which field matched
+      let matchedField = 'caption'
+      if (caption && caption.toLowerCase().includes(query.toLowerCase())) {
+        matchedField = 'caption'
+      } else if (bodyText && bodyText.toLowerCase().includes(query.toLowerCase())) {
+        matchedField = 'content'
+      } else if (placeLabel && placeLabel.toLowerCase().includes(query.toLowerCase())) {
+        matchedField = 'location'
+      } else if (people && people.toLowerCase().includes(query.toLowerCase())) {
+        matchedField = 'people'
+      }
+
+      // Build preview text
+      let preview = ''
+      if (itemType === 'text' && bodyText) {
+        preview = bodyText.slice(0, 100) + (bodyText.length > 100 ? '...' : '')
+      } else if (placeLabel) {
+        preview = `📍 ${placeLabel}`
+      } else if (people) {
+        try {
+          const peopleArr = JSON.parse(people)
+          preview = `👥 ${peopleArr.join(', ')}`
+        } catch {
+          preview = ''
+        }
+      }
+
+      // Format date
+      const dateStr = happenedAt
+        ? new Date(happenedAt).toLocaleDateString('nl-NL', {
+            day: 'numeric', month: 'short', year: 'numeric'
+          })
+        : ''
+
+      results.push({
+        type: 'item',
+        id: row[0] as string,
+        title: caption || (itemType === 'text' ? bodyText?.slice(0, 50) || 'Text' : itemType),
+        preview,
+        itemType,
+        eventId,
+        eventTitle: eventTitle || undefined,
+        date: dateStr,
+        matchedField,
+        thumbnailContent: (itemType === 'photo' || itemType === 'video') ? content : undefined,
+      })
+    }
+    itemStmt.free()
+  }
+
+  // Sort by date (most recent first)
+  results.sort((a, b) => {
+    if (!a.date) return 1
+    if (!b.date) return -1
+    return b.date.localeCompare(a.date)
+  })
+
+  return results.slice(0, 50) // Limit total results
 }

@@ -399,7 +399,7 @@ export const Timeline = forwardRef<TimelineRef, TimelineProps>(function Timeline
     })
   }, [getActiveState, startTransition, onEventSelect, onZoomLevelChange])
 
-  // Handle item click - open photo viewer overlay
+  // Handle item click - open photo viewer or edit dialog
   const handleItemClick = useCallback((item: Item) => {
     if (isTransitioningRef.current) return
     if (!focusedEventRef.current) return
@@ -408,7 +408,11 @@ export const Timeline = forwardRef<TimelineRef, TimelineProps>(function Timeline
     if (item.itemType === 'photo' || item.itemType === 'video') {
       onViewPhoto?.(item, focusedEventRef.current.id)
     }
-  }, [onViewPhoto])
+    // For text items, open the edit dialog
+    else if (item.itemType === 'text') {
+      onEditItem?.(item)
+    }
+  }, [onViewPhoto, onEditItem])
 
   // Update handler refs
   handleYearClickRef.current = handleYearClick
@@ -419,11 +423,32 @@ export const Timeline = forwardRef<TimelineRef, TimelineProps>(function Timeline
   handleEditItemRef.current = onEditItem || null
 
   // Navigate to level (exposed via ref)
-  const navigateToLevel = useCallback((level: ZoomLevel) => {
+  const navigateToLevel = useCallback((level: ZoomLevel, eventId?: string) => {
     if (isTransitioningRef.current) return
 
     const currentLevel = viewStateRef.current.zoomLevel
 
+    // Direct navigation to an event (from search or external)
+    if (level === ZoomLevel.L2_Canvas && eventId) {
+      const targetEvent = events.find(e => e.id === eventId)
+      if (!targetEvent) {
+        console.warn('Event not found for navigation:', eventId)
+        return
+      }
+
+      // Store for view management
+      focusedEventRef.current = targetEvent
+      focusedEventPosRef.current = 0  // Center position
+
+      // Start enter transition to the event canvas
+      startTransition('enter', ZoomLevel.L2_Canvas, null, targetEvent, null, 0, () => {
+        onEventSelect?.(targetEvent, ZoomLevel.L2_Canvas)
+        onZoomLevelChange?.(ZoomLevel.L2_Canvas)
+      })
+      return
+    }
+
+    // Normal back navigation
     if (level === ZoomLevel.L0_Lifeline && currentLevel !== ZoomLevel.L0_Lifeline) {
       startTransition('exit', ZoomLevel.L0_Lifeline, null, null, null, 0, () => {
         onZoomLevelChange?.(ZoomLevel.L0_Lifeline)
@@ -437,7 +462,7 @@ export const Timeline = forwardRef<TimelineRef, TimelineProps>(function Timeline
         onZoomLevelChange?.(ZoomLevel.L2_Canvas)
       })
     }
-  }, [startTransition, onZoomLevelChange])
+  }, [events, startTransition, onEventSelect, onZoomLevelChange])
 
   // Fit canvas to show all items
   const fitToView = useCallback(() => {
@@ -2980,28 +3005,19 @@ function createCanvasItemBlock(
     // Text and link - show content preview
     // For text items, content is in bodyText (file-based) or content (legacy)
     const textContent = item.bodyText || item.content || ''
-    let previewText = textContent
-    if (item.itemType === 'link') {
-      // Extract domain from URL for cleaner display
-      try {
-        const url = new URL(item.content || '')
-        previewText = url.hostname + (url.pathname !== '/' ? url.pathname.slice(0, 20) : '')
-      } catch {
-        previewText = (item.content || '').slice(0, 50)
-      }
-    } else {
-      previewText = textContent.length > 80 ? textContent.slice(0, 80) + '...' : textContent
-    }
+
+    // Use the actual text content for display
+    const displayText = textContent || 'Geen tekst'
 
     const contentText = new Text({
-      text: previewText,
+      text: displayText,
       style: new TextStyle({
         fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-        fontSize: 14,
-        fill: 0xffffff,
+        fontSize: 13,
+        fill: 0xddddee,
         wordWrap: true,
         wordWrapWidth: CANVAS_ITEM_WIDTH - 24,
-        lineHeight: 20,
+        lineHeight: 18,
       }),
       resolution: TEXT_RESOLUTION,
     })
@@ -3014,7 +3030,8 @@ function createCanvasItemBlock(
       _contentTextRef = contentText
 
       // Apply saved textScale if provided (from ctrl+resize)
-      if (textScale !== undefined && textScale !== 1) {
+      // Note: textScale can be null/undefined, only apply if it's a valid number different from 1
+      if (textScale != null && textScale !== 1) {
         contentText.scale.set(textScale)
         // Also update wordWrapWidth to match (inverse relationship with textScale)
         // When textScale is small (e.g., 0.5), the card is big, so wordWrap should be wider

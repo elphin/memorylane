@@ -7,7 +7,10 @@ import { ConfirmDialog } from './components/ConfirmDialog'
 import { EditMemoryDialog } from './components/EditMemoryDialog'
 import { PhotoViewer } from './components/PhotoViewer'
 import { EventPropertiesDialog } from './components/EventPropertiesDialog'
+import { SearchModal } from './components/SearchModal'
+import { Search } from 'lucide-react'
 import { extractExifData } from './utils/exif'
+import { SearchResult } from './db/database'
 import heic2any from 'heic2any'
 import {
   isFileSystemSupported,
@@ -77,6 +80,7 @@ export default function App() {
   const profileMenuRef = useRef<HTMLDivElement>(null)
   const [viewingPhoto, setViewingPhoto] = useState<{ item: Item; eventId: string } | null>(null)
   const [viewingPhotoItems, setViewingPhotoItems] = useState<Item[]>([])
+  const [showSearch, setShowSearch] = useState(false)
   const timelineRef = useRef<TimelineRef>(null)
   const quickAddRef = useRef<QuickAddRef>(null)
   const isNavigatingRef = useRef(false) // Prevent duplicate history entries
@@ -227,6 +231,18 @@ export default function App() {
       localStorage.setItem('memorylane-dark-mode', String(newValue))
       return newValue
     })
+  }, [])
+
+  // Global search shortcut (Ctrl+K)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault()
+        setShowSearch(true)
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
   }, [])
 
   const handleBreadcrumbClick = (item: BreadcrumbItem, index: number) => {
@@ -488,6 +504,29 @@ export default function App() {
       console.error('Failed to delete photo:', err)
     }
   }, [viewingPhotoItems, viewingPhoto, handleClosePhotoViewer])
+
+  // Handle search result selection
+  const handleSearchResult = useCallback((result: SearchResult) => {
+    setShowSearch(false)
+
+    if (result.type === 'event') {
+      // Navigate to event canvas
+      timelineRef.current?.navigateToLevel(ZoomLevel.L2_Canvas, result.id)
+    } else if (result.eventId) {
+      // Navigate to parent event (the item is inside this event)
+      timelineRef.current?.navigateToLevel(ZoomLevel.L2_Canvas, result.eventId)
+      // If it's a photo/video, open it in photo viewer after a short delay
+      if (result.thumbnailContent && (result.itemType === 'photo' || result.itemType === 'video')) {
+        setTimeout(() => {
+          const eventItems = getItemsByEvent(result.eventId!)
+          const item = eventItems.find(i => i.id === result.id)
+          if (item) {
+            handleViewPhoto(item, result.eventId!)
+          }
+        }, 300)
+      }
+    }
+  }, [handleViewPhoto])
 
   // Handle dropped photos on canvas
   const handleDropPhotos = useCallback(async (files: File[], position: { x: number; y: number }, eventId: string) => {
@@ -873,18 +912,27 @@ export default function App() {
         )}
         </div>
 
-        {/* Profile menu button */}
-        <div style={styles.profileContainer} ref={profileMenuRef}>
+        {/* Search & Profile buttons */}
+        <div style={styles.headerActions}>
           <button
-            style={styles.profileButton}
-            onClick={() => setShowProfileMenu(!showProfileMenu)}
-            title="Instellingen"
+            style={styles.searchButton}
+            onClick={() => setShowSearch(true)}
+            title="Zoeken (Ctrl+K)"
           >
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
-              <circle cx="12" cy="7" r="4" />
-            </svg>
+            <Search size={20} />
           </button>
+
+          <div style={styles.profileContainer} ref={profileMenuRef}>
+            <button
+              style={styles.profileButton}
+              onClick={() => setShowProfileMenu(!showProfileMenu)}
+              title="Instellingen"
+            >
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+                <circle cx="12" cy="7" r="4" />
+              </svg>
+            </button>
 
           {/* Profile dropdown menu */}
           {showProfileMenu && (
@@ -1069,6 +1117,7 @@ export default function App() {
               </div>
             </div>
           )}
+          </div>
         </div>
       </div>
 
@@ -1233,6 +1282,13 @@ export default function App() {
           onNavigate={handlePhotoNavigate}
         />
       )}
+
+      {/* Search Modal */}
+      <SearchModal
+        isOpen={showSearch}
+        onClose={() => setShowSearch(false)}
+        onSelectResult={handleSearchResult}
+      />
     </div>
   )
 }
@@ -1305,6 +1361,24 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     alignItems: 'baseline',
     gap: '12px',
+  },
+  headerActions: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+  },
+  searchButton: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '40px',
+    height: '40px',
+    borderRadius: '50%',
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    border: 'none',
+    color: '#888',
+    cursor: 'pointer',
+    transition: 'all 0.2s',
   },
   profileContainer: {
     position: 'relative',
