@@ -154,7 +154,10 @@ export async function generateThumbnail(
   const maxDim = THUMBNAIL_SIZES[size]
 
   // First decode to get original dimensions
-  const original = await createImageBitmap(blob)
+  // Use imageOrientation: 'from-image' to respect EXIF rotation metadata
+  const original = await createImageBitmap(blob, {
+    imageOrientation: 'from-image',
+  })
   const { width, height } = original
 
   // Calculate scaled dimensions maintaining aspect ratio
@@ -173,10 +176,12 @@ export async function generateThumbnail(
   original.close()
 
   // Generate resized bitmap - this uses hardware acceleration
+  // imageOrientation: 'from-image' ensures EXIF rotation is applied
   const thumbnail = await createImageBitmap(blob, {
     resizeWidth: targetWidth,
     resizeHeight: targetHeight,
-    resizeQuality: 'medium', // 'low' | 'medium' | 'high'
+    resizeQuality: 'medium',
+    imageOrientation: 'from-image',
   })
 
   return thumbnail
