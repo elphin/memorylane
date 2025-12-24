@@ -710,7 +710,8 @@ export function updateItemContent(itemId: string, content: string): void {
 
 export function getItemsByEvent(eventId: string): Item[] {
   const stmt = db!.prepare(`
-    SELECT id, event_id, item_type, content, caption, happened_at, place_lat, place_lng, place_label, people
+    SELECT id, event_id, item_type, content, caption, happened_at,
+           place_lat, place_lng, place_label, people, body_text, tags, slug
     FROM items WHERE event_id = ?
   `)
   stmt.bind([eventId])
@@ -719,6 +720,7 @@ export function getItemsByEvent(eventId: string): Item[] {
   while (stmt.step()) {
     const row = stmt.get()
     const peopleJson = row[9] as string | null
+    const tagsJson = row[11] as string | null
     items.push({
       id: row[0] as string,
       eventId: row[1] as string,
@@ -732,6 +734,9 @@ export function getItemsByEvent(eventId: string): Item[] {
         label: row[8] as string | undefined,
       } : undefined,
       people: peopleJson ? JSON.parse(peopleJson) : undefined,
+      bodyText: row[10] as string | undefined,
+      tags: tagsJson ? JSON.parse(tagsJson) : undefined,
+      slug: row[12] as string | undefined,
     })
   }
   stmt.free()

@@ -2978,17 +2978,19 @@ function createCanvasItemBlock(
 
   if (!isPhotoOrVideo) {
     // Text and link - show content preview
-    let previewText = item.content
+    // For text items, content is in bodyText (file-based) or content (legacy)
+    const textContent = item.bodyText || item.content || ''
+    let previewText = textContent
     if (item.itemType === 'link') {
       // Extract domain from URL for cleaner display
       try {
-        const url = new URL(item.content)
+        const url = new URL(item.content || '')
         previewText = url.hostname + (url.pathname !== '/' ? url.pathname.slice(0, 20) : '')
       } catch {
-        previewText = item.content.slice(0, 50)
+        previewText = (item.content || '').slice(0, 50)
       }
     } else {
-      previewText = item.content.length > 80 ? item.content.slice(0, 80) + '...' : item.content
+      previewText = textContent.length > 80 ? textContent.slice(0, 80) + '...' : textContent
     }
 
     const contentText = new Text({
@@ -3408,9 +3410,9 @@ function buildL3View(
   const contentHeight = FOCUS_HEIGHT - FOCUS_PADDING * 2 - 80
 
   if (item.itemType === 'text') {
-    // Text content - full display
+    // Text content - full display (bodyText for file-based, content for legacy)
     const contentText = new Text({
-      text: item.content,
+      text: item.bodyText || item.content || '',
       style: new TextStyle({
         fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
         fontSize: 18,
