@@ -1,8 +1,9 @@
 import { useEffect, useRef, useCallback, forwardRef, useImperativeHandle, useState } from 'react'
 import { Application, Container, Graphics, Text, TextStyle, Sprite, Texture } from 'pixi.js'
 import { Event, ZoomLevel, ViewState, Item, CanvasItem, ItemType } from '../models/types'
-import { getItemsByEvent, getCanvasItems, upsertCanvasItem, getMemoriesForYear, getEventClustersForYear } from '../db/database'
-import { readFileAsBlob } from '../db/fileStorage'
+import { getItemsByEvent, getCanvasItems, upsertCanvasItem, getMemoriesForYear, getEventClustersForYear, getItemById } from '../db/database'
+import { updateCanvasItemWithFiles, saveCanvasLayout } from '../db/sync/writer'
+import { hasStorageFolder, readFileAsBlob } from '../db/fileStorage'
 import { getThumbnail, type ThumbnailSize } from '../db/thumbnailCache'
 import { ViewportCullingManager, calculateViewportBounds } from './viewportCulling'
 
@@ -757,6 +758,13 @@ export const Timeline = forwardRef<TimelineRef, TimelineProps>(function Timeline
         })
       }
       isArrangedRef.current = false
+    }
+
+    // Save all canvas positions to files (single batch save)
+    if (hasStorageFolder() && focusedEventRef.current) {
+      saveCanvasLayout(focusedEventRef.current.id).catch(err => {
+        console.error('Failed to save canvas layout:', err)
+      })
     }
 
     // Rebuild the view with culling manager
@@ -2529,6 +2537,25 @@ function buildL2View(
   })
 }
 
+// Helper to save canvas item both in-memory and to files (async)
+function saveCanvasItemPosition(canvasItem: CanvasItem): void {
+  // Always update in-memory SQLite immediately (for responsiveness)
+  upsertCanvasItem(canvasItem)
+
+  // If file storage is configured, also save to files asynchronously
+  if (hasStorageFolder()) {
+    // Get item slug for file-based storage
+    const item = getItemById(canvasItem.itemId)
+    const canvasItemWithSlug = {
+      ...canvasItem,
+      itemSlug: item?.slug,
+    }
+    updateCanvasItemWithFiles(canvasItemWithSlug).catch(err => {
+      console.error('Failed to save canvas item to files:', err)
+    })
+  }
+}
+
 function createCanvasItemBlock(
   item: Item,
   eventId: string,
@@ -3111,7 +3138,7 @@ function createCanvasItemBlock(
   resizeHandle.on('pointerup', () => {
     if (resizeDragData) {
       // Save the new scale (and text scale if ctrl+resize was used)
-      upsertCanvasItem({
+      saveCanvasItemPosition({
         eventId,
         itemId: item.id,
         x: cont.x,
@@ -3128,7 +3155,7 @@ function createCanvasItemBlock(
 
   resizeHandle.on('pointerupoutside', () => {
     if (resizeDragData) {
-      upsertCanvasItem({
+      saveCanvasItemPosition({
         eventId,
         itemId: item.id,
         x: cont.x,
@@ -3225,7 +3252,7 @@ function createCanvasItemBlock(
         // Was a drag - save position (preserve textScale)
         cont.cursor = 'pointer'
         cont.alpha = 1
-        upsertCanvasItem({
+        saveCanvasItemPosition({
           eventId,
           itemId: item.id,
           x: cont.x,
@@ -3250,7 +3277,7 @@ function createCanvasItemBlock(
             _contentTextRef.style.wordWrapWidth = CANVAS_ITEM_WIDTH - 24
           }
           // Save the reset scale (textScale back to 1/undefined)
-          upsertCanvasItem({
+          saveCanvasItemPosition({
             eventId,
             itemId: item.id,
             x: cont.x,
@@ -3276,7 +3303,7 @@ function createCanvasItemBlock(
       if (dragData.hasMoved) {
         cont.cursor = 'pointer'
         cont.alpha = 1
-        upsertCanvasItem({
+        saveCanvasItemPosition({
           eventId,
           itemId: item.id,
           x: cont.x,
