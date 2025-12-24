@@ -15,11 +15,10 @@ import {
   restoreStorageFolder,
   hasStorageFolder,
   writeImageFromDataURL,
-  generatePhotoFilename,
   readDatabaseFile,
 } from './db/fileStorage'
 import { rebuildFullIndex, needsFullRebuild, recoverFromPhotos } from './db/sync/indexer'
-import { updateEventWithFiles } from './db/sync/writer'
+import { updateEventWithFiles, createItemWithFiles, updateCanvasItemWithFiles } from './db/sync/writer'
 import { importDatabase } from './db/database'
 import { migrateToFileBasedStorage } from './db/migration'
 
@@ -499,17 +498,18 @@ export default function App() {
       fileNames: files.map(f => f.name)
     })
 
-    // Get event info for folder structure
+    // Get event info
     const event = getEventById(eventId)
     if (!event) {
       console.error('Event not found:', eventId)
       return
     }
 
-    // Determine folder path: year/event-title
-    const eventYear = event.startAt?.substring(0, 4) || new Date().getFullYear().toString()
-    const eventTitle = event.title || `Event ${eventId.substring(0, 8)}`
-    const folderPath = [eventYear, eventTitle]
+    // Check if we have file storage configured
+    const useFileStorage = hasStorageFolder()
+    if (!useFileStorage) {
+      console.warn('No storage folder configured - photos will not persist!')
+    }
 
     const ITEM_SPACING = 220  // Space between dropped items
     let offsetX = 0
@@ -531,7 +531,7 @@ export default function App() {
           file = await convertHeicToJpeg(file)
         }
 
-        // Read file as base64 for now (needed for display and file saving)
+        // Read file as base64 (needed for createItemWithFiles)
         const reader = new FileReader()
         const dataUrl = await new Promise<string>((resolve, reject) => {
           reader.onload = () => resolve(reader.result as string)
@@ -539,58 +539,62 @@ export default function App() {
           reader.readAsDataURL(file)
         })
 
-        // Generate a unique filename
-        const itemId = crypto.randomUUID()
-        const fileName = generatePhotoFilename(file.name, itemId)
+        setUploadProgress({ current: i + 1, total: totalFiles, fileName: `Saving ${file.name}...` })
 
-        // Determine what to store as content
-        let content: string
+        // Use sync writer to create item with files (markdown + media + index)
+        if (useFileStorage) {
+          const newItem = await createItemWithFiles({
+            eventId,
+            itemType: 'photo',
+            content: dataUrl,  // Will be saved as file and converted to file: reference
+            caption: file.name.replace(/\.[^/.]+$/, ''),
+            happenedAt: exifData.dateTaken,
+            place: exifData.location ? {
+              lat: exifData.location.lat,
+              lng: exifData.location.lng,
+              label: undefined
+            } : undefined,
+            originalFilename: file.name,
+          })
+          console.log('Item created with files:', newItem.id, newItem.slug)
 
-        // If file storage is configured, save as file and store reference
-        if (hasStorageFolder()) {
-          setUploadProgress({ current: i + 1, total: totalFiles, fileName: `Saving ${file.name}...` })
-          const saved = await writeImageFromDataURL(folderPath, fileName, dataUrl)
-          if (saved) {
-            // Store file reference instead of base64
-            content = `file:${folderPath.join('/')}/${fileName}`
-            console.log('Photo saved to file:', content)
-          } else {
-            // Fallback to base64 if file save failed
-            console.warn('Failed to save file, falling back to base64')
-            content = dataUrl
-          }
+          // Position on canvas and save to _canvas.json
+          await updateCanvasItemWithFiles({
+            eventId,
+            itemId: newItem.id,
+            itemSlug: newItem.slug,
+            x: position.x + offsetX,
+            y: position.y,
+            scale: 1,
+            rotation: 0,
+            zIndex: i,  // Stack order based on drop order
+          })
+          console.log('Canvas item saved for:', newItem.id)
         } else {
-          // No file storage, use base64 (will hit localStorage limits)
-          content = dataUrl
+          // Fallback: old behavior without persistence (for dev/testing)
+          const newItem = createItem({
+            eventId,
+            itemType: 'photo',
+            content: dataUrl,
+            caption: file.name.replace(/\.[^/.]+$/, ''),
+            happenedAt: exifData.dateTaken,
+            place: exifData.location ? {
+              lat: exifData.location.lat,
+              lng: exifData.location.lng,
+              label: undefined
+            } : undefined
+          })
+          upsertCanvasItem({
+            eventId,
+            itemId: newItem.id,
+            x: position.x + offsetX,
+            y: position.y,
+            scale: 1,
+            rotation: 0,
+            zIndex: i,
+          })
+          console.warn('Item created without file persistence:', newItem.id)
         }
-
-        // Create the photo item
-        console.log('Creating item for file:', file.name, 'content type:', content.startsWith('file:') ? 'file reference' : 'base64')
-        const newItem = createItem({
-          eventId,
-          itemType: 'photo',
-          content,
-          caption: file.name.replace(/\.[^/.]+$/, ''),  // Use filename without extension
-          happenedAt: exifData.dateTaken,
-          place: exifData.location ? {
-            lat: exifData.location.lat,
-            lng: exifData.location.lng,
-            label: undefined  // Could add reverse geocoding later
-          } : undefined
-        })
-        console.log('Item created with id:', newItem.id)
-
-        // Position on canvas with offset for multiple photos
-        upsertCanvasItem({
-          eventId,
-          itemId: newItem.id,
-          x: position.x + offsetX,
-          y: position.y,
-          scale: 1,
-          rotation: 0,
-          zIndex: 0
-        })
-        console.log('Canvas item upserted for:', newItem.id)
 
         offsetX += ITEM_SPACING
       } catch (err) {
