@@ -1,5 +1,14 @@
 export type EventType = 'year' | 'period' | 'event' | 'item'
-export type ItemType = 'text' | 'photo' | 'video' | 'link'
+export type ItemType = 'text' | 'photo' | 'video' | 'link' | 'audio'
+export type ItemCategory = 'persoonlijk' | 'werk' | 'familie' | 'creatief' | 'vakantie'
+
+export const ITEM_CATEGORIES: { value: ItemCategory; label: string }[] = [
+  { value: 'persoonlijk', label: 'Persoonlijk' },
+  { value: 'werk', label: 'Werk' },
+  { value: 'familie', label: 'Familie' },
+  { value: 'creatief', label: 'Creatief' },
+  { value: 'vakantie', label: 'Vakantie' },
+]
 
 export interface Location {
   lat: number
@@ -38,6 +47,7 @@ export interface Item {
   place?: Location
   people?: string[]            // Tagged people names
   tags?: string[]              // Tags for categorization
+  category?: string             // Category ID (dynamic, configured in settings)
   url?: string                 // URL for link items
   bodyText?: string            // Markdown body text (for full-text search)
   // File-based storage fields
@@ -56,6 +66,8 @@ export interface CanvasItem {
   rotation: number
   zIndex: number
   textScale?: number          // For text items: inner text scale (used with ctrl+resize)
+  width?: number              // Custom card width (default: 200)
+  height?: number             // Custom card height (default: 150)
 }
 
 // Zoom levels as defined in PRD

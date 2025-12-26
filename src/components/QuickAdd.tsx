@@ -1,6 +1,11 @@
 import { useState, useRef, useEffect, useCallback, forwardRef, useImperativeHandle } from 'react'
 import { ItemType } from '../models/types'
 import heic2any from 'heic2any'
+import { Plus, X, Image as ImageIcon, FileText, Link as LinkIcon, Calendar, Clock, Play, Mic, Square, Upload, Pause, Trash2, CalendarRange } from 'lucide-react'
+import { EventPropertiesDialog } from './EventPropertiesDialog'
+import { Event } from '../models/types'
+import { TagInput } from './TagInput'
+import { CategorySelect } from './CategorySelect'
 // EXIF extraction - will be used for batch upload feature
 // import { extractExifData, reverseGeocode } from '../utils/exif'
 
@@ -30,19 +35,22 @@ interface QuickAddProps {
   currentEventId?: string
   currentEventDate?: string  // ISO date string from parent event
   onMemoryAdded?: () => void
+  onNavigateToEvent?: (eventId: string) => void  // Navigate to a specific event
+  getViewportCenter?: () => { x: number; y: number } | null  // Get current viewport center for item placement
 }
 
 export interface QuickAddRef {
   open: () => void
 }
 
-type CaptureStep = 'closed' | 'context-select' | 'type-select' | 'text' | 'link' | 'photo' | 'preview'
+type CaptureStep = 'closed' | 'context-select' | 'type-select' | 'text' | 'link' | 'photo' | 'audio' | 'preview'
 
 interface MediaData {
   file: File
-  thumbnail: string  // base64 data URL
+  thumbnail: string  // base64 data URL (empty for audio)
   fullSize: string   // base64 data URL for storage
   isVideo: boolean
+  isAudio: boolean
 }
 
 interface CaptureState {
@@ -58,6 +66,8 @@ interface CaptureState {
   endTime: string  // HH:MM or empty
   showEndDate: boolean
   showEndTime: boolean
+  tags: string[]
+  category?: string
 }
 
 // Get today's date in YYYY-MM-DD format
@@ -183,7 +193,7 @@ async function generateThumbnail(file: File, maxSize: number = 256): Promise<{ t
 }
 
 export const QuickAdd = forwardRef<QuickAddRef, QuickAddProps>(function QuickAdd(
-  { currentYearId: _currentYearId, currentEventId, currentEventDate, onMemoryAdded },
+  { currentYearId: _currentYearId, currentEventId, currentEventDate, onMemoryAdded, onNavigateToEvent, getViewportCenter },
   ref
 ) {
   // Use parent event date if available, otherwise today
@@ -196,13 +206,22 @@ export const QuickAdd = forwardRef<QuickAddRef, QuickAddProps>(function QuickAdd
     type: null, content: '', caption: '',
     addToCurrentEvent: true,
     date: getDefaultDate(), time: '', showTime: false,
-    endDate: '', endTime: '', showEndDate: false, showEndTime: false
+    endDate: '', endTime: '', showEndDate: false, showEndTime: false,
+    tags: [], category: undefined
   })
   const [isSaving, setIsSaving] = useState(false)
   const [isProcessing, setIsProcessing] = useState(false)
+  const [showEventDialog, setShowEventDialog] = useState(false)
+  const [newEvent, setNewEvent] = useState<Event | null>(null)
   // Batch progress - will be used for multi-file upload
   // const [batchProgress, setBatchProgress] = useState<{ current: number; total: number } | null>(null)
   const [toast, setToast] = useState<string | null>(null)
+  const [isRecording, setIsRecording] = useState(false)
+  const [isPaused, setIsPaused] = useState(false)
+  const [recordingTime, setRecordingTime] = useState(0)
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
+  const audioChunksRef = useRef<Blob[]>([])
+  const recordingTimerRef = useRef<number | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   // Update default date when parent event changes
@@ -217,6 +236,7 @@ export const QuickAdd = forwardRef<QuickAddRef, QuickAddProps>(function QuickAdd
 
   const linkInputRef = useRef<HTMLInputElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const audioInputRef = useRef<HTMLInputElement>(null)
 
   // Expose open method via ref
   useImperativeHandle(ref, () => ({
@@ -254,15 +274,30 @@ export const QuickAdd = forwardRef<QuickAddRef, QuickAddProps>(function QuickAdd
   }, [step])
 
   const handleClose = useCallback(() => {
+    // Stop any active recording
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop()
+      mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop())
+    }
+    if (recordingTimerRef.current) {
+      clearInterval(recordingTimerRef.current)
+      recordingTimerRef.current = null
+    }
+    setIsRecording(false)
+    setIsPaused(false)
+    setRecordingTime(0)
+    audioChunksRef.current = []
+
     setStep('closed')
     setCapture({
       type: null, content: '', caption: '', media: undefined,
       addToCurrentEvent: true,
       date: getDefaultDate(), time: '', showTime: false,
-      endDate: '', endTime: '', showEndDate: false, showEndTime: false
+      endDate: '', endTime: '', showEndDate: false, showEndTime: false,
+      tags: [], category: undefined
     })
     setIsProcessing(false)
-  }, [getDefaultDate])
+  }, [getDefaultDate, isRecording])
 
   const handleTypeSelect = (type: ItemType) => {
     setCapture({ ...capture, type })
@@ -276,7 +311,111 @@ export const QuickAdd = forwardRef<QuickAddRef, QuickAddProps>(function QuickAdd
       setTimeout(() => {
         fileInputRef.current?.click()
       }, 100)
+    } else if (type === 'audio') {
+      setStep('audio')
     }
+  }
+
+  // Handle creating a new empty event/period
+  const handleEventCreate = async () => {
+    const { createEvent, getOrCreateYear } = await import('../db/database')
+    const { hasStorageFolder } = await import('../db/fileStorage')
+    const { createEventWithFiles, createYearWithFiles } = await import('../db/sync/writer')
+
+    const useFileBased = hasStorageFolder()
+    const today = getTodayString()
+
+    // Get or create the year
+    let yearId: string
+    if (useFileBased) {
+      const yearEvent = await createYearWithFiles(today)
+      yearId = yearEvent.id
+    } else {
+      const yearEvent = getOrCreateYear(today)
+      yearId = yearEvent.id
+    }
+
+    // Create a new empty event
+    let event: Event
+    if (useFileBased) {
+      event = await createEventWithFiles({
+        type: 'event',
+        title: '',
+        startAt: today,
+        parentId: yearId,
+      })
+    } else {
+      event = createEvent({
+        type: 'event',
+        title: '',
+        startAt: today,
+        parentId: yearId,
+      })
+    }
+
+    setNewEvent(event)
+    setShowEventDialog(true)
+    setStep('closed')
+  }
+
+  // Handle saving event from dialog
+  const handleEventSave = async (eventId: string, updates: {
+    title?: string
+    description?: string | null
+    featuredPhotoId?: string | null
+    featuredPhotoData?: string | null
+    location?: { lat: number; lng: number; label?: string } | null
+    startAt?: string
+    endAt?: string | null
+  }) => {
+    const { updateEvent, getOrCreateYear } = await import('../db/database')
+    const { hasStorageFolder } = await import('../db/fileStorage')
+    const { createYearWithFiles } = await import('../db/sync/writer')
+
+    // Get or create the correct year for this date
+    let yearId: string | undefined
+    if (updates.startAt) {
+      const useFileBased = hasStorageFolder()
+      if (useFileBased) {
+        const yearEvent = await createYearWithFiles(updates.startAt)
+        yearId = yearEvent.id
+      } else {
+        const yearEvent = getOrCreateYear(updates.startAt)
+        yearId = yearEvent.id
+      }
+    }
+
+    updateEvent(eventId, {
+      title: updates.title,
+      description: updates.description ?? undefined,
+      featuredPhotoId: updates.featuredPhotoId ?? undefined,
+      featuredPhotoData: updates.featuredPhotoData ?? undefined,
+      location: updates.location ?? undefined,
+      startAt: updates.startAt,
+      endAt: updates.endAt ?? undefined,
+      parentId: yearId,  // Update parentId to correct year
+    })
+
+    setShowEventDialog(false)
+    setNewEvent(null)
+    setToast('Event aangemaakt')
+    setTimeout(() => setToast(null), 1500)
+    onMemoryAdded?.()
+    // Navigate to the new event after state has updated
+    setTimeout(() => {
+      onNavigateToEvent?.(eventId)
+    }, 100)
+  }
+
+  // Handle canceling event dialog
+  const handleEventCancel = async () => {
+    // Delete the empty event if user cancels
+    if (newEvent) {
+      const { deleteEvent } = await import('../db/database')
+      deleteEvent(newEvent.id)
+    }
+    setShowEventDialog(false)
+    setNewEvent(null)
   }
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -318,6 +457,7 @@ export const QuickAdd = forwardRef<QuickAddRef, QuickAddProps>(function QuickAdd
           thumbnail,
           fullSize,
           isVideo,
+          isAudio: false,
         }
       }))
       setStep('preview')
@@ -332,6 +472,175 @@ export const QuickAdd = forwardRef<QuickAddRef, QuickAddProps>(function QuickAdd
         fileInputRef.current.value = ''
       }
     }
+  }
+
+  // Handle audio file selection
+  const handleAudioSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+
+    console.log('Audio file selected:', file.name, 'type:', file.type, 'size:', file.size)
+    setIsProcessing(true)
+
+    try {
+      // Convert audio file to base64
+      const reader = new FileReader()
+      const audioDataUrl = await new Promise<string>((resolve, reject) => {
+        reader.onload = () => resolve(reader.result as string)
+        reader.onerror = () => reject(new Error('Failed to read audio file'))
+        reader.readAsDataURL(file)
+      })
+
+      setCapture(prev => ({
+        ...prev,
+        type: 'audio',
+        content: audioDataUrl,
+        media: {
+          file,
+          thumbnail: '', // No thumbnail for audio
+          fullSize: audioDataUrl,
+          isVideo: false,
+          isAudio: true,
+        }
+      }))
+      setStep('preview')
+    } catch (err) {
+      console.error('Failed to process audio:', err)
+      setToast('Kon audio niet verwerken')
+      setTimeout(() => setToast(null), 2000)
+    } finally {
+      setIsProcessing(false)
+      if (audioInputRef.current) {
+        audioInputRef.current.value = ''
+      }
+    }
+  }
+
+  // Start audio recording
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const mediaRecorder = new MediaRecorder(stream)
+      mediaRecorderRef.current = mediaRecorder
+      audioChunksRef.current = []
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data)
+        }
+      }
+
+      mediaRecorder.onstop = async () => {
+        // Stop all tracks to release the microphone
+        stream.getTracks().forEach(track => track.stop())
+
+        // Clear the timer
+        if (recordingTimerRef.current) {
+          clearInterval(recordingTimerRef.current)
+          recordingTimerRef.current = null
+        }
+
+        // Create audio blob from chunks
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' })
+        const audioFile = new File([audioBlob], `recording-${Date.now()}.webm`, { type: 'audio/webm' })
+
+        // Convert to base64
+        const reader = new FileReader()
+        const audioDataUrl = await new Promise<string>((resolve, reject) => {
+          reader.onload = () => resolve(reader.result as string)
+          reader.onerror = () => reject(new Error('Failed to read audio'))
+          reader.readAsDataURL(audioBlob)
+        })
+
+        setCapture(prev => ({
+          ...prev,
+          type: 'audio',
+          content: audioDataUrl,
+          media: {
+            file: audioFile,
+            thumbnail: '',
+            fullSize: audioDataUrl,
+            isVideo: false,
+            isAudio: true,
+          }
+        }))
+        setIsRecording(false)
+        setRecordingTime(0)
+        setStep('preview')
+      }
+
+      // Start recording
+      mediaRecorder.start()
+      setIsRecording(true)
+
+      // Start timer
+      recordingTimerRef.current = window.setInterval(() => {
+        setRecordingTime(prev => prev + 1)
+      }, 1000)
+
+    } catch (err) {
+      console.error('Failed to start recording:', err)
+      setToast('Kon microfoon niet openen. Controleer toestemmingen.')
+      setTimeout(() => setToast(null), 3000)
+    }
+  }
+
+  // Stop audio recording
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop()
+    }
+  }
+
+  // Pause audio recording
+  const pauseRecording = () => {
+    if (mediaRecorderRef.current && isRecording && !isPaused) {
+      mediaRecorderRef.current.pause()
+      setIsPaused(true)
+      // Pause timer
+      if (recordingTimerRef.current) {
+        clearInterval(recordingTimerRef.current)
+        recordingTimerRef.current = null
+      }
+    }
+  }
+
+  // Resume audio recording
+  const resumeRecording = () => {
+    if (mediaRecorderRef.current && isRecording && isPaused) {
+      mediaRecorderRef.current.resume()
+      setIsPaused(false)
+      // Resume timer
+      recordingTimerRef.current = window.setInterval(() => {
+        setRecordingTime(prev => prev + 1)
+      }, 1000)
+    }
+  }
+
+  // Delete/cancel current recording
+  const deleteRecording = () => {
+    if (mediaRecorderRef.current) {
+      // Stop without triggering onstop handler that creates the file
+      mediaRecorderRef.current.ondataavailable = null
+      mediaRecorderRef.current.onstop = null
+      mediaRecorderRef.current.stop()
+      mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop())
+    }
+    if (recordingTimerRef.current) {
+      clearInterval(recordingTimerRef.current)
+      recordingTimerRef.current = null
+    }
+    setIsRecording(false)
+    setIsPaused(false)
+    setRecordingTime(0)
+    audioChunksRef.current = []
+  }
+
+  // Format recording time as MM:SS
+  const formatTime = (seconds: number): string => {
+    const mins = Math.floor(seconds / 60)
+    const secs = seconds % 60
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
   }
 
   const handleContentDone = () => {
@@ -466,6 +775,8 @@ export const QuickAdd = forwardRef<QuickAddRef, QuickAddProps>(function QuickAdd
           content,
           caption: capture.caption.trim() || undefined,
           happenedAt,
+          tags: capture.tags.length > 0 ? capture.tags : undefined,
+          category: capture.category,
           originalFilename: capture.media?.file.name,
         })
       } else {
@@ -476,6 +787,8 @@ export const QuickAdd = forwardRef<QuickAddRef, QuickAddProps>(function QuickAdd
           content,
           caption: capture.caption.trim() || undefined,
           happenedAt,
+          tags: capture.tags.length > 0 ? capture.tags : undefined,
+          category: capture.category,
         })
       }
 
@@ -491,6 +804,9 @@ export const QuickAdd = forwardRef<QuickAddRef, QuickAddProps>(function QuickAdd
       const existingItems = getItemsByEvent(targetEventId).filter(i => i.id !== newItem.id)
       const existingCanvasItems = getCanvasItems(targetEventId)
 
+      // Get the current viewport center for positioning
+      const viewportCenter = getViewportCenter?.()
+
       // Calculate smart position for new item
       const ITEM_WIDTH = 200
       const ITEM_HEIGHT = 150
@@ -500,12 +816,22 @@ export const QuickAdd = forwardRef<QuickAddRef, QuickAddProps>(function QuickAdd
       let newY = 0
 
       if (existingItems.length === 0) {
-        // First item: center at origin
-        newX = 0
-        newY = 0
+        // First item: place at viewport center if available, otherwise origin
+        if (viewportCenter) {
+          newX = viewportCenter.x
+          newY = viewportCenter.y
+        } else {
+          newX = 0
+          newY = 0
+        }
+      } else if (viewportCenter) {
+        // Place new item at viewport center with a small offset to avoid stacking
+        const offsetX = (existingItems.length % 3 - 1) * (ITEM_WIDTH + GAP) / 2
+        const offsetY = Math.floor(existingItems.length / 3) * (ITEM_HEIGHT + GAP) / 3
+        newX = viewportCenter.x + offsetX
+        newY = viewportCenter.y + offsetY
       } else {
-        // Find the rightmost item and place new item next to it
-        // Or start a new row if too wide
+        // Fallback: find the rightmost item and place new item next to it
         const MAX_ROW_WIDTH = 1200
         let maxX = -Infinity
         let maxY = -Infinity
@@ -567,6 +893,23 @@ export const QuickAdd = forwardRef<QuickAddRef, QuickAddProps>(function QuickAdd
     setStep('type-select')
   }
 
+  // Render EventPropertiesDialog when creating a new event (check this FIRST)
+  if (showEventDialog && newEvent) {
+    return (
+      <>
+        <EventPropertiesDialog
+          event={newEvent}
+          photoItems={[]}
+          isOpen={showEventDialog}
+          requireEndDate={true}
+          onSave={handleEventSave}
+          onCancel={handleEventCancel}
+        />
+        {toast && <div style={styles.toast}>{toast}</div>}
+      </>
+    )
+  }
+
   // Floating + Button
   if (step === 'closed') {
     return (
@@ -576,10 +919,7 @@ export const QuickAdd = forwardRef<QuickAddRef, QuickAddProps>(function QuickAdd
           onClick={() => setStep(currentEventId ? 'context-select' : 'type-select')}
           aria-label="Add memory"
         >
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-            <line x1="12" y1="5" x2="12" y2="19" />
-            <line x1="5" y1="12" x2="19" y2="12" />
-          </svg>
+          <Plus size={24} strokeWidth={2.5} />
         </button>
         {toast && <div style={styles.toast}>{toast}</div>}
       </>
@@ -600,18 +940,13 @@ export const QuickAdd = forwardRef<QuickAddRef, QuickAddProps>(function QuickAdd
           <div style={styles.sheetHeader}>
             <span style={styles.sheetTitle}>Waar wil je deze herinnering toevoegen?</span>
             <button style={styles.closeButton} onClick={handleClose}>
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <line x1="18" y1="6" x2="6" y2="18" />
-                <line x1="6" y1="6" x2="18" y2="18" />
-              </svg>
+              <X size={20} />
             </button>
           </div>
           <div style={styles.contextOptions}>
             <button style={styles.contextButton} onClick={() => handleContextSelect(true)}>
               <div style={{ ...styles.contextIcon, backgroundColor: '#3d5a80' }}>
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2">
-                  <path d="M12 5v14M5 12h14" />
-                </svg>
+                <Plus size={24} color="white" />
               </div>
               <div style={styles.contextText}>
                 <span style={styles.contextTitle}>Aan deze herinnering toevoegen</span>
@@ -620,10 +955,7 @@ export const QuickAdd = forwardRef<QuickAddRef, QuickAddProps>(function QuickAdd
             </button>
             <button style={styles.contextButton} onClick={() => handleContextSelect(false)}>
               <div style={{ ...styles.contextIcon, backgroundColor: '#5d7aa0' }}>
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2">
-                  <rect x="3" y="3" width="18" height="18" rx="2" />
-                  <path d="M12 8v8M8 12h8" />
-                </svg>
+                <Plus size={24} color="white" />
               </div>
               <div style={styles.contextText}>
                 <span style={styles.contextTitle}>Nieuwe losse herinnering</span>
@@ -645,42 +977,39 @@ export const QuickAdd = forwardRef<QuickAddRef, QuickAddProps>(function QuickAdd
           <div style={styles.sheetHeader}>
             <span style={styles.sheetTitle}>Leg vast wat nu belangrijk is.</span>
             <button style={styles.closeButton} onClick={handleClose}>
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <line x1="18" y1="6" x2="6" y2="18" />
-                <line x1="6" y1="6" x2="18" y2="18" />
-              </svg>
+              <X size={20} />
             </button>
           </div>
           <div style={styles.typeGrid}>
             <button style={styles.typeButton} onClick={() => handleTypeSelect('photo')}>
               <div style={{ ...styles.typeIcon, backgroundColor: '#4CAF50' }}>
-                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2">
-                  <rect x="3" y="3" width="18" height="18" rx="2" />
-                  <circle cx="8.5" cy="8.5" r="1.5" />
-                  <path d="M21 15l-5-5L5 21" />
-                </svg>
+                <ImageIcon size={28} color="white" />
               </div>
               <span style={styles.typeLabel}>Foto / Video</span>
             </button>
             <button style={styles.typeButton} onClick={() => handleTypeSelect('text')}>
               <div style={{ ...styles.typeIcon, backgroundColor: '#9C27B0' }}>
-                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2">
-                  <line x1="17" y1="10" x2="3" y2="10" />
-                  <line x1="21" y1="6" x2="3" y2="6" />
-                  <line x1="21" y1="14" x2="3" y2="14" />
-                  <line x1="17" y1="18" x2="3" y2="18" />
-                </svg>
+                <FileText size={28} color="white" />
               </div>
               <span style={styles.typeLabel}>Tekst</span>
             </button>
             <button style={styles.typeButton} onClick={() => handleTypeSelect('link')}>
               <div style={{ ...styles.typeIcon, backgroundColor: '#2196F3' }}>
-                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2">
-                  <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
-                  <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
-                </svg>
+                <LinkIcon size={28} color="white" />
               </div>
               <span style={styles.typeLabel}>Link</span>
+            </button>
+            <button style={styles.typeButton} onClick={() => handleTypeSelect('audio')}>
+              <div style={{ ...styles.typeIcon, backgroundColor: '#E91E63' }}>
+                <Mic size={28} color="white" />
+              </div>
+              <span style={styles.typeLabel}>Audio</span>
+            </button>
+            <button style={{ ...styles.typeButton, gridColumn: 'span 2' }} onClick={handleEventCreate}>
+              <div style={{ ...styles.typeIcon, backgroundColor: '#FF9800' }}>
+                <CalendarRange size={28} color="white" />
+              </div>
+              <span style={styles.typeLabel}>Event / Periode</span>
             </button>
           </div>
         </div>
@@ -796,11 +1125,7 @@ export const QuickAdd = forwardRef<QuickAddRef, QuickAddProps>(function QuickAdd
             ) : (
               <>
                 <div style={styles.photoIcon}>
-                  <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#666" strokeWidth="1.5">
-                    <rect x="3" y="3" width="18" height="18" rx="2" />
-                    <circle cx="8.5" cy="8.5" r="1.5" />
-                    <path d="M21 15l-5-5L5 21" />
-                  </svg>
+                  <ImageIcon size={48} color="#666" strokeWidth={1.5} />
                 </div>
                 <p style={styles.photoText}>Kies een foto of video</p>
                 <button
@@ -808,6 +1133,112 @@ export const QuickAdd = forwardRef<QuickAddRef, QuickAddProps>(function QuickAdd
                   onClick={() => fileInputRef.current?.click()}
                 >
                   Bladeren...
+                </button>
+                <button
+                  style={styles.backToTypesButton}
+                  onClick={() => setStep('type-select')}
+                >
+                  Kies ander type
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+        {toast && <div style={styles.toast}>{toast}</div>}
+      </>
+    )
+  }
+
+  // Audio Capture
+  if (step === 'audio') {
+    return (
+      <>
+        {renderBackdrop()}
+        <input
+          ref={audioInputRef}
+          type="file"
+          accept="audio/*"
+          style={{ display: 'none' }}
+          onChange={handleAudioSelect}
+        />
+        <div style={styles.captureSheet}>
+          <div style={styles.captureHeader}>
+            <button style={styles.cancelButton} onClick={handleClose}>Annuleren</button>
+          </div>
+          <div style={styles.photoPlaceholder}>
+            {isProcessing ? (
+              <>
+                <div style={styles.spinner} />
+                <p style={styles.photoText}>Verwerken...</p>
+              </>
+            ) : isRecording ? (
+              <>
+                <style>{`
+                  @keyframes pulse {
+                    0%, 100% { transform: scale(1); opacity: 0.3; }
+                    50% { transform: scale(1.3); opacity: 0.1; }
+                  }
+                `}</style>
+                <div style={styles.recordingIndicator}>
+                  <div style={{
+                    ...styles.recordingPulse,
+                    animationPlayState: isPaused ? 'paused' : 'running'
+                  }} />
+                  <Mic size={48} color={isPaused ? '#888' : '#E91E63'} />
+                </div>
+                <p style={styles.recordingTime}>{formatTime(recordingTime)}</p>
+                <p style={styles.recordingText}>
+                  {isPaused ? 'Gepauzeerd' : 'Opnemen...'}
+                </p>
+                <div style={styles.recordingControls}>
+                  <button
+                    style={styles.recordControlButton}
+                    onClick={isPaused ? resumeRecording : pauseRecording}
+                    title={isPaused ? 'Hervat opname' : 'Pauzeer opname'}
+                  >
+                    {isPaused ? <Play size={24} fill="white" /> : <Pause size={24} />}
+                  </button>
+                  <button
+                    style={styles.stopRecordButton}
+                    onClick={stopRecording}
+                    title="Stop en bewaar"
+                  >
+                    <Square size={20} fill="white" />
+                    Klaar
+                  </button>
+                  <button
+                    style={styles.deleteRecordButton}
+                    onClick={deleteRecording}
+                    title="Verwijder opname"
+                  >
+                    <Trash2 size={24} />
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div style={styles.startRecordIcon}>
+                  <Mic size={48} color="#E91E63" />
+                </div>
+                <p style={styles.photoText}>Neem een audiofragment op</p>
+                <button
+                  style={styles.startRecordButton}
+                  onClick={startRecording}
+                >
+                  <Mic size={20} />
+                  Start opname
+                </button>
+                <div style={styles.audioOrDivider}>
+                  <span style={styles.audioOrLine} />
+                  <span style={styles.audioOrText}>of</span>
+                  <span style={styles.audioOrLine} />
+                </div>
+                <button
+                  style={styles.uploadAudioButton}
+                  onClick={() => audioInputRef.current?.click()}
+                >
+                  <Upload size={18} />
+                  Upload audiobestand
                 </button>
                 <button
                   style={styles.backToTypesButton}
@@ -837,10 +1268,7 @@ export const QuickAdd = forwardRef<QuickAddRef, QuickAddProps>(function QuickAdd
             {capture.type === 'link' && (
               <div style={styles.previewLink}>
                 <div style={styles.linkIcon}>
-                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#2196F3" strokeWidth="2">
-                    <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
-                    <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
-                  </svg>
+                  <LinkIcon size={24} color="#2196F3" />
                 </div>
                 <span style={styles.previewLinkUrl}>{capture.content}</span>
                 {capture.caption && <span style={styles.previewCaption}>{capture.caption}</span>}
@@ -856,11 +1284,33 @@ export const QuickAdd = forwardRef<QuickAddRef, QuickAddProps>(function QuickAdd
                   />
                   {capture.media.isVideo && (
                     <div style={styles.videoOverlay}>
-                      <svg width="32" height="32" viewBox="0 0 24 24" fill="white">
-                        <polygon points="5 3 19 12 5 21 5 3" />
-                      </svg>
+                      <Play size={32} color="white" fill="white" />
                     </div>
                   )}
+                </div>
+                <input
+                  type="text"
+                  style={styles.mediaCaptionInput}
+                  placeholder="Voeg een beschrijving toe (optioneel)"
+                  value={capture.caption}
+                  onChange={(e) => setCapture({ ...capture, caption: e.target.value })}
+                />
+                <div style={styles.mediaFileName}>
+                  {capture.media.file.name}
+                </div>
+              </div>
+            )}
+            {capture.type === 'audio' && capture.media && (
+              <div style={styles.mediaPreview}>
+                <div style={styles.audioPreviewContainer}>
+                  <div style={styles.audioIcon}>
+                    <Mic size={48} color="#E91E63" />
+                  </div>
+                  <audio
+                    controls
+                    src={capture.media.fullSize}
+                    style={styles.audioPlayer}
+                  />
                 </div>
                 <input
                   type="text"
@@ -881,12 +1331,7 @@ export const QuickAdd = forwardRef<QuickAddRef, QuickAddProps>(function QuickAdd
               <label style={styles.datePickerLabel}>Datum</label>
               <div style={styles.dateInputRow}>
                 <div style={styles.datePickerIcon}>
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
-                    <line x1="16" y1="2" x2="16" y2="6" />
-                    <line x1="8" y1="2" x2="8" y2="6" />
-                    <line x1="3" y1="10" x2="21" y2="10" />
-                  </svg>
+                  <Calendar size={20} />
                 </div>
                 <input
                   type="date"
@@ -908,10 +1353,7 @@ export const QuickAdd = forwardRef<QuickAddRef, QuickAddProps>(function QuickAdd
                   }}
                   title={capture.showTime ? 'Tijd verbergen' : 'Tijd toevoegen'}
                 >
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <circle cx="12" cy="12" r="10" />
-                    <polyline points="12 6 12 12 16 14" />
-                  </svg>
+                  <Clock size={18} />
                 </button>
               </div>
               {/* Time input (shown when toggled) */}
@@ -948,12 +1390,7 @@ export const QuickAdd = forwardRef<QuickAddRef, QuickAddProps>(function QuickAdd
                   <label style={styles.datePickerLabel}>Einddatum</label>
                   <div style={styles.dateInputRow}>
                     <div style={styles.datePickerIcon}>
-                      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
-                        <line x1="16" y1="2" x2="16" y2="6" />
-                        <line x1="8" y1="2" x2="8" y2="6" />
-                        <line x1="3" y1="10" x2="21" y2="10" />
-                      </svg>
+                      <Calendar size={20} />
                     </div>
                     <input
                       type="date"
@@ -975,10 +1412,7 @@ export const QuickAdd = forwardRef<QuickAddRef, QuickAddProps>(function QuickAdd
                       }}
                       title={capture.showEndTime ? 'Tijd verbergen' : 'Tijd toevoegen'}
                     >
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <circle cx="12" cy="12" r="10" />
-                        <polyline points="12 6 12 12 16 14" />
-                      </svg>
+                      <Clock size={18} />
                     </button>
                   </div>
                   {capture.showEndTime && (
@@ -1004,6 +1438,25 @@ export const QuickAdd = forwardRef<QuickAddRef, QuickAddProps>(function QuickAdd
               </button>
             )}
           </div>
+
+          {/* Tags */}
+          <div style={styles.metadataSection}>
+            <label style={styles.metadataLabel}>Tags</label>
+            <TagInput
+              tags={capture.tags}
+              onChange={(tags) => setCapture({ ...capture, tags })}
+              placeholder="Voeg tags toe..."
+            />
+          </div>
+
+          {/* Category */}
+          <div style={styles.metadataSection}>
+            <CategorySelect
+              value={capture.category}
+              onChange={(category) => setCapture({ ...capture, category })}
+            />
+          </div>
+
           <div style={styles.previewActions}>
             <button
               style={styles.secondaryButton}
@@ -1096,7 +1549,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   typeGrid: {
     display: 'grid',
-    gridTemplateColumns: 'repeat(3, 1fr)',
+    gridTemplateColumns: 'repeat(2, 1fr)',
     gap: 16,
   },
   typeButton: {
@@ -1165,6 +1618,20 @@ const styles: Record<string, React.CSSProperties> = {
   contextSubtitle: {
     fontSize: 13,
     color: '#888',
+  },
+
+  // Metadata sections (tags, category)
+  metadataSection: {
+    marginBottom: 16,
+  },
+  metadataLabel: {
+    display: 'block',
+    fontSize: 12,
+    fontWeight: 500,
+    color: '#888',
+    marginBottom: 8,
+    textTransform: 'uppercase',
+    letterSpacing: '0.5px',
   },
 
   // Date Picker
@@ -1554,5 +2021,155 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: 12,
     color: '#555',
     textAlign: 'center',
+  },
+  // Audio preview
+  audioPreviewContainer: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    gap: 16,
+    padding: 24,
+    backgroundColor: '#111',
+    borderRadius: 12,
+  },
+  audioIcon: {
+    width: 80,
+    height: 80,
+    borderRadius: '50%',
+    backgroundColor: 'rgba(233, 30, 99, 0.15)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  audioPlayer: {
+    width: '100%',
+    maxWidth: 300,
+    height: 40,
+  },
+  // Recording styles
+  recordingIndicator: {
+    position: 'relative',
+    width: 100,
+    height: 100,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  recordingPulse: {
+    position: 'absolute',
+    width: '100%',
+    height: '100%',
+    borderRadius: '50%',
+    backgroundColor: 'rgba(233, 30, 99, 0.2)',
+    animation: 'pulse 1.5s ease-in-out infinite',
+  },
+  recordingTime: {
+    fontSize: 32,
+    fontWeight: 600,
+    color: '#E91E63',
+    fontFamily: 'monospace',
+    margin: '8px 0',
+  },
+  recordingText: {
+    fontSize: 16,
+    color: '#888',
+    margin: 0,
+  },
+  stopRecordButton: {
+    marginTop: 24,
+    padding: '14px 32px',
+    backgroundColor: '#E91E63',
+    border: 'none',
+    borderRadius: 12,
+    color: 'white',
+    fontSize: 16,
+    fontWeight: 600,
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+  },
+  audioOrDivider: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 12,
+    width: '100%',
+    maxWidth: 200,
+    marginTop: 16,
+  },
+  audioOrLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: '#333',
+  },
+  audioOrText: {
+    fontSize: 12,
+    color: '#666',
+    textTransform: 'uppercase',
+  },
+  uploadAudioButton: {
+    padding: '10px 20px',
+    backgroundColor: 'transparent',
+    border: '1px solid #5d7aa0',
+    borderRadius: 8,
+    color: '#5d7aa0',
+    fontSize: 14,
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+  },
+  startRecordIcon: {
+    width: 100,
+    height: 100,
+    borderRadius: '50%',
+    backgroundColor: 'rgba(233, 30, 99, 0.15)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  startRecordButton: {
+    marginTop: 16,
+    padding: '14px 32px',
+    backgroundColor: '#E91E63',
+    border: 'none',
+    borderRadius: 12,
+    color: 'white',
+    fontSize: 16,
+    fontWeight: 600,
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+  },
+  recordingControls: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 16,
+    marginTop: 24,
+  },
+  recordControlButton: {
+    width: 56,
+    height: 56,
+    borderRadius: '50%',
+    backgroundColor: '#333',
+    border: 'none',
+    color: 'white',
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  deleteRecordButton: {
+    width: 56,
+    height: 56,
+    borderRadius: '50%',
+    backgroundColor: 'transparent',
+    border: '2px solid #666',
+    color: '#888',
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 }

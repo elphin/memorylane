@@ -2,6 +2,12 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { motion, AnimatePresence } from 'motion/react'
 import { Item } from '../models/types'
 import { readFileAsDataURL, hasStorageFolder } from '../db/fileStorage'
+import { getMeta } from '../db/database'
+import {
+  Settings, Play, Pause, ChevronLeft, ChevronRight, Info,
+  Edit, Trash2, Calendar, MapPin, Users, Shuffle, Repeat, Film,
+  Tag, Folder
+} from 'lucide-react'
 
 // Transition effect types
 type TransitionEffect = 'slide' | 'fade' | 'zoom' | 'kenburns' | 'flip' | 'blur'
@@ -98,7 +104,7 @@ interface PhotoViewerProps {
   eventStartDate?: string  // Event's startAt date, used as default for happenedAt
   onClose: () => void
   onDelete: (item: Item) => void
-  onSave: (item: Item, updates: { caption?: string; happenedAt?: string; place?: Item['place']; people?: string[] }) => void
+  onSave: (item: Item, updates: { caption?: string; happenedAt?: string; place?: Item['place']; people?: string[]; tags?: string[]; category?: string }) => void
   onNavigate: (item: Item) => void
 }
 
@@ -149,6 +155,33 @@ export function PhotoViewer({
   const [editTime, setEditTime] = useState(item.happenedAt?.split('T')[1]?.substring(0, 5) || '')
   const [editLocationLabel, setEditLocationLabel] = useState(item.place?.label || '')
   const [editPeople, setEditPeople] = useState(item.people?.join(', ') || '')
+  const [editTags, setEditTags] = useState<string[]>(item.tags || [])
+  const [editCategory, setEditCategory] = useState<string | undefined>(item.category)
+  const [tagInputValue, setTagInputValue] = useState('')
+
+  // Categories - load from database
+  const [categories, setCategories] = useState<{ id: string; label: string }[]>([
+    { id: 'persoonlijk', label: 'Persoonlijk' },
+    { id: 'werk', label: 'Werk' },
+    { id: 'familie', label: 'Familie' },
+    { id: 'creatief', label: 'Creatief' },
+    { id: 'vakantie', label: 'Vakantie' },
+  ])
+
+  // Load categories from database
+  useEffect(() => {
+    const saved = getMeta('custom_categories')
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved)
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setCategories(parsed)
+        }
+      } catch {
+        // Use defaults
+      }
+    }
+  }, [])
 
   // Animation state
   const [slideDirection, setSlideDirection] = useState<'left' | 'right'>('left')
@@ -212,6 +245,9 @@ export function PhotoViewer({
     setEditTime(item.happenedAt?.split('T')[1]?.substring(0, 5) || '')
     setEditLocationLabel(item.place?.label || '')
     setEditPeople(item.people?.join(', ') || '')
+    setEditTags(item.tags || [])
+    setEditCategory(item.category)
+    setTagInputValue('')
   }, [item, eventStartDate])
 
   // Generate shuffled order when starting slideshow with shuffle
@@ -405,9 +441,15 @@ export function PhotoViewer({
       updates.people = undefined
     }
 
+    // Tags
+    updates.tags = editTags
+
+    // Category
+    updates.category = editCategory
+
     onSave(item, updates)
     setIsEditingMetadata(false)
-  }, [item, editDate, editTime, editLocationLabel, editPeople, onSave])
+  }, [item, editDate, editTime, editLocationLabel, editPeople, editTags, editCategory, onSave])
 
   // Format date for display
   const formatDate = (isoDate?: string) => {
@@ -563,15 +605,10 @@ export function PhotoViewer({
                     onClick={(e) => { e.stopPropagation(); setShowSettings(!showSettings); }}
                     title="Slideshow instellingen"
                   >
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <circle cx="12" cy="12" r="3" />
-                      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
-                    </svg>
+                    <Settings size={18} />
                   </button>
                   <button style={styles.slideshowButton} onClick={enterSlideshow} title="Start slideshow (F)">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-                      <path d="M8 5v14l11-7z" />
-                    </svg>
+                    <Play size={20} fill="currentColor" />
                   </button>
                 </>
               )}
@@ -602,9 +639,7 @@ export function PhotoViewer({
               }}
               onClick={(e) => { e.stopPropagation(); handlePrev(); }}
             >
-              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M15 18l-6-6 6-6" />
-              </svg>
+              <ChevronLeft size={32} />
             </button>
           )}
 
@@ -618,9 +653,7 @@ export function PhotoViewer({
               }}
               onClick={(e) => { e.stopPropagation(); handleNext(); }}
             >
-              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M9 18l6-6-6-6" />
-              </svg>
+              <ChevronRight size={32} />
             </button>
           )}
 
@@ -693,14 +726,9 @@ export function PhotoViewer({
               title={slideshowPlaying ? 'Pause (Space)' : 'Play (Space)'}
             >
               {slideshowPlaying ? (
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
-                  <rect x="6" y="4" width="4" height="16" />
-                  <rect x="14" y="4" width="4" height="16" />
-                </svg>
+                <Pause size={24} fill="currentColor" />
               ) : (
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M8 5v14l11-7z" />
-                </svg>
+                <Play size={24} fill="currentColor" />
               )}
             </button>
             <button
@@ -708,10 +736,7 @@ export function PhotoViewer({
               onClick={() => setShowSettings(!showSettings)}
               title="Settings"
             >
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <circle cx="12" cy="12" r="3" />
-                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
-              </svg>
+              <Settings size={24} />
             </button>
           </div>
         )}
@@ -786,13 +811,7 @@ export function PhotoViewer({
                     style={styles.checkbox}
                   />
                   <span style={styles.checkboxIcon}>{shuffleOrder ? '✓' : ''}</span>
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <polyline points="16 3 21 3 21 8" />
-                    <line x1="4" y1="20" x2="21" y2="3" />
-                    <polyline points="21 16 21 21 16 21" />
-                    <line x1="15" y1="15" x2="21" y2="21" />
-                    <line x1="4" y1="4" x2="9" y2="9" />
-                  </svg>
+                  <Shuffle size={16} />
                   Willekeurige volgorde
                 </label>
 
@@ -804,12 +823,7 @@ export function PhotoViewer({
                     style={styles.checkbox}
                   />
                   <span style={styles.checkboxIcon}>{loopSlideshow ? '✓' : ''}</span>
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <polyline points="17 1 21 5 17 9" />
-                    <path d="M3 11V9a4 4 0 014-4h14" />
-                    <polyline points="7 23 3 19 7 15" />
-                    <path d="M21 13v2a4 4 0 01-4 4H3" />
-                  </svg>
+                  <Repeat size={16} />
                   Herhalen (loop)
                 </label>
 
@@ -821,16 +835,7 @@ export function PhotoViewer({
                     style={styles.checkbox}
                   />
                   <span style={styles.checkboxIcon}>{showCaptions ? '✓' : ''}</span>
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18" />
-                    <line x1="7" y1="2" x2="7" y2="22" />
-                    <line x1="17" y1="2" x2="17" y2="22" />
-                    <line x1="2" y1="12" x2="22" y2="12" />
-                    <line x1="2" y1="7" x2="7" y2="7" />
-                    <line x1="2" y1="17" x2="7" y2="17" />
-                    <line x1="17" y1="17" x2="22" y2="17" />
-                    <line x1="17" y1="7" x2="22" y2="7" />
-                  </svg>
+                  <Film size={16} />
                   Toon bijschriften
                 </label>
               </div>
@@ -877,10 +882,7 @@ export function PhotoViewer({
                     onClick={() => setShowMetadata(!showMetadata)}
                     title="Metadata"
                   >
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <circle cx="12" cy="12" r="10" />
-                      <path d="M12 16v-4M12 8h.01" />
-                    </svg>
+                    <Info size={20} />
                   </button>
                   <button
                     style={styles.actionButton}
@@ -890,15 +892,10 @@ export function PhotoViewer({
                     }}
                     title="Bewerken"
                   >
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" />
-                      <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" />
-                    </svg>
+                    <Edit size={20} />
                   </button>
                   <button style={styles.actionButton} onClick={handleDelete} title="Verwijderen">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" />
-                    </svg>
+                    <Trash2 size={20} />
                   </button>
                 </div>
               </div>
@@ -928,12 +925,7 @@ export function PhotoViewer({
                         >
                     <div style={styles.metadataRow}>
                       <label style={styles.metadataLabel}>
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                          <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
-                          <line x1="16" y1="2" x2="16" y2="6" />
-                          <line x1="8" y1="2" x2="8" y2="6" />
-                          <line x1="3" y1="10" x2="21" y2="10" />
-                        </svg>
+                        <Calendar size={16} />
                         Datum & tijd
                       </label>
                       <div style={styles.metadataInputRow}>
@@ -954,10 +946,7 @@ export function PhotoViewer({
 
                     <div style={styles.metadataRow}>
                       <label style={styles.metadataLabel}>
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                          <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z" />
-                          <circle cx="12" cy="10" r="3" />
-                        </svg>
+                        <MapPin size={16} />
                         Locatie
                       </label>
                       <input
@@ -976,11 +965,7 @@ export function PhotoViewer({
 
                     <div style={styles.metadataRow}>
                       <label style={styles.metadataLabel}>
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                          <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2" />
-                          <circle cx="9" cy="7" r="4" />
-                          <path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75" />
-                        </svg>
+                        <Users size={16} />
                         Personen
                       </label>
                       <input
@@ -990,6 +975,72 @@ export function PhotoViewer({
                         placeholder="Namen gescheiden door komma's"
                         style={styles.metadataInput}
                       />
+                    </div>
+
+                    {/* Tags */}
+                    <div style={styles.metadataRow}>
+                      <label style={styles.metadataLabel}>
+                        <Tag size={16} />
+                        Tags
+                      </label>
+                      <div style={styles.tagsEditContainer}>
+                        <div style={styles.tagsEditList}>
+                          {editTags.map((tag, i) => (
+                            <span key={i} style={styles.tagEditPill}>
+                              {tag}
+                              <button
+                                type="button"
+                                style={styles.tagRemoveButton}
+                                onClick={() => setEditTags(editTags.filter((_, idx) => idx !== i))}
+                              >
+                                ×
+                              </button>
+                            </span>
+                          ))}
+                        </div>
+                        <div style={styles.tagInputRow}>
+                          <input
+                            type="text"
+                            value={tagInputValue}
+                            onChange={e => setTagInputValue(e.target.value)}
+                            onKeyDown={e => {
+                              if (e.key === 'Enter' && tagInputValue.trim()) {
+                                e.preventDefault()
+                                const newTag = tagInputValue.trim().toLowerCase()
+                                if (!editTags.includes(newTag)) {
+                                  setEditTags([...editTags, newTag])
+                                }
+                                setTagInputValue('')
+                              }
+                            }}
+                            placeholder="Voeg tag toe + Enter"
+                            style={styles.metadataInput}
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Category */}
+                    <div style={styles.metadataRow}>
+                      <label style={styles.metadataLabel}>
+                        <Folder size={16} />
+                        Categorie
+                      </label>
+                      <div style={styles.categoryOptions}>
+                        {categories.map(cat => (
+                          <button
+                            key={cat.id}
+                            type="button"
+                            style={{
+                              ...styles.categoryOption,
+                              ...(editCategory === cat.id ? styles.categoryOptionSelected : {}),
+                            }}
+                            onClick={() => setEditCategory(editCategory === cat.id ? undefined : cat.id)}
+                          >
+                            {cat.label}
+                          </button>
+                        ))}
+                      </div>
                     </div>
 
                     <div style={styles.metadataActions}>
@@ -1013,12 +1064,7 @@ export function PhotoViewer({
                         >
                     {/* Date & Time */}
                     <div style={styles.metadataItem}>
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
-                        <line x1="16" y1="2" x2="16" y2="6" />
-                        <line x1="8" y1="2" x2="8" y2="6" />
-                        <line x1="3" y1="10" x2="21" y2="10" />
-                      </svg>
+                      <Calendar size={16} />
                       <div style={styles.metadataContent}>
                         {item.happenedAt ? (
                           <>
@@ -1035,10 +1081,7 @@ export function PhotoViewer({
 
                     {/* Location */}
                     <div style={styles.metadataItem}>
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z" />
-                        <circle cx="12" cy="10" r="3" />
-                      </svg>
+                      <MapPin size={16} />
                       <div style={styles.metadataContent}>
                         {item.place ? (
                           <>
@@ -1064,11 +1107,7 @@ export function PhotoViewer({
 
                     {/* People */}
                     <div style={styles.metadataItem}>
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2" />
-                        <circle cx="9" cy="7" r="4" />
-                        <path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75" />
-                      </svg>
+                      <Users size={16} />
                       <div style={styles.metadataContent}>
                         {item.people && item.people.length > 0 ? (
                           <div style={styles.peopleTags}>
@@ -1082,14 +1121,41 @@ export function PhotoViewer({
                       </div>
                     </div>
 
+                    {/* Tags */}
+                    <div style={styles.metadataItem}>
+                      <Tag size={16} />
+                      <div style={styles.metadataContent}>
+                        {item.tags && item.tags.length > 0 ? (
+                          <div style={styles.peopleTags}>
+                            {item.tags.map((tag, i) => (
+                              <span key={i} style={styles.tagPill}>{tag}</span>
+                            ))}
+                          </div>
+                        ) : (
+                          <span style={styles.metadataEmpty}>Geen tags</span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Category */}
+                    <div style={styles.metadataItem}>
+                      <Folder size={16} />
+                      <div style={styles.metadataContent}>
+                        {item.category ? (
+                          <span style={styles.categoryBadge}>
+                            {categories.find(c => c.id === item.category)?.label || item.category}
+                          </span>
+                        ) : (
+                          <span style={styles.metadataEmpty}>Geen categorie</span>
+                        )}
+                      </div>
+                    </div>
+
                     <button
                       style={styles.editMetadataButton}
                       onClick={() => setIsEditingMetadata(true)}
                     >
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" />
-                        <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" />
-                      </svg>
+                      <Edit size={14} />
                       Metadata bewerken
                     </button>
                         </motion.div>
@@ -1619,5 +1685,80 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: '14px',
     fontWeight: 'bold',
     transition: 'all 0.2s',
+  },
+  // Tags and category styles
+  tagPill: {
+    padding: '4px 10px',
+    backgroundColor: '#3d5a80',
+    borderRadius: '12px',
+    color: '#fff',
+    fontSize: '12px',
+    fontWeight: 500,
+  },
+  categoryBadge: {
+    padding: '4px 12px',
+    backgroundColor: '#2a2a4e',
+    borderRadius: '6px',
+    color: '#aaa',
+    fontSize: '13px',
+    fontWeight: 500,
+  },
+  tagsEditContainer: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '8px',
+  },
+  tagsEditList: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: '6px',
+  },
+  tagEditPill: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '4px',
+    padding: '4px 8px',
+    backgroundColor: '#3d5a80',
+    borderRadius: '12px',
+    color: '#fff',
+    fontSize: '12px',
+    fontWeight: 500,
+  },
+  tagRemoveButton: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    background: 'none',
+    border: 'none',
+    color: 'rgba(255,255,255,0.7)',
+    cursor: 'pointer',
+    padding: 0,
+    fontSize: '14px',
+    lineHeight: 1,
+  },
+  tagInputRow: {
+    display: 'flex',
+    gap: '8px',
+  },
+  categoryOptions: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: '8px',
+  },
+  categoryOption: {
+    padding: '6px 12px',
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    border: '1px solid #333',
+    borderRadius: '16px',
+    color: '#888',
+    fontSize: '12px',
+    fontWeight: 500,
+    cursor: 'pointer',
+    transition: 'all 0.15s ease',
+  },
+  categoryOptionSelected: {
+    backgroundColor: '#3d5a80',
+    borderColor: '#5d7aa0',
+    color: '#fff',
   },
 }

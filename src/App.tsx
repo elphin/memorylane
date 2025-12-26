@@ -1,14 +1,18 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { Timeline, TimelineRef } from './timeline/Timeline'
-import { initDatabase, getEventsByType, getAllEvents, deleteItem, updateItem, getEventById, updateEvent, getPhotoItemsForEvent, createItem, upsertCanvasItem, getAllItems, updateItemContent, getItemsByEvent } from './db/database'
+import { initDatabase, getEventsByType, getAllEvents, deleteItem, deleteEvent, updateItem, getEventById, updateEvent, getPhotoItemsForEvent, createItem, upsertCanvasItem, getAllItems, updateItemContent, getItemsByEvent } from './db/database'
 import { Event, ZoomLevel, Item } from './models/types'
 import { QuickAdd, QuickAddRef } from './components/QuickAdd'
 import { ConfirmDialog } from './components/ConfirmDialog'
 import { EditMemoryDialog } from './components/EditMemoryDialog'
 import { PhotoViewer } from './components/PhotoViewer'
+import { TextViewer } from './components/TextViewer'
+import { AudioViewer } from './components/AudioViewer'
+import { LinkViewer } from './components/LinkViewer'
 import { EventPropertiesDialog } from './components/EventPropertiesDialog'
 import { SearchModal } from './components/SearchModal'
-import { Search } from 'lucide-react'
+import { SettingsModal } from './components/settings'
+import { Search, Settings, User } from 'lucide-react'
 import { extractExifData } from './utils/exif'
 import { SearchResult } from './db/database'
 import heic2any from 'heic2any'
@@ -19,8 +23,10 @@ import {
   hasStorageFolder,
   writeImageFromDataURL,
   readDatabaseFile,
+  deleteDirectory,
 } from './db/fileStorage'
-import { rebuildFullIndex, needsFullRebuild, recoverFromPhotos } from './db/sync/indexer'
+import { rebuildFullIndex, needsFullRebuild, recoverFromPhotos, cleanupDuplicateMarkdownFiles } from './db/sync/indexer'
+import { syncOnFocus } from './db/sync/syncService'
 import { updateEventWithFiles, createItemWithFiles, updateCanvasItemWithFiles } from './db/sync/writer'
 import { importDatabase } from './db/database'
 import { migrateToFileBasedStorage } from './db/migration'
@@ -80,7 +86,16 @@ export default function App() {
   const profileMenuRef = useRef<HTMLDivElement>(null)
   const [viewingPhoto, setViewingPhoto] = useState<{ item: Item; eventId: string } | null>(null)
   const [viewingPhotoItems, setViewingPhotoItems] = useState<Item[]>([])
+  const [viewingText, setViewingText] = useState<{ item: Item; eventId: string } | null>(null)
+  const [viewingTextItems, setViewingTextItems] = useState<Item[]>([])
+  const [viewingAudio, setViewingAudio] = useState<{ item: Item; eventId: string } | null>(null)
+  const [viewingAudioItems, setViewingAudioItems] = useState<Item[]>([])
+  const [viewingLink, setViewingLink] = useState<{ item: Item; eventId: string } | null>(null)
+  const [viewingLinkItems, setViewingLinkItems] = useState<Item[]>([])
   const [showSearch, setShowSearch] = useState(false)
+  const [showSettings, setShowSettings] = useState(false)
+  const [isSyncing, setIsSyncing] = useState(false)
+  const [syncToast, setSyncToast] = useState<{ added: number; modified: number; deleted: number } | null>(null)
   const timelineRef = useRef<TimelineRef>(null)
   const quickAddRef = useRef<QuickAddRef>(null)
   const isNavigatingRef = useRef(false) // Prevent duplicate history entries
@@ -245,6 +260,70 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [])
 
+  // Sync on window focus - detect file changes made outside the app
+  // Skip the first focus event after app load to avoid double-indexing
+  const hasInitializedRef = useRef(false)
+  const lastSyncTimeRef = useRef(0)
+
+  useEffect(() => {
+    if (!storageConfigured) return
+
+    // Mark as initialized after a short delay (after initial load completes)
+    const initTimer = setTimeout(() => {
+      hasInitializedRef.current = true
+    }, 3000)
+
+    const handleFocus = async () => {
+      // Skip if not yet initialized (prevents sync right after app load)
+      if (!hasInitializedRef.current) {
+        console.log('Skipping focus sync - app still initializing')
+        return
+      }
+
+      // Debounce: skip if synced less than 5 seconds ago
+      const now = Date.now()
+      if (now - lastSyncTimeRef.current < 5000) {
+        console.log('Skipping focus sync - too recent')
+        return
+      }
+
+      console.log('Window focused, checking for file changes...')
+      setIsSyncing(true)
+      lastSyncTimeRef.current = now
+
+      try {
+        const result = await syncOnFocus()
+        if (result.hasChanges) {
+          console.log('Sync detected changes:', result)
+          // Show toast notification
+          setSyncToast({ added: result.added, modified: result.modified, deleted: result.deleted })
+          // Auto-hide toast after 4 seconds
+          setTimeout(() => setSyncToast(null), 4000)
+          // Refresh the UI with updated data
+          const yearEvents = getEventsByType('year')
+          const allEvents = getAllEvents()
+          const yearsWithContent = yearEvents.filter(year =>
+            allEvents.some(e => e.parentId === year.id)
+          )
+          setYears(yearsWithContent)
+          setEvents(allEvents.filter(e => e.type !== 'year'))
+          // Rebuild the view to show new items
+          timelineRef.current?.rebuildView()
+        }
+      } catch (err) {
+        console.error('Focus sync failed:', err)
+      } finally {
+        setIsSyncing(false)
+      }
+    }
+
+    window.addEventListener('focus', handleFocus)
+    return () => {
+      clearTimeout(initTimer)
+      window.removeEventListener('focus', handleFocus)
+    }
+  }, [storageConfigured])
+
   const handleBreadcrumbClick = (item: BreadcrumbItem, index: number) => {
     if (item.level === ZoomLevel.L0_Lifeline) {
       // Navigate to home (lifeline view)
@@ -278,13 +357,21 @@ export default function App() {
       setCurrentYearId(event.id)
       setCurrentEventId(undefined)
     } else if (level === ZoomLevel.L2_Canvas) {
-      setBreadcrumbs(prev => {
-        const yearBreadcrumb = prev.find(b => b.level === ZoomLevel.L1_Year)
-        if (yearBreadcrumb) {
-          return [yearBreadcrumb, { id: event.id, title: event.title || '', level }]
+      // Get the event's actual parent year for the breadcrumb
+      let yearBreadcrumb: BreadcrumbItem | null = null
+      if (event.parentId) {
+        const parentYear = getEventById(event.parentId)
+        if (parentYear && parentYear.type === 'year') {
+          yearBreadcrumb = { id: parentYear.id, title: parentYear.title || '', level: ZoomLevel.L1_Year }
+          setCurrentYearId(parentYear.id)
         }
-        return [{ id: event.id, title: event.title || '', level }]
-      })
+      }
+
+      if (yearBreadcrumb) {
+        setBreadcrumbs([yearBreadcrumb, { id: event.id, title: event.title || '', level }])
+      } else {
+        setBreadcrumbs([{ id: event.id, title: event.title || '', level }])
+      }
       setCurrentEventId(event.id)
     }
   }
@@ -330,12 +417,32 @@ export default function App() {
     setItemToDelete(null)
   }, [])
 
-  // Handle edit item request
+  // Handle edit item request (text items open in TextViewer, others in EditMemoryDialog)
   const handleEditItemRequest = useCallback((item: Item) => {
-    // Fetch the parent event to get its dates
-    const parentEvent = getEventById(item.eventId)
-    setItemToEdit(item)
-    setEventToEdit(parentEvent)
+    if (item.itemType === 'text') {
+      // Open text items in TextViewer for reading
+      const eventItems = getItemsByEvent(item.eventId)
+      const textItems = eventItems.filter(i => i.itemType === 'text')
+      setViewingTextItems(textItems)
+      setViewingText({ item, eventId: item.eventId })
+    } else if (item.itemType === 'audio') {
+      // Open audio items in AudioViewer
+      const eventItems = getItemsByEvent(item.eventId)
+      const audioItems = eventItems.filter(i => i.itemType === 'audio')
+      setViewingAudioItems(audioItems)
+      setViewingAudio({ item, eventId: item.eventId })
+    } else if (item.itemType === 'link') {
+      // Open link items in LinkViewer
+      const eventItems = getItemsByEvent(item.eventId)
+      const linkItems = eventItems.filter(i => i.itemType === 'link')
+      setViewingLinkItems(linkItems)
+      setViewingLink({ item, eventId: item.eventId })
+    } else {
+      // Fallback for unknown types
+      const parentEvent = getEventById(item.eventId)
+      setItemToEdit(item)
+      setEventToEdit(parentEvent)
+    }
   }, [])
 
   // Save edited item
@@ -344,26 +451,25 @@ export default function App() {
     happenedAt?: string
     content?: string
     eventStartAt?: string
-    eventEndAt?: string | null
+    tags?: string[]
+    category?: string
   }) => {
     try {
       // Update item fields
-      const itemUpdates: { caption?: string; happenedAt?: string; content?: string } = {}
+      const itemUpdates: { caption?: string; happenedAt?: string; content?: string; tags?: string[]; category?: string } = {}
       if (updates.caption !== undefined) itemUpdates.caption = updates.caption
       if (updates.happenedAt !== undefined) itemUpdates.happenedAt = updates.happenedAt
       if (updates.content !== undefined) itemUpdates.content = updates.content
+      if (updates.tags !== undefined) itemUpdates.tags = updates.tags
+      if (updates.category !== undefined) itemUpdates.category = updates.category
 
       if (Object.keys(itemUpdates).length > 0) {
         updateItem(itemId, itemUpdates)
       }
 
-      // Update event fields (dates)
-      const eventUpdates: { startAt?: string; endAt?: string | null } = {}
-      if (updates.eventStartAt !== undefined) eventUpdates.startAt = updates.eventStartAt
-      if (updates.eventEndAt !== undefined) eventUpdates.endAt = updates.eventEndAt
-
-      if (Object.keys(eventUpdates).length > 0) {
-        updateEvent(eventId, eventUpdates)
+      // Update event start date if changed
+      if (updates.eventStartAt !== undefined) {
+        updateEvent(eventId, { startAt: updates.eventStartAt })
       }
 
       // Refresh events to trigger view rebuild
@@ -437,6 +543,63 @@ export default function App() {
     setEventPhotoItems([])
   }, [])
 
+  // Delete event
+  const handleDeleteEvent = useCallback(async (eventId: string) => {
+    try {
+      // Get the event's parent year and folder path before deleting
+      const event = getEventById(eventId)
+      const parentYearId = event?.parentId
+      const folderPath = event?.folderPath
+
+      // Delete the event and all its items from database
+      deleteEvent(eventId)
+
+      // Delete the folder from file system if it exists
+      if (folderPath && hasStorageFolder()) {
+        const pathParts = folderPath.split('/')
+        await deleteDirectory(pathParts)
+        console.log('Event folder deleted:', folderPath)
+      }
+
+      // Close the dialog
+      setEventToEditProperties(null)
+      setEventPhotoItems([])
+
+      // Refresh events
+      const yearEvents = getEventsByType('year')
+      const allEvents = getAllEvents()
+
+      // Filter years to only show those with content
+      const yearsWithContent = yearEvents.filter(year => {
+        const hasChildEvents = allEvents.some(e => e.parentId === year.id)
+        return hasChildEvents
+      })
+
+      setYears(yearsWithContent)
+      setEvents(allEvents.filter(e => e.type !== 'year'))
+
+      // Navigate back to the year view if we have a parent year
+      if (parentYearId) {
+        timelineRef.current?.navigateToLevel(ZoomLevel.L1_Year, parentYearId)
+        const yearEvent = yearEvents.find(y => y.id === parentYearId)
+        if (yearEvent) {
+          setBreadcrumbs([{ id: yearEvent.id, title: yearEvent.title || '', level: ZoomLevel.L1_Year }])
+          setCurrentYearId(yearEvent.id)
+          setCurrentEventId(undefined)
+        }
+      } else {
+        // Navigate to lifeline if no parent
+        timelineRef.current?.navigateToLevel(ZoomLevel.L0_Lifeline)
+        setBreadcrumbs([])
+        setCurrentYearId(undefined)
+        setCurrentEventId(undefined)
+      }
+    } catch (err) {
+      console.error('Failed to delete event:', err)
+      alert('Fout bij verwijderen: ' + (err as Error).message)
+    }
+  }, [])
+
   // Handle opening photo viewer
   const handleViewPhoto = useCallback((item: Item, eventId: string) => {
     // Get all items in this event for navigation
@@ -460,7 +623,7 @@ export default function App() {
   }, [viewingPhoto])
 
   // Handle photo viewer save (caption and metadata update)
-  const handlePhotoSave = useCallback((item: Item, updates: { caption?: string; happenedAt?: string; place?: Item['place']; people?: string[] }) => {
+  const handlePhotoSave = useCallback((item: Item, updates: { caption?: string; happenedAt?: string; place?: Item['place']; people?: string[]; tags?: string[]; category?: string }) => {
     try {
       updateItem(item.id, updates)
       // Update the item in the viewing state
@@ -505,6 +668,158 @@ export default function App() {
     }
   }, [viewingPhotoItems, viewingPhoto, handleClosePhotoViewer])
 
+  // Handle text viewer close
+  const handleCloseTextViewer = useCallback(() => {
+    setViewingText(null)
+    setViewingTextItems([])
+  }, [])
+
+  // Handle text viewer navigation
+  const handleTextNavigate = useCallback((item: Item) => {
+    if (viewingText) {
+      setViewingText({ item, eventId: viewingText.eventId })
+    }
+  }, [viewingText])
+
+  // Handle text viewer save
+  const handleTextSave = useCallback((item: Item, updates: { content?: string; caption?: string; happenedAt?: string; place?: Item['place']; people?: string[]; tags?: string[]; category?: string }) => {
+    try {
+      updateItem(item.id, updates)
+      if (viewingText && viewingText.item.id === item.id) {
+        setViewingText({ ...viewingText, item: { ...item, ...updates } })
+      }
+      setViewingTextItems(prev =>
+        prev.map(i => i.id === item.id ? { ...i, ...updates } : i)
+      )
+      const allEvents = getAllEvents()
+      setEvents(allEvents.filter(e => e.type !== 'year'))
+    } catch (err) {
+      console.error('Failed to save text:', err)
+    }
+  }, [viewingText])
+
+  // Handle text viewer delete
+  const handleTextDelete = useCallback((item: Item) => {
+    try {
+      deleteItem(item.id)
+      const currentIndex = viewingTextItems.findIndex(i => i.id === item.id)
+      const remainingItems = viewingTextItems.filter(i => i.id !== item.id)
+
+      if (remainingItems.length === 0) {
+        handleCloseTextViewer()
+      } else {
+        const nextIndex = Math.min(currentIndex, remainingItems.length - 1)
+        setViewingTextItems(remainingItems)
+        setViewingText({ item: remainingItems[nextIndex], eventId: viewingText?.eventId || '' })
+      }
+
+      const allEvents = getAllEvents()
+      setEvents(allEvents.filter(e => e.type !== 'year'))
+    } catch (err) {
+      console.error('Failed to delete text:', err)
+    }
+  }, [viewingTextItems, viewingText, handleCloseTextViewer])
+
+  // Handle audio viewer close
+  const handleCloseAudioViewer = useCallback(() => {
+    setViewingAudio(null)
+    setViewingAudioItems([])
+  }, [])
+
+  // Handle audio viewer navigation
+  const handleAudioNavigate = useCallback((item: Item) => {
+    if (viewingAudio) {
+      setViewingAudio({ item, eventId: viewingAudio.eventId })
+    }
+  }, [viewingAudio])
+
+  // Handle audio viewer save
+  const handleAudioSave = useCallback((item: Item, updates: { caption?: string; happenedAt?: string; place?: Item['place']; people?: string[]; tags?: string[]; category?: string }) => {
+    try {
+      updateItem(item.id, updates)
+      if (viewingAudio && viewingAudio.item.id === item.id) {
+        setViewingAudio({ ...viewingAudio, item: { ...item, ...updates } })
+      }
+      setViewingAudioItems(prev => prev.map(i => i.id === item.id ? { ...i, ...updates } : i))
+      const allEvents = getAllEvents()
+      setEvents(allEvents.filter(e => e.type !== 'year'))
+    } catch (err) {
+      console.error('Failed to save audio:', err)
+    }
+  }, [viewingAudio])
+
+  // Handle audio viewer delete
+  const handleAudioDelete = useCallback((item: Item) => {
+    try {
+      deleteItem(item.id)
+      const currentIndex = viewingAudioItems.findIndex(i => i.id === item.id)
+      const remainingItems = viewingAudioItems.filter(i => i.id !== item.id)
+
+      if (remainingItems.length === 0) {
+        handleCloseAudioViewer()
+      } else {
+        const nextIndex = Math.min(currentIndex, remainingItems.length - 1)
+        setViewingAudioItems(remainingItems)
+        setViewingAudio({ item: remainingItems[nextIndex], eventId: viewingAudio?.eventId || '' })
+      }
+
+      const allEvents = getAllEvents()
+      setEvents(allEvents.filter(e => e.type !== 'year'))
+    } catch (err) {
+      console.error('Failed to delete audio:', err)
+    }
+  }, [viewingAudioItems, viewingAudio, handleCloseAudioViewer])
+
+  // Handle link viewer close
+  const handleCloseLinkViewer = useCallback(() => {
+    setViewingLink(null)
+    setViewingLinkItems([])
+  }, [])
+
+  // Handle link viewer navigation
+  const handleLinkNavigate = useCallback((item: Item) => {
+    if (viewingLink) {
+      setViewingLink({ item, eventId: viewingLink.eventId })
+    }
+  }, [viewingLink])
+
+  // Handle link viewer save
+  const handleLinkSave = useCallback((item: Item, updates: { content?: string; caption?: string; happenedAt?: string; place?: Item['place']; people?: string[]; tags?: string[]; category?: string }) => {
+    try {
+      updateItem(item.id, updates)
+      if (viewingLink && viewingLink.item.id === item.id) {
+        setViewingLink({ ...viewingLink, item: { ...item, ...updates } })
+      }
+      setViewingLinkItems(prev => prev.map(i => i.id === item.id ? { ...i, ...updates } : i))
+      const allEvents = getAllEvents()
+      setEvents(allEvents.filter(e => e.type !== 'year'))
+    } catch (err) {
+      console.error('Failed to save link:', err)
+    }
+  }, [viewingLink])
+
+  // Handle link viewer delete
+  const handleLinkDelete = useCallback((item: Item) => {
+    try {
+      deleteItem(item.id)
+      const currentIndex = viewingLinkItems.findIndex(i => i.id === item.id)
+      const remainingItems = viewingLinkItems.filter(i => i.id !== item.id)
+
+      if (remainingItems.length === 0) {
+        handleCloseLinkViewer()
+      } else {
+        const nextIndex = Math.min(currentIndex, remainingItems.length - 1)
+        setViewingLinkItems(remainingItems)
+        setViewingLink({ item: remainingItems[nextIndex], eventId: viewingLink?.eventId || '' })
+      }
+
+      const allEvents = getAllEvents()
+      setEvents(allEvents.filter(e => e.type !== 'year'))
+    } catch (err) {
+      console.error('Failed to delete link:', err)
+    }
+  }, [viewingLinkItems, viewingLink, handleCloseLinkViewer])
+
   // Handle search result selection
   const handleSearchResult = useCallback((result: SearchResult) => {
     setShowSearch(false)
@@ -527,6 +842,111 @@ export default function App() {
       }
     }
   }, [handleViewPhoto])
+
+  // Settings handlers
+  const handleMigratePhotos = useCallback(async () => {
+    if (!confirm('Dit exporteert al je herinneringen naar markdown bestanden in je opslagmap. Doorgaan?')) {
+      return
+    }
+    setShowSettings(false)
+    setMigrationProgress({ current: 0, total: 100, status: 'Starting migration...' })
+    try {
+      const result = await migrateToFileBasedStorage((progress) => {
+        setMigrationProgress({
+          current: progress.current,
+          total: progress.total,
+          status: progress.status
+        })
+      })
+      alert(`Migratie voltooid!\n\n✓ ${result.eventsCreated} events\n✓ ${result.itemsMigrated} items\n✓ ${result.mediaFilesCopied} media bestanden\n${result.errors.length > 0 ? `✗ ${result.errors.length} fouten` : ''}`)
+      await rebuildFullIndex()
+      const yearEvents = getEventsByType('year')
+      const allEvents = getAllEvents()
+      const yearsWithContent = yearEvents.filter(year =>
+        allEvents.some(e => e.parentId === year.id)
+      )
+      setYears(yearsWithContent)
+      setEvents(allEvents.filter(e => e.type !== 'year'))
+    } catch (err) {
+      console.error('Migration failed:', err)
+      alert('Migratie mislukt: ' + (err as Error).message)
+    } finally {
+      setMigrationProgress(null)
+    }
+  }, [])
+
+  const handleExportDatabase = useCallback(() => {
+    // Database is automatically synced to files - just inform user
+    setShowSettings(false)
+    alert('Database wordt automatisch gesynchroniseerd naar je opslagmap.\n\nJe kunt de bestanden vinden in de gekozen opslaglocatie.')
+  }, [])
+
+  const handleRebuildIndex = useCallback(async () => {
+    setShowSettings(false)
+    setIndexingProgress({ status: 'Herbouwen van index...' })
+    try {
+      await rebuildFullIndex()
+      const yearEvents = getEventsByType('year')
+      const allEvents = getAllEvents()
+      const yearsWithContent = yearEvents.filter(year =>
+        allEvents.some(e => e.parentId === year.id)
+      )
+      setYears(yearsWithContent)
+      setEvents(allEvents.filter(e => e.type !== 'year'))
+    } catch (err) {
+      console.error('Index rebuild failed:', err)
+      alert('Index herbouwen mislukt: ' + (err as Error).message)
+    } finally {
+      setIndexingProgress(null)
+    }
+  }, [])
+
+  const handleRecoverFromPhotos = useCallback(async () => {
+    setShowSettings(false)
+    setIndexingProgress({ status: 'Herstellen van foto\'s...' })
+    try {
+      const result = await recoverFromPhotos()
+      const yearEvents = getEventsByType('year')
+      const allEvents = getAllEvents()
+      const yearsWithContent = yearEvents.filter(year =>
+        allEvents.some(e => e.parentId === year.id)
+      )
+      setYears(yearsWithContent)
+      setEvents(allEvents.filter(e => e.type !== 'year'))
+      alert(`Herstel voltooid!\n\n✓ ${result.eventsCreated} events gemaakt\n✓ ${result.itemsCreated} foto's gevonden`)
+    } catch (err) {
+      console.error('Recovery failed:', err)
+      alert('Herstel mislukt: ' + (err as Error).message)
+    } finally {
+      setIndexingProgress(null)
+    }
+  }, [])
+
+  const handleCleanupDuplicates = useCallback(async () => {
+    setShowProfileMenu(false)
+    setIndexingProgress({ status: 'Opruimen van duplicaten...' })
+    try {
+      const result = await cleanupDuplicateMarkdownFiles()
+      // Rebuild index after cleanup
+      setIndexingProgress({ status: 'Index herbouwen...' })
+      await rebuildFullIndex()
+      // Refresh data
+      const yearEvents = getEventsByType('year')
+      const allEvents = getAllEvents()
+      const yearsWithContent = yearEvents.filter(year =>
+        allEvents.some(e => e.parentId === year.id)
+      )
+      setYears(yearsWithContent)
+      setEvents(allEvents.filter(e => e.type !== 'year'))
+      timelineRef.current?.rebuildView()
+      alert(`Opruimen voltooid!\n\n✓ ${result.duplicatesRemoved} duplicaten verwijderd\n✓ ${result.canvasUpdated} canvas bestanden bijgewerkt${result.errors.length > 0 ? `\n✗ ${result.errors.length} fouten` : ''}`)
+    } catch (err) {
+      console.error('Cleanup failed:', err)
+      alert('Opruimen mislukt: ' + (err as Error).message)
+    } finally {
+      setIndexingProgress(null)
+    }
+  }, [])
 
   // Handle dropped photos on canvas
   const handleDropPhotos = useCallback(async (files: File[], position: { x: number; y: number }, eventId: string) => {
@@ -897,10 +1317,7 @@ export default function App() {
                       onClick={() => handleEditEventProperties(item.id)}
                       title="Event eigenschappen"
                     >
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <circle cx="12" cy="12" r="3" />
-                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
-                      </svg>
+                      <Settings size={16} />
                     </button>
                   )}
                 </span>
@@ -912,8 +1329,15 @@ export default function App() {
         )}
         </div>
 
-        {/* Search & Profile buttons */}
+        {/* Sync indicator & Search & Profile buttons */}
         <div style={styles.headerActions}>
+          {/* Sync indicator */}
+          {isSyncing && (
+            <div style={styles.syncIndicator} title="Synchroniseren...">
+              <div style={styles.syncSpinner} />
+            </div>
+          )}
+
           <button
             style={styles.searchButton}
             onClick={() => setShowSearch(true)}
@@ -922,16 +1346,21 @@ export default function App() {
             <Search size={20} />
           </button>
 
+          <button
+            style={styles.searchButton}
+            onClick={() => setShowSettings(true)}
+            title="Instellingen"
+          >
+            <Settings size={20} />
+          </button>
+
           <div style={styles.profileContainer} ref={profileMenuRef}>
             <button
               style={styles.profileButton}
               onClick={() => setShowProfileMenu(!showProfileMenu)}
               title="Instellingen"
             >
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
-                <circle cx="12" cy="7" r="4" />
-              </svg>
+              <User size={24} />
             </button>
 
           {/* Profile dropdown menu */}
@@ -1083,6 +1512,12 @@ export default function App() {
                     >
                       Herstel van foto's
                     </button>
+                    <button
+                      style={{...styles.profileMenuButtonSecondary, marginTop: '8px', backgroundColor: '#ef4444'}}
+                      onClick={handleCleanupDuplicates}
+                    >
+                      Verwijder duplicaten
+                    </button>
                   </>
                 )}
               </div>
@@ -1158,6 +1593,15 @@ export default function App() {
             : undefined
         }
         onMemoryAdded={handleMemoryAdded}
+        onNavigateToEvent={(eventId) => {
+          const event = getEventById(eventId)
+          if (event) {
+            // Navigate the timeline to the new event
+            timelineRef.current?.navigateToLevel(ZoomLevel.L2_Canvas, eventId)
+            handleEventSelect(event, ZoomLevel.L2_Canvas)
+          }
+        }}
+        getViewportCenter={() => timelineRef.current?.getViewportCenter() ?? null}
       />
 
       {/* Canvas control buttons - only visible in L2 Canvas view */}
@@ -1267,6 +1711,7 @@ export default function App() {
         isOpen={eventToEditProperties !== null}
         onSave={handleSaveEventProperties}
         onCancel={handleCancelEventProperties}
+        onDelete={handleDeleteEvent}
       />
 
       {/* Photo Viewer */}
@@ -1283,12 +1728,97 @@ export default function App() {
         />
       )}
 
+      {/* Text Viewer */}
+      {viewingText && (
+        <TextViewer
+          item={viewingText.item}
+          allItems={viewingTextItems}
+          eventTitle={events.find(e => e.id === viewingText.eventId)?.title || ''}
+          eventStartDate={events.find(e => e.id === viewingText.eventId)?.startAt}
+          onClose={handleCloseTextViewer}
+          onDelete={handleTextDelete}
+          onSave={handleTextSave}
+          onNavigate={handleTextNavigate}
+        />
+      )}
+
+      {/* Audio Viewer */}
+      {viewingAudio && (
+        <AudioViewer
+          item={viewingAudio.item}
+          allItems={viewingAudioItems}
+          eventTitle={events.find(e => e.id === viewingAudio.eventId)?.title || ''}
+          eventStartDate={events.find(e => e.id === viewingAudio.eventId)?.startAt}
+          onClose={handleCloseAudioViewer}
+          onDelete={handleAudioDelete}
+          onSave={handleAudioSave}
+          onNavigate={handleAudioNavigate}
+        />
+      )}
+
+      {/* Link Viewer */}
+      {viewingLink && (
+        <LinkViewer
+          item={viewingLink.item}
+          allItems={viewingLinkItems}
+          eventTitle={events.find(e => e.id === viewingLink.eventId)?.title || ''}
+          eventStartDate={events.find(e => e.id === viewingLink.eventId)?.startAt}
+          onClose={handleCloseLinkViewer}
+          onDelete={handleLinkDelete}
+          onSave={handleLinkSave}
+          onNavigate={handleLinkNavigate}
+        />
+      )}
+
       {/* Search Modal */}
       <SearchModal
         isOpen={showSearch}
         onClose={() => setShowSearch(false)}
         onSelectResult={handleSearchResult}
       />
+
+      {/* Settings Modal */}
+      <SettingsModal
+        isOpen={showSettings}
+        onClose={() => setShowSettings(false)}
+        storageConfigured={storageConfigured}
+        darkMode={darkMode}
+        onToggleDarkMode={toggleDarkMode}
+        onSelectStorageFolder={async () => {
+          const success = await selectStorageFolder()
+          if (success) {
+            setStorageConfigured(true)
+            handleRebuildIndex()
+          }
+        }}
+        onMigratePhotos={handleMigratePhotos}
+        onExportDatabase={handleExportDatabase}
+        onRebuildIndex={handleRebuildIndex}
+        onRecoverFromPhotos={handleRecoverFromPhotos}
+      />
+
+      {/* Sync Toast Notification */}
+      {syncToast && (
+        <div style={styles.syncToast}>
+          <div style={styles.syncToastIcon}>✓</div>
+          <div style={styles.syncToastContent}>
+            <div style={styles.syncToastTitle}>Bestanden gesynchroniseerd</div>
+            <div style={styles.syncToastMessage}>
+              {syncToast.added > 0 && `${syncToast.added} nieuw`}
+              {syncToast.added > 0 && syncToast.modified > 0 && ', '}
+              {syncToast.modified > 0 && `${syncToast.modified} gewijzigd`}
+              {(syncToast.added > 0 || syncToast.modified > 0) && syncToast.deleted > 0 && ', '}
+              {syncToast.deleted > 0 && `${syncToast.deleted} verwijderd`}
+            </div>
+          </div>
+          <button
+            style={styles.syncToastClose}
+            onClick={() => setSyncToast(null)}
+          >
+            ✕
+          </button>
+        </div>
+      )}
     </div>
   )
 }
@@ -1595,5 +2125,71 @@ const styles: Record<string, React.CSSProperties> = {
     backgroundColor: '#5d7aa0',
     borderRadius: 3,
     transition: 'width 0.3s ease',
+  },
+  syncIndicator: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 40,
+    height: 40,
+    borderRadius: '50%',
+    backgroundColor: 'rgba(59, 130, 246, 0.1)',
+  },
+  syncSpinner: {
+    width: 18,
+    height: 18,
+    border: '2px solid rgba(59, 130, 246, 0.3)',
+    borderTopColor: '#3b82f6',
+    borderRadius: '50%',
+    animation: 'spin 1s linear infinite',
+  },
+  syncToast: {
+    position: 'fixed',
+    bottom: 24,
+    right: 24,
+    display: 'flex',
+    alignItems: 'center',
+    gap: 12,
+    padding: '12px 16px',
+    backgroundColor: 'rgba(16, 185, 129, 0.95)',
+    borderRadius: 12,
+    boxShadow: '0 4px 20px rgba(0, 0, 0, 0.3)',
+    zIndex: 2100,
+    animation: 'slideIn 0.3s ease',
+  },
+  syncToastIcon: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 28,
+    height: 28,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderRadius: '50%',
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: 'bold',
+  },
+  syncToastContent: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 2,
+  },
+  syncToastTitle: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: 600,
+  },
+  syncToastMessage: {
+    color: 'rgba(255, 255, 255, 0.8)',
+    fontSize: 12,
+  },
+  syncToastClose: {
+    background: 'none',
+    border: 'none',
+    color: 'rgba(255, 255, 255, 0.6)',
+    cursor: 'pointer',
+    padding: 4,
+    marginLeft: 8,
+    fontSize: 14,
   },
 }

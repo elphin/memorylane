@@ -13,6 +13,7 @@ export interface TimelineRef {
   fitToView: () => void  // Scale canvas to show all items
   arrangeItems: () => void  // Toggle between arranged and scattered positions
   rebuildView: () => void  // Rebuild current view (e.g. after adding items via drag&drop)
+  getViewportCenter: () => { x: number; y: number } | null  // Get center of current viewport in canvas coordinates
 }
 
 // Layout constants
@@ -37,6 +38,7 @@ const ITEM_TYPE_COLORS: Record<ItemType, number> = {
   text: 0x9C27B0,    // Purple
   video: 0xFF9800,   // Orange
   link: 0x2196F3,    // Blue
+  audio: 0xE91E63,   // Pink
 }
 
 // L2 Canvas constants
@@ -211,7 +213,9 @@ export const Timeline = forwardRef<TimelineRef, TimelineProps>(function Timeline
           (item) => handleEditItemRef.current?.(item),
           data.textScale,
           data.canvasItem?.scale ?? 1,
-          data.canvasItem?.zIndex ?? 0
+          data.canvasItem?.zIndex ?? 0,
+          data.canvasItem?.width ?? CANVAS_ITEM_WIDTH,
+          data.canvasItem?.height ?? CANVAS_ITEM_HEIGHT
         )
       }
 
@@ -399,7 +403,7 @@ export const Timeline = forwardRef<TimelineRef, TimelineProps>(function Timeline
     })
   }, [getActiveState, startTransition, onEventSelect, onZoomLevelChange])
 
-  // Handle item click - open photo viewer or edit dialog
+  // Handle item click - open viewer/editor based on type
   const handleItemClick = useCallback((item: Item) => {
     if (isTransitioningRef.current) return
     if (!focusedEventRef.current) return
@@ -407,9 +411,8 @@ export const Timeline = forwardRef<TimelineRef, TimelineProps>(function Timeline
     // For photo/video items, open the photo viewer overlay
     if (item.itemType === 'photo' || item.itemType === 'video') {
       onViewPhoto?.(item, focusedEventRef.current.id)
-    }
-    // For text items, open the edit dialog
-    else if (item.itemType === 'text') {
+    } else if (item.itemType === 'text' || item.itemType === 'link' || item.itemType === 'audio') {
+      // For text/link/audio items, open the edit dialog
       onEditItem?.(item)
     }
   }, [onViewPhoto, onEditItem])
@@ -810,7 +813,9 @@ export const Timeline = forwardRef<TimelineRef, TimelineProps>(function Timeline
         (item) => handleEditItemRef.current?.(item),
         data.textScale,
         data.canvasItem?.scale ?? 1,
-        data.canvasItem?.zIndex ?? 0
+        data.canvasItem?.zIndex ?? 0,
+        data.canvasItem?.width ?? CANVAS_ITEM_WIDTH,
+        data.canvasItem?.height ?? CANVAS_ITEM_HEIGHT
       )
     }
     cullingManagerRef.current = new ViewportCullingManager(activeState.container, createItemBlockById)
@@ -849,7 +854,9 @@ export const Timeline = forwardRef<TimelineRef, TimelineProps>(function Timeline
         (item) => handleEditItemRef.current?.(item),
         data.textScale,
         data.canvasItem?.scale ?? 1,
-        data.canvasItem?.zIndex ?? 0
+        data.canvasItem?.zIndex ?? 0,
+        data.canvasItem?.width ?? CANVAS_ITEM_WIDTH,
+        data.canvasItem?.height ?? CANVAS_ITEM_HEIGHT
       )
     }
     cullingManagerRef.current = new ViewportCullingManager(activeState.container, createItemBlockById)
@@ -864,12 +871,35 @@ export const Timeline = forwardRef<TimelineRef, TimelineProps>(function Timeline
     }, cullingManagerRef.current, itemDataRef.current)
   }, [getActiveState])
 
+  // Get viewport center in canvas coordinates
+  const getViewportCenter = useCallback(() => {
+    const activeState = getActiveState()
+    if (!activeState || !containerRef.current) return null
+
+    const rect = containerRef.current.getBoundingClientRect()
+    const screenCenterX = rect.width / 2
+    const screenCenterY = rect.height / 2
+
+    // Convert screen center to canvas coordinates
+    // The container is positioned at (containerX, containerY) and scaled
+    const containerX = activeState.container.x
+    const containerY = activeState.container.y
+    const scale = activeState.scale
+
+    // Canvas coordinate at screen center
+    const canvasX = (screenCenterX - containerX) / scale
+    const canvasY = (screenCenterY - containerY) / scale
+
+    return { x: canvasX, y: canvasY }
+  }, [getActiveState])
+
   useImperativeHandle(ref, () => ({
     navigateToLevel,
     fitToView,
     arrangeItems,
     rebuildView,
-  }), [navigateToLevel, fitToView, arrangeItems, rebuildView])
+    getViewportCenter,
+  }), [navigateToLevel, fitToView, arrangeItems, rebuildView, getViewportCenter])
 
   // Initialize PixiJS
   useEffect(() => {
@@ -1152,7 +1182,9 @@ export const Timeline = forwardRef<TimelineRef, TimelineProps>(function Timeline
           (item) => handleEditItemRef.current?.(item),
           data.textScale,
           data.canvasItem?.scale ?? 1,
-          data.canvasItem?.zIndex ?? 0
+          data.canvasItem?.zIndex ?? 0,
+          data.canvasItem?.width ?? CANVAS_ITEM_WIDTH,
+          data.canvasItem?.height ?? CANVAS_ITEM_HEIGHT
         )
       }
       cullingManagerRef.current = new ViewportCullingManager(activeState.container, createItemBlockById)
@@ -1465,8 +1497,8 @@ function buildL0View(
 
   // Timeline line
   const line = new Graphics()
-  line.moveTo(-totalWidth / 2 - 50, 0)
-  line.lineTo(totalWidth / 2 + 50, 0)
+  line.moveTo(-totalWidth / 2 + YEAR_WIDTH / 2, 0)
+  line.lineTo(totalWidth / 2 - YEAR_WIDTH / 2, 0)
   line.stroke({ width: 2, color: 0x333344 })
   container.addChild(line)
 
@@ -2553,7 +2585,9 @@ function buildL2View(
     }
 
     const zIndex = canvasItem?.zIndex ?? 0
-    const itemBlock = createCanvasItemBlock(item, event.id, isDraggingItemRef, onItemClick, onDeleteItem, onEditItem, textScale, scale, zIndex)
+    const cardWidth = canvasItem?.width ?? CANVAS_ITEM_WIDTH
+    const cardHeight = canvasItem?.height ?? CANVAS_ITEM_HEIGHT
+    const itemBlock = createCanvasItemBlock(item, event.id, isDraggingItemRef, onItemClick, onDeleteItem, onEditItem, textScale, scale, zIndex, cardWidth, cardHeight)
     itemBlock.x = x
     itemBlock.y = y
     itemBlock.scale.set(scale)
@@ -2586,26 +2620,36 @@ function createCanvasItemBlock(
   eventId: string,
   isDraggingItemRef: React.MutableRefObject<boolean>,
   onItemClick?: (item: Item) => void,
-  onDeleteItem?: (item: Item) => void,
-  onEditItem?: (item: Item) => void,
+  _onDeleteItem?: (item: Item) => void,  // Unused - delete is in detail view
+  _onEditItem?: (item: Item) => void,    // Unused - edit is in detail view
   textScale?: number,  // For text items: inner text scale (used with ctrl+resize)
   itemScale: number = 1,  // Canvas item scale, used to determine thumbnail size
-  initialZIndex: number = 0  // Original zIndex to preserve when saving
+  initialZIndex: number = 0,  // Original zIndex to preserve when saving
+  cardWidth: number = CANVAS_ITEM_WIDTH,  // Custom card width (default: 200)
+  cardHeight: number = CANVAS_ITEM_HEIGHT  // Custom card height (default: 150)
 ): Container {
   const cont = new Container()
-  cont.pivot.set(CANVAS_ITEM_WIDTH / 2, CANVAS_ITEM_HEIGHT / 2)
+  cont.pivot.set(cardWidth / 2, cardHeight / 2)
   cont.eventMode = 'static'
   cont.cursor = 'pointer'
 
+  // Current card dimensions (can be changed by edge resize)
+  let currentWidth = cardWidth
+  let currentHeight = cardHeight
+
   // References to controls that need to be on top after async image load
   let resizeHandleRef: Container | null = null
+
+  // References for elements that need updating during resize
+  let textMaskRef: Graphics | null = null
+  let dateTextRef: Text | null = null
 
   // Store item type for reference
   const isPhotoOrVideo = item.itemType === 'photo' || item.itemType === 'video'
 
   // Background based on item type
   const bg = new Graphics()
-  bg.roundRect(0, 0, CANVAS_ITEM_WIDTH, CANVAS_ITEM_HEIGHT, 6)
+  bg.roundRect(0, 0, cardWidth, cardHeight, 6)
 
   let bgColor = 0x1a2a3e
   let borderColor = 0x3d5a80
@@ -2622,6 +2666,9 @@ function createCanvasItemBlock(
   } else if (item.itemType === 'link') {
     bgColor = 0x1a2a3a
     borderColor = 0x4080a0
+  } else if (item.itemType === 'audio') {
+    bgColor = 0x2a1a2a
+    borderColor = 0xE91E63
   }
 
   bg.fill({ color: bgColor })
@@ -2638,7 +2685,7 @@ function createCanvasItemBlock(
 
     // Gradient background at bottom
     const overlayBg = new Graphics()
-    overlayBg.rect(0, CANVAS_ITEM_HEIGHT - 50, CANVAS_ITEM_WIDTH, 50)
+    overlayBg.rect(0, cardHeight - 50, cardWidth, 50)
     overlayBg.fill({ color: 0x000000, alpha: 0.7 })
     hoverOverlay.addChild(overlayBg)
 
@@ -2658,7 +2705,7 @@ function createCanvasItemBlock(
       resolution: TEXT_RESOLUTION,
     })
     shadowText.x = 13
-    shadowText.y = CANVAS_ITEM_HEIGHT - 35
+    shadowText.y = cardHeight - 35
     hoverOverlay.addChild(shadowText)
 
     // Main text (white)
@@ -2673,110 +2720,11 @@ function createCanvasItemBlock(
       resolution: TEXT_RESOLUTION,
     })
     mainText.x = 12
-    mainText.y = CANVAS_ITEM_HEIGHT - 36
+    mainText.y = cardHeight - 36
     hoverOverlay.addChild(mainText)
 
     // Add after image is loaded (will be added later)
   }
-
-  // Edit button (top-right corner, before delete)
-  const editBtn = new Container()
-  editBtn.x = CANVAS_ITEM_WIDTH - 56
-  editBtn.y = 8
-  editBtn.eventMode = 'static'
-  editBtn.cursor = 'pointer'
-  editBtn.alpha = 0  // Hidden by default, shown on hover
-
-  const editBg = new Graphics()
-  editBg.circle(10, 10, 12)
-  editBg.fill({ color: 0x000000, alpha: 0.5 })
-  editBtn.addChild(editBg)
-
-  // Pencil icon
-  const editIcon = new Graphics()
-  editIcon.moveTo(6, 14)
-  editIcon.lineTo(14, 6)
-  editIcon.stroke({ width: 2, color: 0x5d7aa0 })
-  editIcon.moveTo(12, 8)
-  editIcon.lineTo(14, 6)
-  editIcon.lineTo(12, 4)
-  editIcon.stroke({ width: 2, color: 0x5d7aa0 })
-  editBtn.addChild(editIcon)
-
-  // Edit button hover
-  editBtn.on('pointerover', () => {
-    editBg.clear()
-    editBg.circle(10, 10, 12)
-    editBg.fill({ color: 0x5d7aa0, alpha: 0.9 })
-  })
-  editBtn.on('pointerout', () => {
-    editBg.clear()
-    editBg.circle(10, 10, 12)
-    editBg.fill({ color: 0x000000, alpha: 0.5 })
-  })
-  editBtn.on('pointerdown', (e) => {
-    e.stopPropagation()
-    isDraggingItemRef.current = true
-  })
-  editBtn.on('pointertap', (e) => {
-    e.stopPropagation()
-    isDraggingItemRef.current = false
-    onEditItem?.(item)
-  })
-  editBtn.on('pointerup', () => {
-    isDraggingItemRef.current = false
-  })
-
-  cont.addChild(editBtn)
-
-  // Delete button (top-right corner)
-  const deleteBtn = new Container()
-  deleteBtn.x = CANVAS_ITEM_WIDTH - 28
-  deleteBtn.y = 8
-  deleteBtn.eventMode = 'static'
-  deleteBtn.cursor = 'pointer'
-  deleteBtn.alpha = 0  // Hidden by default, shown on hover
-
-  const deleteBg = new Graphics()
-  deleteBg.circle(10, 10, 12)
-  deleteBg.fill({ color: 0x000000, alpha: 0.5 })
-  deleteBtn.addChild(deleteBg)
-
-  // X icon
-  const deleteIcon = new Graphics()
-  deleteIcon.moveTo(6, 6)
-  deleteIcon.lineTo(14, 14)
-  deleteIcon.stroke({ width: 2, color: 0xff6666 })
-  deleteIcon.moveTo(14, 6)
-  deleteIcon.lineTo(6, 14)
-  deleteIcon.stroke({ width: 2, color: 0xff6666 })
-  deleteBtn.addChild(deleteIcon)
-
-  // Delete button hover
-  deleteBtn.on('pointerover', () => {
-    deleteBg.clear()
-    deleteBg.circle(10, 10, 12)
-    deleteBg.fill({ color: 0xd32f2f, alpha: 0.9 })
-  })
-  deleteBtn.on('pointerout', () => {
-    deleteBg.clear()
-    deleteBg.circle(10, 10, 12)
-    deleteBg.fill({ color: 0x000000, alpha: 0.5 })
-  })
-  deleteBtn.on('pointerdown', (e) => {
-    e.stopPropagation()
-    isDraggingItemRef.current = true  // Prevent canvas pan
-  })
-  deleteBtn.on('pointertap', (e) => {
-    e.stopPropagation()
-    isDraggingItemRef.current = false
-    onDeleteItem?.(item)
-  })
-  deleteBtn.on('pointerup', () => {
-    isDraggingItemRef.current = false
-  })
-
-  cont.addChild(deleteBtn)
 
   // Content preview - different display based on item type
   if (item.itemType === 'photo' || item.itemType === 'video') {
@@ -2867,10 +2815,6 @@ function createCanvasItemBlock(
             }
           }
 
-          // Reposition buttons for new dimensions
-          editBtn.x = cardWidth - 56
-          deleteBtn.x = cardWidth - 28
-
           // Scale sprite to exactly fill the card (no cropping needed since aspect ratios match)
           sprite.width = cardWidth
           sprite.height = cardHeight
@@ -2912,12 +2856,8 @@ function createCanvasItemBlock(
             resizeHandleRef.y = cardHeight - 20
           }
 
-          // Re-add buttons and resize handle on top after image loads
-          // This ensures they're always visible above the image and overlays
-          cont.removeChild(editBtn)
-          cont.removeChild(deleteBtn)
-          cont.addChild(editBtn)
-          cont.addChild(deleteBtn)
+          // Re-add resize handle on top after image loads
+          // This ensures it's always visible above the image and overlays
           if (resizeHandleRef) {
             cont.removeChild(resizeHandleRef)
             cont.addChild(resizeHandleRef)
@@ -2976,7 +2916,7 @@ function createCanvasItemBlock(
     } else {
       // No content or not base64 - show placeholder
       const mediaIcon = new Graphics()
-      const iconCenterX = CANVAS_ITEM_WIDTH / 2
+      const iconCenterX = cardWidth / 2
       const iconCenterY = 70
 
       if (item.itemType === 'photo') {
@@ -3016,14 +2956,23 @@ function createCanvasItemBlock(
         fontSize: 13,
         fill: 0xddddee,
         wordWrap: true,
-        wordWrapWidth: CANVAS_ITEM_WIDTH - 24,
+        wordWrapWidth: cardWidth - 24,
         lineHeight: 18,
       }),
       resolution: TEXT_RESOLUTION,
     })
     contentText.x = 12
     contentText.y = 12
+
+    // Create a mask to clip text content within card bounds
+    // Leave space at bottom for resize handles
+    const textMask = new Graphics()
+    textMask.rect(0, 0, cardWidth, cardHeight - 20)
+    textMask.fill({ color: 0xffffff })
+    contentText.mask = textMask
+    cont.addChild(textMask)
     cont.addChild(contentText)
+    textMaskRef = textMask
 
     // Store reference for text items (will be used for ctrl+resize and auto-size)
     if (isTextItem) {
@@ -3036,17 +2985,20 @@ function createCanvasItemBlock(
         // Also update wordWrapWidth to match (inverse relationship with textScale)
         // When textScale is small (e.g., 0.5), the card is big, so wordWrap should be wider
         const effectiveCardScale = 1 / textScale  // This is what the card scale was
-        const newWordWrapWidth = (CANVAS_ITEM_WIDTH - 24) * effectiveCardScale
+        const newWordWrapWidth = (cardWidth - 24) * effectiveCardScale
         contentText.style.wordWrapWidth = newWordWrapWidth
       }
     }
   }
 
   // Bottom section: caption or date (not for photo/video - they have hover overlay)
+  // For text-like items, use isTextLikeItem check
+  const isTextLikeItem = item.itemType === 'text' || item.itemType === 'link' || item.itemType === 'audio'
   if (!isPhotoOrVideo) {
-    const bottomY = CANVAS_ITEM_HEIGHT - 28
+    const bottomY = cardHeight - 28
 
-    if (item.caption) {
+    // Only show caption for non-text items (text items show content directly)
+    if (item.caption && !isTextLikeItem) {
       const captionText = new Text({
         text: item.caption.length > 30 ? item.caption.slice(0, 30) + '...' : item.caption,
         style: new TextStyle({
@@ -3054,7 +3006,7 @@ function createCanvasItemBlock(
           fontSize: 11,
           fill: 0x888899,
           wordWrap: true,
-          wordWrapWidth: CANVAS_ITEM_WIDTH - 60,
+          wordWrapWidth: cardWidth - 60,
         }),
         resolution: TEXT_RESOLUTION,
       })
@@ -3063,7 +3015,7 @@ function createCanvasItemBlock(
       cont.addChild(captionText)
     }
 
-    // Date indicator (bottom-right)
+    // Date indicator (bottom-right, moved left a bit to avoid resize handle)
     if (item.happenedAt) {
       const dateStr = new Date(item.happenedAt).toLocaleDateString('nl-NL', {
         day: 'numeric',
@@ -3078,16 +3030,17 @@ function createCanvasItemBlock(
         }),
         resolution: TEXT_RESOLUTION,
       })
-      dateText.x = CANVAS_ITEM_WIDTH - dateText.width - 12
+      dateText.x = cardWidth - dateText.width - 35  // More space to avoid overlap
       dateText.y = bottomY + 2
       cont.addChild(dateText)
+      dateTextRef = dateText
     }
   }
 
-  // Resize handle (bottom-right corner)
+  // Resize handle (bottom-right corner) - for scale only
   const resizeHandle = new Container()
-  resizeHandle.x = CANVAS_ITEM_WIDTH - 20
-  resizeHandle.y = CANVAS_ITEM_HEIGHT - 20
+  resizeHandle.x = cardWidth - 20
+  resizeHandle.y = cardHeight - 20
   resizeHandle.eventMode = 'static'
   resizeHandle.cursor = 'nwse-resize'
   resizeHandle.alpha = 0  // Hidden by default
@@ -3147,8 +3100,8 @@ function createCanvasItemBlock(
 
         // Update wordWrapWidth based on new effective card width
         // The card scales by newScale, text scales by inverseScale, so effective width is:
-        // (CANVAS_ITEM_WIDTH * newScale) / inverseScale = CANVAS_ITEM_WIDTH * newScale * newScale
-        const newWordWrapWidth = (CANVAS_ITEM_WIDTH - 24) * newScale
+        // (currentWidth * newScale) / inverseScale = currentWidth * newScale * newScale
+        const newWordWrapWidth = (currentWidth - 24) * newScale
         _contentTextRef.style.wordWrapWidth = newWordWrapWidth
       }
     }
@@ -3166,6 +3119,8 @@ function createCanvasItemBlock(
         rotation: cont.rotation,
         zIndex: initialZIndex,
         textScale: _contentTextRef ? _contentTextRef.scale.x : undefined,
+        width: currentWidth,
+        height: currentHeight,
       })
       resizeDragData = null
       isDraggingItemRef.current = false
@@ -3183,6 +3138,8 @@ function createCanvasItemBlock(
         rotation: cont.rotation,
         zIndex: initialZIndex,
         textScale: _contentTextRef ? _contentTextRef.scale.x : undefined,
+        width: currentWidth,
+        height: currentHeight,
       })
       resizeDragData = null
       isDraggingItemRef.current = false
@@ -3192,17 +3149,249 @@ function createCanvasItemBlock(
   cont.addChild(resizeHandle)
   resizeHandleRef = resizeHandle  // Store reference for async re-ordering
 
-  // Hover effect - show edit and delete buttons on hover
+  // Right edge resize handle (for width only)
+  const rightEdge = new Container()
+  rightEdge.x = cardWidth - 6
+  rightEdge.y = cardHeight / 2 - 20
+  rightEdge.eventMode = 'static'
+  rightEdge.cursor = 'ew-resize'
+  rightEdge.alpha = 0  // Hidden by default
+
+  const rightEdgeIcon = new Graphics()
+  rightEdgeIcon.rect(0, 0, 6, 40)
+  rightEdgeIcon.fill({ color: 0x666688, alpha: 0.6 })
+  // Add grip lines
+  rightEdgeIcon.moveTo(2, 10)
+  rightEdgeIcon.lineTo(2, 30)
+  rightEdgeIcon.stroke({ width: 1, color: 0x888899, alpha: 0.8 })
+  rightEdgeIcon.moveTo(4, 10)
+  rightEdgeIcon.lineTo(4, 30)
+  rightEdgeIcon.stroke({ width: 1, color: 0x888899, alpha: 0.8 })
+  rightEdge.addChild(rightEdgeIcon)
+
+  // Right edge drag data
+  let rightEdgeDragData: { startX: number; startWidth: number } | null = null
+
+  rightEdge.on('pointerdown', (e) => {
+    e.stopPropagation()
+    if (!cont.parent) return
+    const pos = e.getLocalPosition(cont.parent)
+    rightEdgeDragData = {
+      startX: pos.x,
+      startWidth: currentWidth,
+    }
+    isDraggingItemRef.current = true
+  })
+
+  rightEdge.on('globalpointermove', (e) => {
+    if (rightEdgeDragData && cont.parent) {
+      const pos = e.getLocalPosition(cont.parent)
+      const dx = pos.x - rightEdgeDragData.startX
+      const newWidth = Math.max(100, Math.min(400, rightEdgeDragData.startWidth + dx / cont.scale.x))
+
+      // Update current dimensions
+      currentWidth = newWidth
+
+      // Redraw background
+      bg.clear()
+      bg.roundRect(0, 0, currentWidth, currentHeight, 6)
+      bg.fill({ color: bgColor + 0x111111 })
+      if (!isPhotoOrVideo) {
+        bg.stroke({ width: 2, color: borderColor + 0x222222 })
+      }
+
+      // Update pivot
+      cont.pivot.set(currentWidth / 2, currentHeight / 2)
+
+      // Reposition all handles
+      resizeHandle.x = currentWidth - 20
+      rightEdge.x = currentWidth - 6
+      bottomEdge.x = currentWidth / 2 - 20  // Keep centered
+
+      // Update text mask
+      if (textMaskRef) {
+        textMaskRef.clear()
+        textMaskRef.rect(0, 0, currentWidth, currentHeight - 20)
+        textMaskRef.fill({ color: 0xffffff })
+      }
+
+      // Update text word wrap if text item
+      if (_contentTextRef) {
+        _contentTextRef.style.wordWrapWidth = currentWidth - 24
+      }
+
+      // Update date position
+      if (dateTextRef) {
+        dateTextRef.x = currentWidth - dateTextRef.width - 35
+      }
+    }
+  })
+
+  rightEdge.on('pointerup', () => {
+    if (rightEdgeDragData) {
+      saveCanvasItemPosition({
+        eventId,
+        itemId: item.id,
+        x: cont.x,
+        y: cont.y,
+        scale: cont.scale.x,
+        rotation: cont.rotation,
+        zIndex: initialZIndex,
+        textScale: _contentTextRef ? _contentTextRef.scale.x : undefined,
+        width: currentWidth,
+        height: currentHeight,
+      })
+      rightEdgeDragData = null
+      isDraggingItemRef.current = false
+    }
+  })
+
+  rightEdge.on('pointerupoutside', () => {
+    if (rightEdgeDragData) {
+      saveCanvasItemPosition({
+        eventId,
+        itemId: item.id,
+        x: cont.x,
+        y: cont.y,
+        scale: cont.scale.x,
+        rotation: cont.rotation,
+        zIndex: initialZIndex,
+        textScale: _contentTextRef ? _contentTextRef.scale.x : undefined,
+        width: currentWidth,
+        height: currentHeight,
+      })
+      rightEdgeDragData = null
+      isDraggingItemRef.current = false
+    }
+  })
+
+  cont.addChild(rightEdge)
+
+  // Bottom edge resize handle (for height only)
+  const bottomEdge = new Container()
+  bottomEdge.x = cardWidth / 2 - 20
+  bottomEdge.y = cardHeight - 6
+  bottomEdge.eventMode = 'static'
+  bottomEdge.cursor = 'ns-resize'
+  bottomEdge.alpha = 0  // Hidden by default
+
+  const bottomEdgeIcon = new Graphics()
+  bottomEdgeIcon.rect(0, 0, 40, 6)
+  bottomEdgeIcon.fill({ color: 0x666688, alpha: 0.6 })
+  // Add grip lines
+  bottomEdgeIcon.moveTo(10, 2)
+  bottomEdgeIcon.lineTo(30, 2)
+  bottomEdgeIcon.stroke({ width: 1, color: 0x888899, alpha: 0.8 })
+  bottomEdgeIcon.moveTo(10, 4)
+  bottomEdgeIcon.lineTo(30, 4)
+  bottomEdgeIcon.stroke({ width: 1, color: 0x888899, alpha: 0.8 })
+  bottomEdge.addChild(bottomEdgeIcon)
+
+  // Bottom edge drag data
+  let bottomEdgeDragData: { startY: number; startHeight: number } | null = null
+
+  bottomEdge.on('pointerdown', (e) => {
+    e.stopPropagation()
+    if (!cont.parent) return
+    const pos = e.getLocalPosition(cont.parent)
+    bottomEdgeDragData = {
+      startY: pos.y,
+      startHeight: currentHeight,
+    }
+    isDraggingItemRef.current = true
+  })
+
+  bottomEdge.on('globalpointermove', (e) => {
+    if (bottomEdgeDragData && cont.parent) {
+      const pos = e.getLocalPosition(cont.parent)
+      const dy = pos.y - bottomEdgeDragData.startY
+      const newHeight = Math.max(80, Math.min(400, bottomEdgeDragData.startHeight + dy / cont.scale.x))
+
+      // Update current dimensions
+      currentHeight = newHeight
+
+      // Redraw background
+      bg.clear()
+      bg.roundRect(0, 0, currentWidth, currentHeight, 6)
+      bg.fill({ color: bgColor + 0x111111 })
+      if (!isPhotoOrVideo) {
+        bg.stroke({ width: 2, color: borderColor + 0x222222 })
+      }
+
+      // Update pivot
+      cont.pivot.set(currentWidth / 2, currentHeight / 2)
+
+      // Reposition all handles
+      resizeHandle.x = currentWidth - 20
+      resizeHandle.y = currentHeight - 20
+      bottomEdge.y = currentHeight - 6
+      rightEdge.y = currentHeight / 2 - 20  // Keep centered
+
+      // Update text mask
+      if (textMaskRef) {
+        textMaskRef.clear()
+        textMaskRef.rect(0, 0, currentWidth, currentHeight - 20)
+        textMaskRef.fill({ color: 0xffffff })
+      }
+
+      // Update date position
+      if (dateTextRef) {
+        dateTextRef.y = currentHeight - 26
+      }
+    }
+  })
+
+  bottomEdge.on('pointerup', () => {
+    if (bottomEdgeDragData) {
+      saveCanvasItemPosition({
+        eventId,
+        itemId: item.id,
+        x: cont.x,
+        y: cont.y,
+        scale: cont.scale.x,
+        rotation: cont.rotation,
+        zIndex: initialZIndex,
+        textScale: _contentTextRef ? _contentTextRef.scale.x : undefined,
+        width: currentWidth,
+        height: currentHeight,
+      })
+      bottomEdgeDragData = null
+      isDraggingItemRef.current = false
+    }
+  })
+
+  bottomEdge.on('pointerupoutside', () => {
+    if (bottomEdgeDragData) {
+      saveCanvasItemPosition({
+        eventId,
+        itemId: item.id,
+        x: cont.x,
+        y: cont.y,
+        scale: cont.scale.x,
+        rotation: cont.rotation,
+        zIndex: initialZIndex,
+        textScale: _contentTextRef ? _contentTextRef.scale.x : undefined,
+        width: currentWidth,
+        height: currentHeight,
+      })
+      bottomEdgeDragData = null
+      isDraggingItemRef.current = false
+    }
+  })
+
+  cont.addChild(bottomEdge)
+
+  // Hover effect - show resize handles on hover
   cont.on('pointerover', () => {
     bg.clear()
-    bg.roundRect(0, 0, CANVAS_ITEM_WIDTH, CANVAS_ITEM_HEIGHT, 6)
+    bg.roundRect(0, 0, currentWidth, currentHeight, 6)
     bg.fill({ color: bgColor + 0x111111 })
     if (!isPhotoOrVideo) {
       bg.stroke({ width: 2, color: borderColor + 0x222222 })
     }
-    editBtn.alpha = 1  // Show edit button
-    deleteBtn.alpha = 1  // Show delete button
-    resizeHandle.alpha = 1  // Show resize handle
+    resizeHandle.alpha = 1  // Show corner resize handle
+    rightEdge.alpha = 1     // Show right edge resize handle
+    bottomEdge.alpha = 1    // Show bottom edge resize handle
     if (hoverOverlay) {
       hoverOverlay.alpha = 1  // Show caption overlay for photos
     }
@@ -3210,14 +3399,14 @@ function createCanvasItemBlock(
 
   cont.on('pointerout', () => {
     bg.clear()
-    bg.roundRect(0, 0, CANVAS_ITEM_WIDTH, CANVAS_ITEM_HEIGHT, 6)
+    bg.roundRect(0, 0, currentWidth, currentHeight, 6)
     bg.fill({ color: bgColor })
     if (!isPhotoOrVideo) {
       bg.stroke({ width: 1, color: borderColor })
     }
-    editBtn.alpha = 0  // Hide edit button
-    deleteBtn.alpha = 0  // Hide delete button
-    resizeHandle.alpha = 0  // Hide resize handle
+    resizeHandle.alpha = 0  // Hide corner resize handle
+    rightEdge.alpha = 0     // Hide right edge resize handle
+    bottomEdge.alpha = 0    // Hide bottom edge resize handle
     if (hoverOverlay) {
       hoverOverlay.alpha = 0  // Hide caption overlay for photos
     }
@@ -3280,6 +3469,8 @@ function createCanvasItemBlock(
           rotation: cont.rotation,
           zIndex: initialZIndex,
           textScale: _contentTextRef ? _contentTextRef.scale.x : undefined,
+          width: currentWidth,
+          height: currentHeight,
         })
       } else {
         // Was a click - check for double-click
@@ -3293,7 +3484,7 @@ function createCanvasItemBlock(
           if (_contentTextRef) {
             _contentTextRef.scale.set(1)
             // Also reset wordWrapWidth
-            _contentTextRef.style.wordWrapWidth = CANVAS_ITEM_WIDTH - 24
+            _contentTextRef.style.wordWrapWidth = currentWidth - 24
           }
           // Save the reset scale (textScale back to 1/undefined)
           saveCanvasItemPosition({
@@ -3305,6 +3496,8 @@ function createCanvasItemBlock(
             rotation: cont.rotation,
             zIndex: initialZIndex,
             textScale: undefined,
+            width: currentWidth,
+            height: currentHeight,
           })
         } else {
           // Single click - open item detail
@@ -3331,6 +3524,8 @@ function createCanvasItemBlock(
           rotation: cont.rotation,
           zIndex: initialZIndex,
           textScale: _contentTextRef ? _contentTextRef.scale.x : undefined,
+          width: currentWidth,
+          height: currentHeight,
         })
       }
       dragData = null
@@ -3522,6 +3717,38 @@ function buildL3View(
     linkText.x = -FOCUS_WIDTH / 2 + FOCUS_PADDING
     linkText.y = contentY + 80
     focusContainer.addChild(linkText)
+  } else if (item.itemType === 'audio') {
+    // Audio display - mic icon
+    const audioIcon = new Graphics()
+    audioIcon.circle(0, contentY + 40, 28)
+    audioIcon.fill({ color: 0xE91E63, alpha: 0.2 })
+    audioIcon.stroke({ width: 2, color: 0xE91E63 })
+    focusContainer.addChild(audioIcon)
+
+    // Mic symbol (simple representation)
+    const micShape = new Graphics()
+    micShape.roundRect(-6, contentY + 28, 12, 18, 4)
+    micShape.stroke({ width: 2, color: 0xE91E63 })
+    micShape.moveTo(0, contentY + 46)
+    micShape.lineTo(0, contentY + 52)
+    micShape.stroke({ width: 2, color: 0xE91E63 })
+    micShape.moveTo(-8, contentY + 52)
+    micShape.lineTo(8, contentY + 52)
+    micShape.stroke({ width: 2, color: 0xE91E63 })
+    focusContainer.addChild(micShape)
+
+    const audioLabel = new Text({
+      text: 'Audio',
+      style: new TextStyle({
+        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+        fontSize: 16,
+        fill: 0xE91E63,
+      }),
+      resolution: TEXT_RESOLUTION,
+    })
+    audioLabel.x = -audioLabel.width / 2
+    audioLabel.y = contentY + 80
+    focusContainer.addChild(audioLabel)
   }
 
   // Caption at bottom if present

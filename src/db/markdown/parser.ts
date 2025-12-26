@@ -209,15 +209,31 @@ export function getSlugFromFilename(filename: string): string {
 }
 
 /**
- * Check if a filename is a media file (photo/video)
+ * Check if a filename is a media file (photo/video/audio)
  */
 export function isMediaFile(filename: string): boolean {
   const ext = filename.split('.').pop()?.toLowerCase()
   const mediaExtensions = [
     'jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'heif', 'avif',
-    'mp4', 'mov', 'avi', 'mkv', 'webm'
+    'mp4', 'mov', 'avi', 'mkv', 'webm',
+    'mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac'
   ]
   return mediaExtensions.includes(ext || '')
+}
+
+/**
+ * Get item type from filename extension
+ */
+export function getItemTypeFromFilename(filename: string): 'photo' | 'video' | 'audio' | null {
+  const ext = filename.split('.').pop()?.toLowerCase()
+  const photoExtensions = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'heif', 'avif']
+  const videoExtensions = ['mp4', 'mov', 'avi', 'mkv', 'webm']
+  const audioExtensions = ['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac']
+
+  if (photoExtensions.includes(ext || '')) return 'photo'
+  if (videoExtensions.includes(ext || '')) return 'video'
+  if (audioExtensions.includes(ext || '')) return 'audio'
+  return null
 }
 
 /**

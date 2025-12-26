@@ -1,5 +1,6 @@
 import { Event, Item, CanvasItem, L1Memory, L1EventCluster, ItemType } from '../models/types'
 import { v4 as uuidv4 } from 'uuid'
+import { hasStorageFolder, writeDatabaseFile } from './fileStorage'
 
 // sql.js types (loaded via script tag)
 interface SqlJsDatabase {
@@ -54,7 +55,7 @@ const SCHEMA = `
   CREATE TABLE IF NOT EXISTS items (
     id TEXT PRIMARY KEY,
     event_id TEXT NOT NULL REFERENCES events(id),
-    item_type TEXT NOT NULL CHECK(item_type IN ('text', 'photo', 'video', 'link')),
+    item_type TEXT NOT NULL CHECK(item_type IN ('text', 'photo', 'video', 'link', 'audio')),
     content TEXT NOT NULL,
     caption TEXT,
     happened_at TEXT,
@@ -63,6 +64,7 @@ const SCHEMA = `
     place_label TEXT,
     people TEXT,
     tags TEXT,
+    category TEXT,
     url TEXT,
     body_text TEXT,
     slug TEXT,
@@ -80,6 +82,8 @@ const SCHEMA = `
     rotation REAL NOT NULL DEFAULT 0,
     z_index INTEGER NOT NULL DEFAULT 0,
     text_scale REAL,
+    width REAL,
+    height REAL,
     PRIMARY KEY (event_id, item_id)
   );
 
@@ -120,7 +124,7 @@ function uint8ArrayToBase64(bytes: Uint8Array): string {
   return btoa(binary)
 }
 
-// Save database to localStorage
+// Save database to localStorage and file (if file-based storage is configured)
 function saveToStorage(): void {
   if (!db) return
   try {
@@ -144,6 +148,17 @@ function saveToStorage(): void {
       })
     } else {
       console.error('Database save verification FAILED - data not found in localStorage!')
+    }
+
+    // Also save to file if file-based storage is configured
+    if (hasStorageFolder()) {
+      writeDatabaseFile(data).then(success => {
+        if (success) {
+          console.log('Database also saved to index.db file')
+        }
+      }).catch(err => {
+        console.error('Failed to save database to file:', err)
+      })
     }
   } catch (err) {
     if (err instanceof DOMException && err.name === 'QuotaExceededError') {
@@ -249,6 +264,10 @@ function migrateDatabase(database: SqlJsDatabase): void {
     console.log('Migrating: adding media_path column to items')
     database.run('ALTER TABLE items ADD COLUMN media_path TEXT')
   }
+  if (!itemColumns.includes('category')) {
+    console.log('Migrating: adding category column to items')
+    database.run('ALTER TABLE items ADD COLUMN category TEXT')
+  }
 
   // Check canvas_items table for text_scale column
   const canvasInfo = database.exec("PRAGMA table_info(canvas_items)")
@@ -261,6 +280,14 @@ function migrateDatabase(database: SqlJsDatabase): void {
   if (!canvasColumns.includes('item_slug')) {
     console.log('Migrating: adding item_slug column to canvas_items')
     database.run('ALTER TABLE canvas_items ADD COLUMN item_slug TEXT')
+  }
+  if (!canvasColumns.includes('width')) {
+    console.log('Migrating: adding width column to canvas_items')
+    database.run('ALTER TABLE canvas_items ADD COLUMN width REAL')
+  }
+  if (!canvasColumns.includes('height')) {
+    console.log('Migrating: adding height column to canvas_items')
+    database.run('ALTER TABLE canvas_items ADD COLUMN height REAL')
   }
 
   // Create new tables if they don't exist
@@ -547,6 +574,8 @@ export function getYearForDate(dateStr: string): Event | null {
  * If the year doesn't exist, creates it automatically
  */
 export function getOrCreateYear(dateStr: string): Event {
+  if (!db) throw new Error('Database not initialized')
+
   // First try to find existing year
   const existingYear = getYearForDate(dateStr)
   if (existingYear) {
@@ -559,7 +588,7 @@ export function getOrCreateYear(dateStr: string): Event {
   const id = uuidv4()
 
   // Create new year event
-  db!.run(
+  db.run(
     `INSERT INTO events (id, type, title, description, featured_photo_id, featured_photo_data,
                          location_lat, location_lng, location_label,
                          start_at, end_at, parent_id, cover_media_id, created_at, updated_at)
@@ -637,10 +666,11 @@ export function getEventsByType(type: Event['type']): Event[] {
 }
 
 export function createEvent(event: Omit<Event, 'id' | 'createdAt' | 'updatedAt'>): Event {
+  if (!db) throw new Error('Database not initialized')
   const id = uuidv4()
   const now = new Date().toISOString()
 
-  db!.run(
+  db.run(
     `INSERT INTO events (id, type, title, description, featured_photo_id, featured_photo_data,
                          location_lat, location_lng, location_label,
                          start_at, end_at, parent_id, cover_media_id, created_at, updated_at)
@@ -709,9 +739,10 @@ export function updateItemContent(itemId: string, content: string): void {
 }
 
 export function getItemsByEvent(eventId: string): Item[] {
-  const stmt = db!.prepare(`
+  if (!db) throw new Error('Database not initialized')
+  const stmt = db.prepare(`
     SELECT id, event_id, item_type, content, caption, happened_at,
-           place_lat, place_lng, place_label, people, body_text, tags, slug
+           place_lat, place_lng, place_label, people, body_text, tags, slug, category
     FROM items WHERE event_id = ?
   `)
   stmt.bind([eventId])
@@ -737,6 +768,7 @@ export function getItemsByEvent(eventId: string): Item[] {
       bodyText: row[10] as string | undefined,
       tags: tagsJson ? JSON.parse(tagsJson) : undefined,
       slug: row[12] as string | undefined,
+      category: row[13] as Item['category'] | undefined,
     })
   }
   stmt.free()
@@ -744,6 +776,7 @@ export function getItemsByEvent(eventId: string): Item[] {
 }
 
 export function createItem(item: Omit<Item, 'id'>): Item {
+  if (!db) throw new Error('Database not initialized')
   const id = uuidv4()
 
   console.log('createItem called:', {
@@ -756,9 +789,9 @@ export function createItem(item: Omit<Item, 'id'>): Item {
   try {
     // For text items, also store content in body_text field
     const bodyText = item.itemType === 'text' ? item.content : null
-    db!.run(
-      `INSERT INTO items (id, event_id, item_type, content, caption, happened_at, place_lat, place_lng, place_label, people, body_text)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    db.run(
+      `INSERT INTO items (id, event_id, item_type, content, caption, happened_at, place_lat, place_lng, place_label, people, tags, category, body_text)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         id,
         item.eventId,
@@ -770,6 +803,8 @@ export function createItem(item: Omit<Item, 'id'>): Item {
         item.place?.lng ?? null,
         item.place?.label ?? null,
         item.people ? JSON.stringify(item.people) : null,
+        item.tags ? JSON.stringify(item.tags) : null,
+        item.category ?? null,
         bodyText,
       ]
     )
@@ -838,6 +873,7 @@ export function updateEvent(eventId: string, updates: {
   location?: { lat: number; lng: number; label?: string } | null
   startAt?: string
   endAt?: string | null
+  parentId?: string
 }): void {
   if (!db) throw new Error('Database not initialized')
 
@@ -876,6 +912,10 @@ export function updateEvent(eventId: string, updates: {
   if (updates.endAt !== undefined) {
     setClauses.push('end_at = ?')
     values.push(updates.endAt || null)
+  }
+  if (updates.parentId !== undefined) {
+    setClauses.push('parent_id = ?')
+    values.push(updates.parentId)
   }
 
   if (setClauses.length === 0) return
@@ -927,7 +967,8 @@ export function getItemById(itemId: string): Item | null {
   if (!db) return null
 
   const stmt = db.prepare(`
-    SELECT id, event_id, item_type, content, caption, happened_at, place_lat, place_lng, place_label, people
+    SELECT id, event_id, item_type, content, caption, happened_at,
+           place_lat, place_lng, place_label, people, body_text, tags, slug, category
     FROM items WHERE id = ?
   `)
   stmt.bind([itemId])
@@ -939,6 +980,7 @@ export function getItemById(itemId: string): Item | null {
 
   const row = stmt.get()
   const peopleJson = row[9] as string | null
+  const tagsJson = row[11] as string | null
   const item: Item = {
     id: row[0] as string,
     eventId: row[1] as string,
@@ -952,6 +994,10 @@ export function getItemById(itemId: string): Item | null {
       label: row[8] as string | undefined,
     } : undefined,
     people: peopleJson ? JSON.parse(peopleJson) : undefined,
+    bodyText: row[10] as string | undefined,
+    tags: tagsJson ? JSON.parse(tagsJson) : undefined,
+    slug: row[12] as string | undefined,
+    category: row[13] as Item['category'] | undefined,
   }
   stmt.free()
   return item
@@ -963,6 +1009,8 @@ export function updateItem(itemId: string, updates: {
   happenedAt?: string | null
   place?: { lat: number; lng: number; label?: string } | null
   people?: string[] | null
+  tags?: string[] | null
+  category?: string | null
 }): void {
   if (!db) return
 
@@ -1001,6 +1049,14 @@ export function updateItem(itemId: string, updates: {
     setClauses.push('people = ?')
     values.push(updates.people ? JSON.stringify(updates.people) : null)
   }
+  if ('tags' in updates) {
+    setClauses.push('tags = ?')
+    values.push(updates.tags ? JSON.stringify(updates.tags) : null)
+  }
+  if ('category' in updates) {
+    setClauses.push('category = ?')
+    values.push(updates.category ?? null)
+  }
 
   if (setClauses.length === 0) return
 
@@ -1028,6 +1084,20 @@ export function deleteItem(itemId: string): void {
 export function deleteEvent(eventId: string): void {
   if (!db) throw new Error('Database not initialized')
 
+  // First, recursively delete all child events
+  const childEventsStmt = db.prepare('SELECT id FROM events WHERE parent_id = ?')
+  childEventsStmt.bind([eventId])
+  const childEventIds: string[] = []
+  while (childEventsStmt.step()) {
+    childEventIds.push(childEventsStmt.get()[0] as string)
+  }
+  childEventsStmt.free()
+
+  // Recursively delete each child event
+  for (const childId of childEventIds) {
+    deleteEvent(childId)
+  }
+
   // Delete all canvas items for items in this event
   db.run(`
     DELETE FROM canvas_items
@@ -1046,8 +1116,9 @@ export function deleteEvent(eventId: string): void {
 
 // Canvas operations
 export function getCanvasItems(eventId: string): CanvasItem[] {
-  const stmt = db!.prepare(`
-    SELECT event_id, item_id, x, y, scale, rotation, z_index, text_scale
+  if (!db) throw new Error('Database not initialized')
+  const stmt = db.prepare(`
+    SELECT event_id, item_id, x, y, scale, rotation, z_index, text_scale, width, height
     FROM canvas_items WHERE event_id = ? ORDER BY z_index
   `)
   stmt.bind([eventId])
@@ -1064,6 +1135,8 @@ export function getCanvasItems(eventId: string): CanvasItem[] {
       rotation: row[5] as number,
       zIndex: row[6] as number,
       textScale: row[7] as number | undefined,
+      width: row[8] as number | undefined,
+      height: row[9] as number | undefined,
     })
   }
   stmt.free()
@@ -1071,9 +1144,10 @@ export function getCanvasItems(eventId: string): CanvasItem[] {
 }
 
 export function upsertCanvasItem(canvasItem: CanvasItem): void {
-  db!.run(
-    `INSERT OR REPLACE INTO canvas_items (event_id, item_id, x, y, scale, rotation, z_index, text_scale)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  if (!db) throw new Error('Database not initialized')
+  db.run(
+    `INSERT OR REPLACE INTO canvas_items (event_id, item_id, x, y, scale, rotation, z_index, text_scale, width, height)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       canvasItem.eventId,
       canvasItem.itemId,
@@ -1083,6 +1157,8 @@ export function upsertCanvasItem(canvasItem: CanvasItem): void {
       canvasItem.rotation,
       canvasItem.zIndex,
       canvasItem.textScale ?? null,
+      canvasItem.width ?? null,
+      canvasItem.height ?? null,
     ]
   )
   saveToStorage()
@@ -1406,8 +1482,8 @@ export function insertItemFromFile(item: Item): void {
     `INSERT OR REPLACE INTO items (
       id, event_id, item_type, content, caption, happened_at,
       place_lat, place_lng, place_label,
-      people, tags, url, body_text, slug, file_path, media_path
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      people, tags, category, url, body_text, slug, file_path, media_path
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       item.id,
       item.eventId,
@@ -1420,6 +1496,7 @@ export function insertItemFromFile(item: Item): void {
       item.place?.label ?? null,
       item.people ? JSON.stringify(item.people) : null,
       item.tags ? JSON.stringify(item.tags) : null,
+      item.category ?? null,
       item.url ?? null,
       item.bodyText ?? null,
       item.slug ?? null,
@@ -1434,7 +1511,7 @@ export function getItemBySlug(eventId: string, slug: string): Item | null {
 
   const stmt = db.prepare(`
     SELECT id, event_id, item_type, content, caption, happened_at,
-           place_lat, place_lng, place_label, people, tags, url, body_text, slug, file_path, media_path
+           place_lat, place_lng, place_label, people, tags, category, url, body_text, slug, file_path, media_path
     FROM items WHERE event_id = ? AND slug = ?
   `)
   stmt.bind([eventId, slug])
@@ -1461,11 +1538,12 @@ export function getItemBySlug(eventId: string, slug: string): Item | null {
     } : undefined,
     people: row[9] ? JSON.parse(row[9] as string) : undefined,
     tags: row[10] ? JSON.parse(row[10] as string) : undefined,
-    url: row[11] as string | undefined,
-    bodyText: row[12] as string | undefined,
-    slug: row[13] as string | undefined,
-    filePath: row[14] as string | undefined,
-    mediaPath: row[15] as string | undefined,
+    category: row[11] as Item['category'] | undefined,
+    url: row[12] as string | undefined,
+    bodyText: row[13] as string | undefined,
+    slug: row[14] as string | undefined,
+    filePath: row[15] as string | undefined,
+    mediaPath: row[16] as string | undefined,
   }
 }
 

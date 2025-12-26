@@ -1,5 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
+import { Clock } from 'lucide-react'
 import { Item, Event } from '../models/types'
+import { TagInput } from './TagInput'
+import { CategorySelect } from './CategorySelect'
 
 interface EditMemoryDialogProps {
   item: Item | null
@@ -10,7 +13,8 @@ interface EditMemoryDialogProps {
     happenedAt?: string
     content?: string
     eventStartAt?: string
-    eventEndAt?: string | null
+    tags?: string[]
+    category?: string
   }) => void
   onCancel: () => void
 }
@@ -20,24 +24,25 @@ export function EditMemoryDialog({ item, parentEvent, isOpen, onSave, onCancel }
   const [date, setDate] = useState('')
   const [time, setTime] = useState('')
   const [showTime, setShowTime] = useState(false)
-  const [endDate, setEndDate] = useState('')
-  const [endTime, setEndTime] = useState('')
-  const [showEndDate, setShowEndDate] = useState(false)
-  const [showEndTime, setShowEndTime] = useState(false)
   const [content, setContent] = useState('')
+  const [tags, setTags] = useState<string[]>([])
+  const [category, setCategory] = useState<string | undefined>(undefined)
 
   // Reset form when item changes
   useEffect(() => {
     if (item && parentEvent) {
       setCaption(item.caption || '')
-      setContent(item.itemType === 'text' ? item.content : '')
+      // For text items, content is in bodyText (file-based) or content (legacy)
+      setContent(item.itemType === 'text' ? (item.bodyText || item.content || '') : '')
+      setTags(item.tags || [])
+      setCategory(item.category)
 
-      // Use event's startAt for date
-      if (parentEvent.startAt) {
-        const startStr = parentEvent.startAt
-        if (startStr.includes('T')) {
-          const dateObj = new Date(startStr)
-          setDate(startStr.split('T')[0])
+      // Use item's happenedAt first, then fallback to event's startAt
+      const dateSource = item.happenedAt || parentEvent.startAt
+      if (dateSource) {
+        if (dateSource.includes('T')) {
+          const dateObj = new Date(dateSource)
+          setDate(dateSource.split('T')[0])
           const hours = dateObj.getUTCHours()
           const minutes = dateObj.getUTCMinutes()
           if (hours !== 0 || minutes !== 0) {
@@ -48,38 +53,10 @@ export function EditMemoryDialog({ item, parentEvent, isOpen, onSave, onCancel }
             setTime('')
           }
         } else {
-          setDate(startStr)
+          setDate(dateSource)
           setShowTime(false)
           setTime('')
         }
-      }
-
-      // Use event's endAt for end date
-      if (parentEvent.endAt) {
-        setShowEndDate(true)
-        const endStr = parentEvent.endAt
-        if (endStr.includes('T')) {
-          const dateObj = new Date(endStr)
-          setEndDate(endStr.split('T')[0])
-          const hours = dateObj.getUTCHours()
-          const minutes = dateObj.getUTCMinutes()
-          if (hours !== 0 || minutes !== 0) {
-            setShowEndTime(true)
-            setEndTime(`${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`)
-          } else {
-            setShowEndTime(false)
-            setEndTime('')
-          }
-        } else {
-          setEndDate(endStr)
-          setShowEndTime(false)
-          setEndTime('')
-        }
-      } else {
-        setShowEndDate(false)
-        setEndDate('')
-        setShowEndTime(false)
-        setEndTime('')
       }
     }
   }, [item, parentEvent])
@@ -106,7 +83,8 @@ export function EditMemoryDialog({ item, parentEvent, isOpen, onSave, onCancel }
       happenedAt?: string
       content?: string
       eventStartAt?: string
-      eventEndAt?: string | null
+      tags?: string[]
+      category?: string
     } = {}
 
     // Caption
@@ -114,40 +92,35 @@ export function EditMemoryDialog({ item, parentEvent, isOpen, onSave, onCancel }
       updates.caption = caption
     }
 
-    // Build start date/time
+    // Build happenedAt from date/time
     if (date) {
-      const startAt = showTime && time
+      const happenedAt = showTime && time
         ? `${date}T${time}:00.000Z`
-        : date
+        : `${date}T12:00:00.000Z`
 
       // Compare with original
-      const originalStart = parentEvent.startAt
-      if (startAt !== originalStart) {
-        updates.eventStartAt = startAt
-        // Also update item's happenedAt to match
-        updates.happenedAt = showTime && time
-          ? `${date}T${time}:00.000Z`
-          : `${date}T12:00:00.000Z`
+      const originalHappenedAt = item.happenedAt || parentEvent.startAt
+      if (happenedAt !== originalHappenedAt) {
+        updates.happenedAt = happenedAt
       }
-    }
-
-    // Build end date/time
-    if (showEndDate && endDate) {
-      const endAt = showEndTime && endTime
-        ? `${endDate}T${endTime}:00.000Z`
-        : endDate
-
-      if (endAt !== parentEvent.endAt) {
-        updates.eventEndAt = endAt
-      }
-    } else if (!showEndDate && parentEvent.endAt) {
-      // End date was removed
-      updates.eventEndAt = null
     }
 
     // Content (only for text items)
-    if (item.itemType === 'text' && content !== item.content) {
+    // Compare with bodyText (file-based) or content (legacy)
+    const originalContent = item.bodyText || item.content || ''
+    if (item.itemType === 'text' && content !== originalContent) {
       updates.content = content
+    }
+
+    // Tags
+    const originalTags = item.tags || []
+    if (JSON.stringify(tags) !== JSON.stringify(originalTags)) {
+      updates.tags = tags
+    }
+
+    // Category
+    if (category !== item.category) {
+      updates.category = category
     }
 
     onSave(item.id, parentEvent.id, updates)
@@ -177,16 +150,28 @@ export function EditMemoryDialog({ item, parentEvent, isOpen, onSave, onCancel }
           </div>
         )}
 
-        {/* Caption */}
+        {/* Caption - hide for text items (text content IS the description) */}
+        {item.itemType !== 'text' && (
+          <div style={styles.field}>
+            <label style={styles.label}>Beschrijving</label>
+            <input
+              type="text"
+              style={styles.input}
+              value={caption}
+              onChange={(e) => setCaption(e.target.value)}
+              placeholder="Voeg een beschrijving toe..."
+            />
+          </div>
+        )}
+
+        {/* Tags */}
         <div style={styles.field}>
-          <label style={styles.label}>Beschrijving</label>
-          <input
-            type="text"
-            style={styles.input}
-            value={caption}
-            onChange={(e) => setCaption(e.target.value)}
-            placeholder="Voeg een beschrijving toe..."
-          />
+          <TagInput tags={tags} onChange={setTags} />
+        </div>
+
+        {/* Category */}
+        <div style={styles.field}>
+          <CategorySelect value={category} onChange={setCategory} />
         </div>
 
         {/* Start Date */}
@@ -211,10 +196,7 @@ export function EditMemoryDialog({ item, parentEvent, isOpen, onSave, onCancel }
               }}
               title={showTime ? 'Tijd verbergen' : 'Tijd toevoegen'}
             >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <circle cx="12" cy="12" r="10" />
-                <polyline points="12 6 12 12 16 14" />
-              </svg>
+              <Clock size={18} />
             </button>
           </div>
           {showTime && (
@@ -224,65 +206,6 @@ export function EditMemoryDialog({ item, parentEvent, isOpen, onSave, onCancel }
               value={time}
               onChange={(e) => setTime(e.target.value)}
             />
-          )}
-        </div>
-
-        {/* End Date Toggle */}
-        <div style={styles.field}>
-          <button
-            type="button"
-            style={{
-              ...styles.endDateToggle,
-              color: showEndDate ? '#5d7aa0' : '#888'
-            }}
-            onClick={() => {
-              setShowEndDate(!showEndDate)
-              if (!showEndDate) {
-                setEndDate(date)  // Default to start date
-              }
-            }}
-          >
-            {showEndDate ? '- Einddatum verwijderen' : '+ Einddatum toevoegen'}
-          </button>
-
-          {showEndDate && (
-            <>
-              <label style={{ ...styles.label, marginTop: 12 }}>Einddatum</label>
-              <div style={styles.dateRow}>
-                <input
-                  type="date"
-                  style={styles.dateInput}
-                  value={endDate}
-                  onChange={(e) => setEndDate(e.target.value)}
-                  min={date}
-                />
-                <button
-                  type="button"
-                  style={{
-                    ...styles.timeToggle,
-                    color: showEndTime ? '#5d7aa0' : '#666'
-                  }}
-                  onClick={() => {
-                    setShowEndTime(!showEndTime)
-                    if (!showEndTime) setEndTime('18:00')
-                  }}
-                  title={showEndTime ? 'Tijd verbergen' : 'Tijd toevoegen'}
-                >
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <circle cx="12" cy="12" r="10" />
-                    <polyline points="12 6 12 12 16 14" />
-                  </svg>
-                </button>
-              </div>
-              {showEndTime && (
-                <input
-                  type="time"
-                  style={{ ...styles.input, marginTop: 8 }}
-                  value={endTime}
-                  onChange={(e) => setEndTime(e.target.value)}
-                />
-              )}
-            </>
           )}
         </div>
 

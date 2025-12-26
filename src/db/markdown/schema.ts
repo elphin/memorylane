@@ -25,14 +25,15 @@ export interface EventFrontmatter {
 // Item frontmatter (stored in [slug].md)
 export interface ItemFrontmatter {
   id: string
-  type: 'photo' | 'video' | 'text' | 'link'
-  media?: string          // filename for photo/video (e.g., "strand-selfie.jpg")
+  type: 'photo' | 'video' | 'text' | 'link' | 'audio'
+  media?: string          // filename for photo/video/audio (e.g., "strand-selfie.jpg")
   url?: string            // URL for link items
   caption?: string
   happenedAt?: string     // ISO date or YYYY-MM-DD
   place?: Location
   people?: string[]
   tags?: string[]
+  category?: string
   exif?: {
     camera?: string
     aperture?: string
@@ -52,6 +53,8 @@ export interface CanvasItemLayout {
   rotation: number
   zIndex: number
   textScale?: number
+  width?: number
+  height?: number
 }
 
 export interface CanvasJson {

@@ -7,8 +7,13 @@ import {
   listEntries,
   listDirectories,
   readFile,
+  writeFile,
   getFileStats,
   hasStorageFolder,
+  readFileAsBlob,
+  copyFile,
+  deleteFile,
+  getDirectory,
 } from '../fileStorage'
 import {
   createFreshDatabase,
@@ -33,8 +38,17 @@ import {
   isSpecialFile,
   parseDate,
   getSlugFromFilename,
+  getItemTypeFromFilename,
 } from '../markdown/parser'
-import type { CanvasJson } from '../markdown/schema'
+import {
+  generateItemMarkdown,
+  generateEventMarkdown,
+  generateCanvasJson,
+  generateSlug,
+  generateEventFolderName,
+} from '../markdown/generator'
+import type { CanvasJson, ItemFrontmatter } from '../markdown/schema'
+import { extractExifData } from '../../utils/exif'
 
 export interface IndexResult {
   yearsIndexed: number
@@ -77,7 +91,30 @@ export async function rebuildFullIndex(): Promise<IndexResult> {
       const yearEvent = await indexYearFolder(yearName)
       result.yearsIndexed++
 
-      // Index event folders within year
+      // Check for loose media files in year folder (not in event folders)
+      const yearEntries = await listEntries([yearName])
+      const looseMediaFiles = yearEntries.filter(e =>
+        e.kind === 'file' && isMediaFile(e.name)
+      )
+
+      // Process loose media files - create event folders for them
+      const createdEventFolders: string[] = []
+      for (const mediaEntry of looseMediaFiles) {
+        try {
+          const eventFolderName = await createEventForLooseMedia(yearName, mediaEntry.name)
+          if (eventFolderName) {
+            createdEventFolders.push(eventFolderName)
+          }
+        } catch (err) {
+          console.error(`Failed to create event for loose media: ${mediaEntry.name}`, err)
+        }
+      }
+
+      if (looseMediaFiles.length > 0) {
+        console.log(`Processed ${looseMediaFiles.length} loose media files in ${yearName}, created ${createdEventFolders.length} event folders`)
+      }
+
+      // Index event folders within year (including newly created ones)
       const eventFolders = await listDirectories([yearName])
 
       for (const eventFolderName of eventFolders) {
@@ -253,13 +290,49 @@ async function indexEventFolder(
     !isSpecialFile(e.name)
   )
 
-  // Build map of media files (slug -> filename)
+  // Build map of media files (normalized slug -> filename)
+  // Use lowercase slugs for case-insensitive comparison
   const mediaFiles = new Map<string, string>()
   for (const entry of entries) {
     if (entry.kind === 'file' && isMediaFile(entry.name)) {
-      const slug = getSlugFromFilename(entry.name)
+      const slug = getSlugFromFilename(entry.name).toLowerCase()
       mediaFiles.set(slug, entry.name)
     }
+  }
+
+  // Build set of existing markdown slugs (lowercase for case-insensitive comparison)
+  const existingMdSlugs = new Set(
+    mdFiles.map(f => getSlugFromFilename(f.name).toLowerCase())
+  )
+
+  // Detect orphan media files (media without corresponding .md)
+  const orphanMedia: string[] = []
+  for (const [slug, filename] of mediaFiles.entries()) {
+    if (!existingMdSlugs.has(slug)) {
+      orphanMedia.push(filename)
+    }
+  }
+
+  // Create markdown for orphan media files
+  const canvasItemsForPositioning: CanvasItem[] = []
+  for (const mediaFilename of orphanMedia) {
+    try {
+      const slug = await createMarkdownForOrphanMedia(
+        folderPath,
+        mediaFilename,
+        event.id,
+        canvasItemsForPositioning
+      )
+      // Add to mdFiles list so it gets indexed
+      mdFiles.push({ kind: 'file', name: `${slug}.md`, path: `${folderPath.join('/')}/${slug}.md` })
+      existingMdSlugs.add(slug)
+    } catch (err) {
+      console.error(`Failed to create markdown for orphan media: ${mediaFilename}`, err)
+    }
+  }
+
+  if (orphanMedia.length > 0) {
+    console.log(`Processed ${orphanMedia.length} orphan media files in ${folderPath.join('/')}`)
   }
 
   let itemCount = 0
@@ -284,6 +357,233 @@ async function indexEventFolder(
 
   console.log(`Indexed event: ${folderPath.join('/')} with ${itemCount} items`)
   return itemCount
+}
+
+/**
+ * Create markdown file for an orphan media file (media without .md)
+ * Returns the slug of the created item
+ */
+async function createMarkdownForOrphanMedia(
+  folderPath: string[],
+  mediaFilename: string,
+  eventId: string,
+  existingCanvasItems: CanvasItem[]
+): Promise<string> {
+  const now = new Date().toISOString()
+  const itemId = uuidv4()
+  const itemType = getItemTypeFromFilename(mediaFilename)
+
+  if (!itemType) {
+    throw new Error(`Unknown media type for: ${mediaFilename}`)
+  }
+
+  // Generate slug from filename
+  const filenameWithoutExt = mediaFilename.replace(/\.[^/.]+$/, '')
+  const slug = generateSlug(filenameWithoutExt)
+
+  // Try to extract EXIF date for photos
+  let happenedAt: string | undefined
+  if (itemType === 'photo') {
+    try {
+      const blob = await readFileAsBlob(folderPath, mediaFilename)
+      if (blob) {
+        // Convert Blob to File for EXIF extraction
+        const file = new File([blob], mediaFilename, { type: blob.type })
+        const exifData = await extractExifData(file)
+        if (exifData.dateTaken) {
+          happenedAt = exifData.dateTaken
+        }
+      }
+    } catch (err) {
+      console.warn(`Could not extract EXIF from ${mediaFilename}:`, err)
+    }
+  }
+
+  // Generate markdown frontmatter
+  const frontmatter: ItemFrontmatter = {
+    id: itemId,
+    type: itemType,
+    media: mediaFilename,
+    caption: filenameWithoutExt.replace(/[-_]/g, ' '),
+    happenedAt,
+    createdAt: now,
+    updatedAt: now,
+  }
+
+  const markdown = generateItemMarkdown(frontmatter)
+
+  // Write the markdown file
+  await writeFile(folderPath, `${slug}.md`, markdown)
+  console.log(`Created markdown for orphan media: ${mediaFilename} -> ${slug}.md`)
+
+  // Calculate auto-position for canvas (grid layout)
+  const ITEM_WIDTH = 200
+  const ITEM_HEIGHT = 150
+  const GAP = 24
+  const ITEMS_PER_ROW = 5
+
+  const index = existingCanvasItems.length
+  const row = Math.floor(index / ITEMS_PER_ROW)
+  const col = index % ITEMS_PER_ROW
+
+  const canvasItem: CanvasItem = {
+    eventId,
+    itemId,
+    itemSlug: slug,
+    x: col * (ITEM_WIDTH + GAP) - (ITEMS_PER_ROW * (ITEM_WIDTH + GAP)) / 2 + ITEM_WIDTH / 2,
+    y: row * (ITEM_HEIGHT + GAP),
+    scale: 1,
+    rotation: 0,
+    zIndex: index,
+  }
+
+  // Update canvas items array for next item positioning
+  existingCanvasItems.push(canvasItem)
+
+  // Update _canvas.json
+  const canvasContent = await readFile(folderPath, '_canvas.json')
+  let canvas: CanvasJson = canvasContent
+    ? parseCanvasJson(canvasContent) || { version: 1, items: [] }
+    : { version: 1, items: [] }
+
+  canvas.items.push({
+    itemSlug: slug,
+    x: canvasItem.x,
+    y: canvasItem.y,
+    scale: canvasItem.scale,
+    rotation: canvasItem.rotation,
+    zIndex: canvasItem.zIndex,
+  })
+  canvas.updatedAt = now
+
+  await writeFile(folderPath, '_canvas.json', generateCanvasJson(canvas))
+
+  return slug
+}
+
+/**
+ * Create an event folder for a loose media file in a year folder
+ * Moves the media file into the new event folder and generates all necessary files
+ * Returns the created event folder name
+ */
+async function createEventForLooseMedia(
+  yearName: string,
+  mediaFilename: string
+): Promise<string | null> {
+  const now = new Date().toISOString()
+  const eventId = uuidv4()
+  const itemId = uuidv4()
+  const itemType = getItemTypeFromFilename(mediaFilename)
+
+  if (!itemType) {
+    console.warn(`Unknown media type for loose file: ${mediaFilename}`)
+    return null
+  }
+
+  // Try to extract EXIF date for photos
+  let mediaDate: Date | null = null
+  if (itemType === 'photo') {
+    try {
+      const blob = await readFileAsBlob([yearName], mediaFilename)
+      if (blob) {
+        const file = new File([blob], mediaFilename, { type: blob.type })
+        const exifData = await extractExifData(file)
+        if (exifData.dateTaken) {
+          mediaDate = new Date(exifData.dateTaken)
+        }
+      }
+    } catch (err) {
+      console.warn(`Could not extract EXIF from ${mediaFilename}:`, err)
+    }
+  }
+
+  // Fallback to file modification time if no EXIF date
+  if (!mediaDate) {
+    const stats = await getFileStats([yearName], mediaFilename)
+    if (stats) {
+      mediaDate = new Date(stats.mtime)
+    } else {
+      mediaDate = new Date() // Fallback to now
+    }
+  }
+
+  // Generate caption from filename
+  const filenameWithoutExt = mediaFilename.replace(/\.[^/.]+$/, '')
+  const caption = filenameWithoutExt.replace(/[-_]/g, ' ')
+
+  // Generate event folder name: YYYY-MM-DD Caption
+  const eventFolderName = generateEventFolderName(caption, mediaDate.toISOString())
+  const eventFolderPath = [yearName, eventFolderName]
+
+  console.log(`Creating event folder for loose media: ${yearName}/${mediaFilename} -> ${eventFolderName}`)
+
+  // Create the event folder
+  const eventDir = await getDirectory(...eventFolderPath)
+  if (!eventDir) {
+    console.error(`Failed to create event folder: ${eventFolderPath.join('/')}`)
+    return null
+  }
+
+  // Move the media file to the new event folder
+  const moveSuccess = await copyFile(
+    [yearName],
+    mediaFilename,
+    eventFolderPath,
+    mediaFilename
+  )
+
+  if (!moveSuccess) {
+    console.error(`Failed to copy media file to event folder: ${mediaFilename}`)
+    return null
+  }
+
+  // Delete the original file
+  await deleteFile([yearName], mediaFilename)
+
+  // Generate item slug
+  const slug = generateSlug(filenameWithoutExt)
+
+  // Create _event.md
+  const eventMarkdown = generateEventMarkdown({
+    id: eventId,
+    type: 'event',
+    title: caption,
+    startAt: mediaDate.toISOString().split('T')[0],
+    createdAt: now,
+    updatedAt: now,
+  })
+  await writeFile(eventFolderPath, '_event.md', eventMarkdown)
+
+  // Create item markdown file
+  const itemFrontmatter: ItemFrontmatter = {
+    id: itemId,
+    type: itemType,
+    media: mediaFilename,
+    caption,
+    happenedAt: mediaDate.toISOString(),
+    createdAt: now,
+    updatedAt: now,
+  }
+  const itemMarkdown = generateItemMarkdown(itemFrontmatter)
+  await writeFile(eventFolderPath, `${slug}.md`, itemMarkdown)
+
+  // Create _canvas.json with the item centered
+  const canvas: CanvasJson = {
+    version: 1,
+    items: [{
+      itemSlug: slug,
+      x: 0,
+      y: 0,
+      scale: 1,
+      rotation: 0,
+      zIndex: 0,
+    }],
+    updatedAt: now,
+  }
+  await writeFile(eventFolderPath, '_canvas.json', generateCanvasJson(canvas))
+
+  console.log(`Created event for loose media: ${eventFolderPath.join('/')}`)
+  return eventFolderName
 }
 
 /**
@@ -377,6 +677,8 @@ async function indexCanvasLayout(
       rotation: item.rotation,
       zIndex: item.zIndex,
       textScale: item.textScale,
+      width: item.width,
+      height: item.height,
     }
 
     // Try to find the item by slug to get the ID
@@ -414,6 +716,165 @@ export function needsFullRebuild(): boolean {
   }
 
   return false
+}
+
+/**
+ * Cleanup function: Remove duplicate .md files created by orphan detection bug
+ * Keeps the original .md (matching media filename) and removes auto-generated ones
+ */
+export async function cleanupDuplicateMarkdownFiles(): Promise<{
+  duplicatesRemoved: number
+  canvasUpdated: number
+  errors: string[]
+}> {
+  const result = {
+    duplicatesRemoved: 0,
+    canvasUpdated: 0,
+    errors: [] as string[],
+  }
+
+  if (!hasStorageFolder()) {
+    result.errors.push('No storage folder configured')
+    return result
+  }
+
+  console.log('Starting duplicate cleanup...')
+
+  // Scan year folders
+  const yearFolders = await listDirectories([])
+  const years = yearFolders.filter(name => isYearFolder(name)).sort()
+
+  for (const yearName of years) {
+    // Scan event folders within year
+    const eventFolders = await listDirectories([yearName])
+
+    for (const eventFolderName of eventFolders) {
+      if (eventFolderName.startsWith('.')) continue
+
+      const folderPath = [yearName, eventFolderName]
+
+      try {
+        const entries = await listEntries(folderPath)
+
+        // Get all media files and their expected slugs
+        const mediaFiles = new Map<string, string>() // lowercase slug -> original filename
+        for (const entry of entries) {
+          if (entry.kind === 'file' && isMediaFile(entry.name)) {
+            const slug = getSlugFromFilename(entry.name).toLowerCase()
+            mediaFiles.set(slug, entry.name)
+          }
+        }
+
+        // Get all markdown files
+        const mdFiles = entries.filter(e =>
+          e.kind === 'file' &&
+          isMarkdownFile(e.name) &&
+          !isSpecialFile(e.name)
+        )
+
+        // Group markdown files by their lowercase slug
+        const mdBySlug = new Map<string, string[]>()
+        for (const md of mdFiles) {
+          const slug = getSlugFromFilename(md.name).toLowerCase()
+          if (!mdBySlug.has(slug)) {
+            mdBySlug.set(slug, [])
+          }
+          mdBySlug.get(slug)!.push(md.name)
+        }
+
+        // Find duplicates: multiple .md files for the same slug
+        const toDelete: string[] = []
+        const deletedSlugs: string[] = []
+
+        for (const [slug, mdNames] of mdBySlug.entries()) {
+          if (mdNames.length > 1) {
+            // Sort: prefer the one that matches the media file name exactly
+            const mediaFilename = mediaFiles.get(slug)
+            const expectedMdName = mediaFilename
+              ? getSlugFromFilename(mediaFilename) + '.md'
+              : null
+
+            // Keep the first match, delete others
+            let kept = false
+            for (const mdName of mdNames) {
+              if (!kept && expectedMdName && mdName.toLowerCase() === expectedMdName.toLowerCase()) {
+                // Keep this one
+                kept = true
+                console.log(`Keeping: ${folderPath.join('/')}/${mdName}`)
+              } else if (!kept && !expectedMdName) {
+                // No media file, keep the first one
+                kept = true
+                console.log(`Keeping (no media): ${folderPath.join('/')}/${mdName}`)
+              } else {
+                // Delete this duplicate
+                toDelete.push(mdName)
+                deletedSlugs.push(getSlugFromFilename(mdName))
+                console.log(`Deleting duplicate: ${folderPath.join('/')}/${mdName}`)
+              }
+            }
+          }
+        }
+
+        // Also find orphan .md files that don't have corresponding media
+        // (auto-generated .md files where the media was later added properly)
+        for (const md of mdFiles) {
+          const mdSlug = getSlugFromFilename(md.name).toLowerCase()
+
+          // Check if this looks like an auto-generated file (has UUID suffix)
+          if (md.name.match(/_[a-f0-9]{8}\.md$/i)) {
+            // Check if there's a non-UUID version
+            const baseSlug = mdSlug.replace(/_[a-f0-9]{8}$/, '')
+            if (mdBySlug.has(baseSlug) && !toDelete.includes(md.name)) {
+              toDelete.push(md.name)
+              deletedSlugs.push(getSlugFromFilename(md.name))
+              console.log(`Deleting auto-generated: ${folderPath.join('/')}/${md.name}`)
+            }
+          }
+        }
+
+        // Delete the duplicate files
+        for (const mdName of toDelete) {
+          try {
+            await deleteFile(folderPath, mdName)
+            result.duplicatesRemoved++
+          } catch (err) {
+            result.errors.push(`Failed to delete ${folderPath.join('/')}/${mdName}: ${(err as Error).message}`)
+          }
+        }
+
+        // Update _canvas.json to remove references to deleted items
+        if (deletedSlugs.length > 0) {
+          const canvasContent = await readFile(folderPath, '_canvas.json')
+          if (canvasContent) {
+            try {
+              const canvas = JSON.parse(canvasContent) as { items: { itemSlug: string }[] }
+              const originalCount = canvas.items.length
+
+              // Filter out deleted items (case-insensitive)
+              const deletedSlugsLower = new Set(deletedSlugs.map(s => s.toLowerCase()))
+              canvas.items = canvas.items.filter(item =>
+                !deletedSlugsLower.has(item.itemSlug.toLowerCase())
+              )
+
+              if (canvas.items.length < originalCount) {
+                await writeFile(folderPath, '_canvas.json', JSON.stringify(canvas, null, 2))
+                result.canvasUpdated++
+                console.log(`Updated canvas: ${folderPath.join('/')}/_canvas.json (removed ${originalCount - canvas.items.length} items)`)
+              }
+            } catch (err) {
+              result.errors.push(`Failed to update canvas ${folderPath.join('/')}: ${(err as Error).message}`)
+            }
+          }
+        }
+
+      } catch (err) {
+        result.errors.push(`Error processing ${folderPath.join('/')}: ${(err as Error).message}`)
+      }
+    }
+  }
+
+  console.log('Cleanup complete:', result)
+  return result
 }
 
 /**

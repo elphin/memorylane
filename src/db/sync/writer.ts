@@ -278,7 +278,8 @@ export interface CreateItemInput {
   place?: { lat: number; lng: number; label?: string }
   people?: string[]
   tags?: string[]
-  originalFilename?: string  // For photo/video uploads
+  category?: Item['category']
+  originalFilename?: string  // For photo/video/audio uploads
 }
 
 /**
@@ -334,6 +335,7 @@ export async function createItemWithFiles(input: CreateItemInput): Promise<Item>
     place: input.place,
     people: input.people,
     tags: input.tags,
+    category: input.category,
     url: input.itemType === 'link' ? input.content : undefined,
     bodyText: input.itemType === 'text' ? input.content : undefined,
     slug,
@@ -352,6 +354,7 @@ export async function createItemWithFiles(input: CreateItemInput): Promise<Item>
     place: item.place,
     people: item.people,
     tags: item.tags,
+    category: item.category,
     createdAt: now,
     updatedAt: now,
   }
@@ -429,6 +432,7 @@ export async function updateItemWithFiles(
     place: updates.place ?? item.place,
     people: updates.people ?? item.people,
     tags: updates.tags ?? item.tags,
+    category: updates.category ?? item.category,
     createdAt: existing.frontmatter.createdAt || now,
     updatedAt: now,
   }
@@ -454,6 +458,9 @@ export async function updateItemWithFiles(
     place: updates.place ?? item.place,
     people: updates.people ?? item.people,
     tags: updates.tags ?? item.tags,
+    category: updates.category ?? item.category,
+    // For text items, update bodyText when content changes
+    bodyText: item.itemType === 'text' ? (updates.content ?? item.bodyText) : item.bodyText,
     slug: newSlug,
     filePath: [...folderPath, `${newSlug}.md`].join('/'),
   }
@@ -532,6 +539,8 @@ export async function saveCanvasLayout(eventId: string): Promise<void> {
       rotation: ci.rotation,
       zIndex: ci.zIndex,
       textScale: ci.textScale,
+      width: ci.width,
+      height: ci.height,
     })),
     updatedAt: new Date().toISOString(),
   }

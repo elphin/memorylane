@@ -1,66 +1,21 @@
-favicon.ico:1  GET http://localhost:5199/favicon.ico 404 (Not Found)
-installHook.js:1 React has detected a change in the order of Hooks called by App. This will lead to bugs and errors if not fixed. For more information, read the Rules of Hooks: https://react.dev/link/rules-of-hooks
-
-   Previous render            Next render
-   ------------------------------------------------------
-1. useState                   useState
-2. useState                   useState
-3. useState                   useState
-4. useState                   useState
-5. useState                   useState
-6. useState                   useState
-7. useRef                     useRef
-8. useRef                     useRef
-9. useEffect                  useEffect
-10. undefined                 useCallback
-   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-overrideMethod @ installHook.js:1
-updateHookTypesDev @ react-dom_client.js?v=d7b3fd52:5594
-useCallback @ react-dom_client.js?v=d7b3fd52:18935
-exports.useCallback @ chunk-6ZBOOF7O.js?v=d7b3fd52:904
-App @ App.tsx:85
-react_stack_bottom_frame @ react-dom_client.js?v=d7b3fd52:18509
-renderWithHooks @ react-dom_client.js?v=d7b3fd52:5654
-updateFunctionComponent @ react-dom_client.js?v=d7b3fd52:7475
-beginWork @ react-dom_client.js?v=d7b3fd52:8525
-runWithFiberInDEV @ react-dom_client.js?v=d7b3fd52:997
-performUnitOfWork @ react-dom_client.js?v=d7b3fd52:12561
-workLoopSync @ react-dom_client.js?v=d7b3fd52:12424
-renderRootSync @ react-dom_client.js?v=d7b3fd52:12408
-performWorkOnRoot @ react-dom_client.js?v=d7b3fd52:11766
-performWorkOnRootViaSchedulerTask @ react-dom_client.js?v=d7b3fd52:13505
-performWorkUntilDeadline @ react-dom_client.js?v=d7b3fd52:36
-<App>
-exports.jsxDEV @ react_jsx-dev-runtime.js?v=d7b3fd52:247
-(anonymous) @ main.tsx:7
-react-dom_client.js?v=d7b3fd52:5792 Uncaught Error: Rendered more hooks than during the previous render.
-    at updateWorkInProgressHook (react-dom_client.js?v=d7b3fd52:5792:19)
-    at updateCallback (react-dom_client.js?v=d7b3fd52:6516:20)
-    at Object.useCallback (react-dom_client.js?v=d7b3fd52:18936:18)
-    at exports.useCallback (chunk-6ZBOOF7O.js?v=d7b3fd52:904:36)
-    at App (App.tsx:85:33)
-    at Object.react_stack_bottom_frame (react-dom_client.js?v=d7b3fd52:18509:20)
-    at renderWithHooks (react-dom_client.js?v=d7b3fd52:5654:24)
-    at updateFunctionComponent (react-dom_client.js?v=d7b3fd52:7475:21)
-    at beginWork (react-dom_client.js?v=d7b3fd52:8525:20)
-    at runWithFiberInDEV (react-dom_client.js?v=d7b3fd52:997:72)
-updateWorkInProgressHook @ react-dom_client.js?v=d7b3fd52:5792
-updateCallback @ react-dom_client.js?v=d7b3fd52:6516
-useCallback @ react-dom_client.js?v=d7b3fd52:18936
-exports.useCallback @ chunk-6ZBOOF7O.js?v=d7b3fd52:904
-App @ App.tsx:85
-react_stack_bottom_frame @ react-dom_client.js?v=d7b3fd52:18509
-renderWithHooks @ react-dom_client.js?v=d7b3fd52:5654
-updateFunctionComponent @ react-dom_client.js?v=d7b3fd52:7475
-beginWork @ react-dom_client.js?v=d7b3fd52:8525
-runWithFiberInDEV @ react-dom_client.js?v=d7b3fd52:997
-performUnitOfWork @ react-dom_client.js?v=d7b3fd52:12561
-workLoopSync @ react-dom_client.js?v=d7b3fd52:12424
-renderRootSync @ react-dom_client.js?v=d7b3fd52:12408
-performWorkOnRoot @ react-dom_client.js?v=d7b3fd52:11827
-performWorkOnRootViaSchedulerTask @ react-dom_client.js?v=d7b3fd52:13505
-performWorkUntilDeadline @ react-dom_client.js?v=d7b3fd52:36
-<App>
-exports.jsxDEV @ react_jsx-dev-runtime.js?v=d7b3fd52:247
-(anonymous) @ main.tsx:7
+client:733 [vite] connecting...
+client:827 [vite] connected.
+fileStorage.ts:87 Restored storage folder: MemoryLane
+App.tsx:129 Storage folder restored
+fileStorage.ts:87 Restored storage folder: MemoryLane
+App.tsx:129 Storage folder restored
+App.tsx:134 Loading database from file (index.db)...
+App.tsx:134 Loading database from file (index.db)...
+database.ts:1273 Database imported from file
+database.ts:1273 Database imported from file
+App.tsx:137 Database loaded from file
+App.tsx:173 Loaded years: 5 events: 16
+App.tsx:137 Database loaded from file
+App.tsx:173 Loaded years: 5 events: 16
+Timeline.tsx:1122 PixiJS initialized with dual-container system
+fileStorage.ts:215 File written: 2025/2025-12-25 unnamed/_event.md
+fileStorage.ts:710 Database file written to storage folder
+writer.ts:185 Event created:  at 2025/2025-12-25 unnamed
+database.ts:135 Database size: 0.35MB
+database.ts:142 Database saved to localStorage successfully (verified)
+database.ts:908 Event updated: 8aea22d7-86f5-4109-b13c-54d52530ba19

@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Event, Item } from '../models/types'
 import heic2any from 'heic2any'
+import { MapPin, Clock } from 'lucide-react'
+import { readFileAsBlob } from '../db/fileStorage'
 
 // Check if file is HEIC format
 function isHeicFile(file: File): boolean {
@@ -24,6 +26,7 @@ interface EventPropertiesDialogProps {
   event: Event | null
   photoItems: Item[]  // Photo/video items in this event for dropdown
   isOpen: boolean
+  requireEndDate?: boolean  // If true, end date is required (for new events)
   onSave: (eventId: string, updates: {
     title?: string
     description?: string | null
@@ -34,11 +37,12 @@ interface EventPropertiesDialogProps {
     endAt?: string | null
   }) => void
   onCancel: () => void
+  onDelete?: (eventId: string) => void  // Optional delete handler
 }
 
 type FeaturedPhotoSource = 'none' | 'item' | 'custom'
 
-export function EventPropertiesDialog({ event, photoItems, isOpen, onSave, onCancel }: EventPropertiesDialogProps) {
+export function EventPropertiesDialog({ event, photoItems, isOpen, requireEndDate, onSave, onCancel, onDelete }: EventPropertiesDialogProps) {
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
   const [featuredPhotoSource, setFeaturedPhotoSource] = useState<FeaturedPhotoSource>('none')
@@ -52,6 +56,7 @@ export function EventPropertiesDialog({ event, photoItems, isOpen, onSave, onCan
   const [endTime, setEndTime] = useState('')
   const [showEndDate, setShowEndDate] = useState(false)
   const [showEndTime, setShowEndTime] = useState(false)
+  const [resolvedItemPreview, setResolvedItemPreview] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   // Reset form when event changes
@@ -119,6 +124,12 @@ export function EventPropertiesDialog({ event, photoItems, isOpen, onSave, onCan
           setShowEndTime(false)
           setEndTime('')
         }
+      } else if (requireEndDate) {
+        // For new events with requireEndDate, show end date with start date as default
+        setShowEndDate(true)
+        setEndDate(event.startAt?.split('T')[0] || '')
+        setShowEndTime(false)
+        setEndTime('')
       } else {
         setShowEndDate(false)
         setEndDate('')
@@ -126,7 +137,7 @@ export function EventPropertiesDialog({ event, photoItems, isOpen, onSave, onCan
         setEndTime('')
       }
     }
-  }, [event])
+  }, [event, requireEndDate])
 
   // Handle escape key
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
@@ -141,6 +152,52 @@ export function EventPropertiesDialog({ event, photoItems, isOpen, onSave, onCan
       return () => window.removeEventListener('keydown', handleKeyDown)
     }
   }, [isOpen, handleKeyDown])
+
+  // Resolve file reference for selected item preview
+  useEffect(() => {
+    if (featuredPhotoSource !== 'item' || !selectedPhotoItemId) {
+      setResolvedItemPreview(null)
+      return
+    }
+
+    const item = photoItems.find(i => i.id === selectedPhotoItemId)
+    if (!item?.content) {
+      setResolvedItemPreview(null)
+      return
+    }
+
+    // Check if content is a file reference
+    if (item.content.startsWith('file:')) {
+      // Parse file path: "file:2024/Event/photo.jpg"
+      const filePath = item.content.replace('file:', '')
+      const parts = filePath.split('/')
+      const fileName = parts.pop() || ''
+      const dirPath = parts
+
+      // Load the file
+      readFileAsBlob(dirPath, fileName).then(blob => {
+        if (blob) {
+          const url = URL.createObjectURL(blob)
+          setResolvedItemPreview(url)
+        } else {
+          setResolvedItemPreview(null)
+        }
+      }).catch(() => {
+        setResolvedItemPreview(null)
+      })
+
+      // Cleanup URL on unmount or change
+      return () => {
+        setResolvedItemPreview(prev => {
+          if (prev) URL.revokeObjectURL(prev)
+          return null
+        })
+      }
+    } else {
+      // Content is already a data URL
+      setResolvedItemPreview(item.content)
+    }
+  }, [featuredPhotoSource, selectedPhotoItemId, photoItems])
 
   // Handle custom photo upload
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -262,8 +319,8 @@ export function EventPropertiesDialog({ event, photoItems, isOpen, onSave, onCan
       return customPhotoData
     }
     if (featuredPhotoSource === 'item' && selectedPhotoItemId) {
-      const item = photoItems.find(i => i.id === selectedPhotoItemId)
-      return item?.content || null
+      // Use resolved preview for file references
+      return resolvedItemPreview
     }
     return null
   }
@@ -367,10 +424,7 @@ export function EventPropertiesDialog({ event, photoItems, isOpen, onSave, onCan
           <label style={styles.label}>Locatie</label>
           <div style={styles.locationRow}>
             <div style={styles.locationIcon}>
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" />
-                <circle cx="12" cy="10" r="3" />
-              </svg>
+              <MapPin size={18} />
             </div>
             <input
               type="text"
@@ -404,10 +458,7 @@ export function EventPropertiesDialog({ event, photoItems, isOpen, onSave, onCan
               }}
               title={showTime ? 'Tijd verbergen' : 'Tijd toevoegen'}
             >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <circle cx="12" cy="12" r="10" />
-                <polyline points="12 6 12 12 16 14" />
-              </svg>
+              <Clock size={18} />
             </button>
           </div>
           {showTime && (
@@ -422,25 +473,27 @@ export function EventPropertiesDialog({ event, photoItems, isOpen, onSave, onCan
 
         {/* End Date Toggle */}
         <div style={styles.field}>
-          <button
-            type="button"
-            style={{
-              ...styles.endDateToggle,
-              color: showEndDate ? '#5d7aa0' : '#888'
-            }}
-            onClick={() => {
-              setShowEndDate(!showEndDate)
-              if (!showEndDate) {
-                setEndDate(date)
-              }
-            }}
-          >
-            {showEndDate ? '- Einddatum verwijderen' : '+ Einddatum toevoegen'}
-          </button>
+          {!requireEndDate && (
+            <button
+              type="button"
+              style={{
+                ...styles.endDateToggle,
+                color: showEndDate ? '#5d7aa0' : '#888'
+              }}
+              onClick={() => {
+                setShowEndDate(!showEndDate)
+                if (!showEndDate) {
+                  setEndDate(date)
+                }
+              }}
+            >
+              {showEndDate ? '- Einddatum verwijderen' : '+ Einddatum toevoegen'}
+            </button>
+          )}
 
           {showEndDate && (
             <>
-              <label style={{ ...styles.label, marginTop: 12 }}>Einddatum</label>
+              <label style={{ ...styles.label, marginTop: requireEndDate ? 0 : 12 }}>Einddatum</label>
               <div style={styles.dateRow}>
                 <input
                   type="date"
@@ -461,10 +514,7 @@ export function EventPropertiesDialog({ event, photoItems, isOpen, onSave, onCan
                   }}
                   title={showEndTime ? 'Tijd verbergen' : 'Tijd toevoegen'}
                 >
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <circle cx="12" cy="12" r="10" />
-                    <polyline points="12 6 12 12 16 14" />
-                  </svg>
+                  <Clock size={18} />
                 </button>
               </div>
               {showEndTime && (
@@ -481,6 +531,19 @@ export function EventPropertiesDialog({ event, photoItems, isOpen, onSave, onCan
 
         {/* Actions */}
         <div style={styles.actions}>
+          {onDelete && event && (
+            <button
+              style={styles.deleteButton}
+              onClick={() => {
+                if (confirm('Weet je zeker dat je dit event wilt verwijderen? Alle items in dit event worden ook verwijderd.')) {
+                  onDelete(event.id)
+                }
+              }}
+            >
+              Verwijderen
+            </button>
+          )}
+          <div style={{ flex: 1 }} />
           <button style={styles.cancelButton} onClick={onCancel}>
             Annuleren
           </button>
@@ -666,6 +729,16 @@ const styles: Record<string, React.CSSProperties> = {
     gap: 12,
     justifyContent: 'flex-end',
     marginTop: 20,
+  },
+  deleteButton: {
+    padding: '10px 20px',
+    backgroundColor: '#d32f2f',
+    border: 'none',
+    borderRadius: 8,
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: 500,
+    cursor: 'pointer',
   },
   cancelButton: {
     padding: '10px 20px',

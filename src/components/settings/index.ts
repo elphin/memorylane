@@ -1,0 +1,5 @@
+export { SettingsModal } from './SettingsModal'
+export { SettingsStorage } from './SettingsStorage'
+export { SettingsCategories } from './SettingsCategories'
+export { SettingsAppearance } from './SettingsAppearance'
+export { SettingsAbout } from './SettingsAbout'
