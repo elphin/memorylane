@@ -1647,6 +1647,9 @@ function buildL1View(
   const monthLabelY = densityBarY + L1_DENSITY_BAR_HEIGHT / 2 + 12
   const eventLabelY = densityBarY - L1_DENSITY_BAR_HEIGHT / 2 - 28  // Labels above density bar
 
+  // Map to store label containers by event ID (for hover visibility)
+  const labelContainersByEventId = new Map<string, Container>()
+
   // ======= Layer 1: Month Labels & Separators =======
   const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 
@@ -1921,6 +1924,12 @@ function buildL1View(
       slice.fill({ color, alpha: 1 })
       slice.stroke({ width: 1, color: 0xffffff, alpha: 0.5 })
       tooltip.visible = true
+
+      // Show event label (accessed from Map created after labels are rendered)
+      const labelContainer = labelContainersByEventId.get(memory.eventId)
+      if (labelContainer) {
+        labelContainer.alpha = 1
+      }
     })
 
     sliceContainer.on('pointerout', () => {
@@ -1931,6 +1940,12 @@ function buildL1View(
         slice.stroke({ width: 1, color: 0xffffff, alpha: 0.2 })
       }
       tooltip.visible = false
+
+      // Hide event label
+      const labelContainer = labelContainersByEventId.get(memory.eventId)
+      if (labelContainer) {
+        labelContainer.alpha = 0
+      }
     })
 
     // Click to open parent event
@@ -2019,13 +2034,14 @@ function buildL1View(
     labelPositions.push({ cluster, x: clusterCenterX, y: finalY })
   })
 
-  // Render event labels
+  // Render event labels (hidden by default, shown on slice hover)
   labelPositions.forEach(({ cluster, x, y }) => {
     const labelContainer = new Container()
     labelContainer.x = x
     labelContainer.y = y
     labelContainer.eventMode = 'static'
     labelContainer.cursor = 'pointer'
+    labelContainer.alpha = 0  // Hidden by default
 
     const labelText = new Text({
       text: cluster.event.title || 'Untitled',
@@ -2040,18 +2056,23 @@ function buildL1View(
     labelText.x = -labelText.width / 2
     labelContainer.addChild(labelText)
 
-    // Hover effect
+    // Hover effect (when label itself is hovered)
     labelContainer.on('pointerover', () => {
       labelText.style.fill = 0xaaccee
+      labelContainer.alpha = 1  // Keep visible while hovering the label itself
     })
     labelContainer.on('pointerout', () => {
       labelText.style.fill = 0x88aacc
+      labelContainer.alpha = 0  // Hide when mouse leaves label
     })
 
     // Click to open event
     labelContainer.on('pointertap', () => {
       onEventClick(cluster.event, x)
     })
+
+    // Store in Map for slice hover access
+    labelContainersByEventId.set(cluster.event.id, labelContainer)
 
     container.addChild(labelContainer)
   })
@@ -2192,6 +2213,12 @@ function buildL1View(
       slice.fill({ color: multiDayEventColor, alpha: 0.9 })
       slice.stroke({ width: 2, color: 0xffffff, alpha: 0.8 })
       tooltip.visible = true
+
+      // Show event label
+      const labelContainer = labelContainersByEventId.get(event.id)
+      if (labelContainer) {
+        labelContainer.alpha = 1
+      }
     })
 
     sliceContainer.on('pointerout', () => {
@@ -2200,6 +2227,12 @@ function buildL1View(
       slice.fill({ color: multiDayEventColor, alpha: 0.7 })
       slice.stroke({ width: 2, color: multiDayEventColor, alpha: 1 })
       tooltip.visible = false
+
+      // Hide event label
+      const labelContainer = labelContainersByEventId.get(event.id)
+      if (labelContainer) {
+        labelContainer.alpha = 0
+      }
     })
 
     // Click to open event
