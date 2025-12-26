@@ -1,7 +1,10 @@
 import { useEffect, useRef, useCallback, forwardRef, useImperativeHandle, useState } from 'react'
 import { Application, Container, Graphics, Text, TextStyle, Sprite, Texture } from 'pixi.js'
-import { Event, ZoomLevel, ViewState, Item, CanvasItem, ItemType } from '../models/types'
-import { getItemsByEvent, getCanvasItems, upsertCanvasItem, getMemoriesForYear, getEventClustersForYear, getItemById } from '../db/database'
+import { Event, ZoomLevel, ViewState, Item, CanvasItem, ItemType, YearFeaturedPhoto, CategoryConfig, DEFAULT_CATEGORY_COLORS } from '../models/types'
+import { getMeta } from '../db/database'
+import { getItemsByEvent, getCanvasItems, upsertCanvasItem, getMemoriesForYear, getEventClustersForYear, getItemById, getYearFeaturedPhotos, upsertYearFeaturedPhoto, getEventById, getRandomPhotosForYear } from '../db/database'
+import { TimelineFilterSettings, DEFAULT_TIMELINE_FILTERS } from '../models/types'
+import { v4 as uuidv4 } from 'uuid'
 import { updateCanvasItemWithFiles, saveCanvasLayout } from '../db/sync/writer'
 import { hasStorageFolder, readFileAsBlob } from '../db/fileStorage'
 import { getThumbnail, type ThumbnailSize } from '../db/thumbnailCache'
@@ -41,6 +44,12 @@ const ITEM_TYPE_COLORS: Record<ItemType, number> = {
   audio: 0xE91E63,   // Pink
 }
 
+// Featured photo constants
+const FEATURED_PHOTO_WIDTH = 120       // Default width
+const FEATURED_PHOTO_HEIGHT = 90       // Default height (4:3 aspect)
+const FEATURED_PHOTO_ZONE_OFFSET = 80  // Min distance from density bar
+const DRAG_HANDLE_SIZE = 32            // Size of drag handle thumbnail
+
 // L2 Canvas constants
 const CANVAS_ITEM_WIDTH = 200
 const CANVAS_ITEM_HEIGHT = 150
@@ -59,6 +68,40 @@ const ZOOM_OUT_SCALE = 1.3 // How much to zoom out from during exit transition
 
 // Text resolution for sharp scaling
 const TEXT_RESOLUTION = 3
+
+// Helper to convert hex color string to number for PixiJS
+function hexToNumber(hex: string): number {
+  // Remove # if present
+  const cleanHex = hex.replace('#', '')
+  return parseInt(cleanHex, 16)
+}
+
+// Helper to get category color (from custom settings or defaults)
+function getCategoryColor(categoryId: string | undefined): number {
+  if (!categoryId) return 0x666688  // Default gray-blue
+
+  // Try to load custom categories from localStorage
+  const savedCats = getMeta('custom_categories')
+  if (savedCats) {
+    try {
+      const parsed: CategoryConfig[] = JSON.parse(savedCats)
+      const category = parsed.find(c => c.id === categoryId)
+      if (category?.color) {
+        return hexToNumber(category.color)
+      }
+    } catch {
+      // Use defaults
+    }
+  }
+
+  // Fall back to default colors
+  const defaultColor = DEFAULT_CATEGORY_COLORS[categoryId]
+  if (defaultColor) {
+    return hexToNumber(defaultColor)
+  }
+
+  return 0x666688  // Default gray-blue
+}
 
 interface DropPosition {
   x: number
@@ -145,6 +188,11 @@ export const Timeline = forwardRef<TimelineRef, TimelineProps>(function Timeline
 
   // Content bounds for elastic scrolling (half-width from center)
   const contentBoundsRef = useRef({ minX: -500, maxX: 500 })
+
+  // Year navigation via edge drag
+  const yearNavThreshold = 150  // Pixels past edge to trigger navigation
+  const yearNavDirectionRef = useRef<'prev' | 'next' | null>(null)
+  const yearNavOvershootRef = useRef(0)
 
   // Refs for data (to avoid stale closures)
   const yearsRef = useRef(years)
@@ -1226,6 +1274,10 @@ export const Timeline = forwardRef<TimelineRef, TimelineProps>(function Timeline
 
     const childEvents = eventsRef.current.filter(e => e.parentId === focusedYearRef.current?.id)
     activeState.container.removeChildren()
+
+    // Create a stable reference that can be called recursively
+    const doRebuild = () => rebuildL1View()
+
     const bounds = buildL1View(
       activeState.container,
       focusedYearRef.current,
@@ -1233,7 +1285,8 @@ export const Timeline = forwardRef<TimelineRef, TimelineProps>(function Timeline
       l1InternalScaleRef.current,
       (event, centerX) => {
         handleEventClickRef.current?.(event, centerX)
-      }
+      },
+      doRebuild
     )
     contentBoundsRef.current = bounds
   }, [getActiveState])
@@ -1327,10 +1380,27 @@ export const Timeline = forwardRef<TimelineRef, TimelineProps>(function Timeline
 
         // Apply elastic resistance when dragging past bounds
         let effectiveDx = moveDx
-        if (activeState.x > maxContainerX && moveDx > 0) {
-          effectiveDx = moveDx * ELASTIC_FACTOR
-        } else if (activeState.x < minContainerX && moveDx < 0) {
-          effectiveDx = moveDx * ELASTIC_FACTOR
+        let overshoot = 0
+        let direction: 'prev' | 'next' | null = null
+
+        if (activeState.x > maxContainerX) {
+          overshoot = activeState.x - maxContainerX
+          direction = 'prev'
+          if (moveDx > 0) {
+            effectiveDx = moveDx * ELASTIC_FACTOR
+          }
+        } else if (activeState.x < minContainerX) {
+          overshoot = minContainerX - activeState.x
+          direction = 'next'
+          if (moveDx < 0) {
+            effectiveDx = moveDx * ELASTIC_FACTOR
+          }
+        }
+
+        // Track year navigation state (only in L1)
+        if (viewStateRef.current.zoomLevel === ZoomLevel.L1_Year) {
+          yearNavOvershootRef.current = overshoot
+          yearNavDirectionRef.current = direction
         }
 
         activeState.targetX += effectiveDx
@@ -1358,6 +1428,35 @@ export const Timeline = forwardRef<TimelineRef, TimelineProps>(function Timeline
     isPotentialDragRef.current = false
     isDraggingRef.current = false
     pointerIdRef.current = null
+
+    // Year navigation via edge drag (L1 only)
+    if (wasDragging && viewStateRef.current.zoomLevel === ZoomLevel.L1_Year) {
+      const overshoot = yearNavOvershootRef.current
+      const direction = yearNavDirectionRef.current
+
+      if (overshoot > yearNavThreshold && direction && focusedYearRef.current) {
+        // Find adjacent year
+        const sortedYears = [...yearsRef.current].sort((a, b) =>
+          new Date(a.startAt).getTime() - new Date(b.startAt).getTime()
+        )
+        const currentIdx = sortedYears.findIndex(y => y.id === focusedYearRef.current?.id)
+
+        if (currentIdx !== -1) {
+          const targetYear = direction === 'prev'
+            ? sortedYears[currentIdx - 1]
+            : sortedYears[currentIdx + 1]
+
+          if (targetYear && handleYearClickRef.current) {
+            // Navigate to adjacent year using the year click handler
+            handleYearClickRef.current(targetYear, 0)
+          }
+        }
+      }
+
+      // Reset navigation state
+      yearNavOvershootRef.current = 0
+      yearNavDirectionRef.current = null
+    }
 
     // Click-to-go-back: if it was a click (not a drag) and we're not on L0
     if (wasPotentialDrag && !wasDragging && !isTransitioningRef.current) {
@@ -1566,7 +1665,8 @@ function buildL1View(
   year: Event,
   childEvents: Event[],
   scale: number,
-  onEventClick: (event: Event, eventCenterX: number) => void
+  onEventClick: (event: Event, eventCenterX: number) => void,
+  onRebuild?: () => void
 ): { minX: number; maxX: number } {
   // Get memories and event clusters for this year
   const memories = getMemoriesForYear(year.id)
@@ -1798,6 +1898,149 @@ function buildL1View(
     hitArea.fill({ color: 0x000000, alpha: 0 })
     sliceContainer.addChild(hitArea)
 
+    // Drag handle for photo items - appears on hover
+    let dragHandle: Container | null = null
+    if (memory.itemType === 'photo') {
+      dragHandle = new Container()
+      dragHandle.x = width / 2
+      dragHandle.y = densityBarY - L1_DENSITY_BAR_HEIGHT / 2 - DRAG_HANDLE_SIZE / 2 - 8
+      dragHandle.alpha = 0  // Hidden by default
+      dragHandle.eventMode = 'static'
+      dragHandle.cursor = 'grab'
+
+      // Drag handle background
+      const handleBg = new Graphics()
+      handleBg.roundRect(-DRAG_HANDLE_SIZE / 2, -DRAG_HANDLE_SIZE / 2, DRAG_HANDLE_SIZE, DRAG_HANDLE_SIZE, 6)
+      handleBg.fill({ color: 0x333355, alpha: 0.95 })
+      handleBg.stroke({ width: 2, color: 0x5577aa })
+      dragHandle.addChild(handleBg)
+
+      // Photo icon in the handle
+      const photoIcon = new Graphics()
+      const iconSize = DRAG_HANDLE_SIZE * 0.5
+      photoIcon.roundRect(-iconSize / 2, -iconSize / 2, iconSize, iconSize * 0.7, 2)
+      photoIcon.stroke({ width: 1.5, color: 0xaaccff })
+      // Camera lens circle
+      photoIcon.circle(-iconSize / 4, -iconSize * 0.1, iconSize * 0.15)
+      photoIcon.fill({ color: 0xaaccff })
+      dragHandle.addChild(photoIcon)
+
+      // Drag state tracking
+      let isDragging = false
+      let dragGhost: Container | null = null
+
+      dragHandle.on('pointerdown', (e) => {
+        isDragging = true
+        dragHandle!.cursor = 'grabbing'
+
+        // Create drag ghost (a smaller version of the photo)
+        dragGhost = new Container()
+        const ghostBg = new Graphics()
+        ghostBg.roundRect(-FEATURED_PHOTO_WIDTH / 2, -FEATURED_PHOTO_HEIGHT / 2, FEATURED_PHOTO_WIDTH, FEATURED_PHOTO_HEIGHT, 6)
+        ghostBg.fill({ color: 0x222244, alpha: 0.8 })
+        ghostBg.stroke({ width: 2, color: 0x5577aa })
+        dragGhost.addChild(ghostBg)
+
+        // Position ghost at mouse
+        const localPos = container.toLocal(e.global)
+        dragGhost.x = localPos.x
+        dragGhost.y = localPos.y
+        dragGhost.alpha = 0.7
+
+        // Add indicator text
+        const indicatorText = new Text({
+          text: 'Drop boven/onder timeline',
+          style: new TextStyle({
+            fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif',
+            fontSize: 10,
+            fill: 0xaaccff,
+          }),
+          resolution: TEXT_RESOLUTION,
+        })
+        indicatorText.x = -indicatorText.width / 2
+        indicatorText.y = FEATURED_PHOTO_HEIGHT / 2 + 8
+        dragGhost.addChild(indicatorText)
+
+        container.addChild(dragGhost)
+      })
+
+      dragHandle.on('globalpointermove', (e) => {
+        if (!isDragging || !dragGhost) return
+
+        const localPos = container.toLocal(e.global)
+        dragGhost.x = localPos.x
+        dragGhost.y = localPos.y
+
+        // Visual feedback: change color based on valid drop zone
+        const inDropZone = localPos.y < densityBarY - FEATURED_PHOTO_ZONE_OFFSET ||
+                          localPos.y > densityBarY + FEATURED_PHOTO_ZONE_OFFSET
+        const ghostBg = dragGhost.children[0] as Graphics
+        ghostBg.clear()
+        ghostBg.roundRect(-FEATURED_PHOTO_WIDTH / 2, -FEATURED_PHOTO_HEIGHT / 2, FEATURED_PHOTO_WIDTH, FEATURED_PHOTO_HEIGHT, 6)
+        if (inDropZone) {
+          ghostBg.fill({ color: 0x335544, alpha: 0.9 })
+          ghostBg.stroke({ width: 2, color: 0x66aa88 })
+        } else {
+          ghostBg.fill({ color: 0x222244, alpha: 0.8 })
+          ghostBg.stroke({ width: 2, color: 0x5577aa })
+        }
+      })
+
+      dragHandle.on('pointerup', (e) => {
+        if (!isDragging) return
+        isDragging = false
+        dragHandle!.cursor = 'grab'
+
+        if (dragGhost) {
+          const localPos = container.toLocal(e.global)
+
+          // Check if dropped in valid zone
+          const inDropZone = localPos.y < densityBarY - FEATURED_PHOTO_ZONE_OFFSET ||
+                            localPos.y > densityBarY + FEATURED_PHOTO_ZONE_OFFSET
+
+          if (inDropZone) {
+            // Create featured photo entry
+            const featuredId = uuidv4()
+            const now = new Date().toISOString()
+
+            const newFeaturedPhoto: YearFeaturedPhoto = {
+              id: featuredId,
+              yearId: year.id,
+              eventId: memory.eventId,
+              itemId: memory.itemId,
+              x: localPos.x,
+              y: localPos.y,
+              scale: 1,
+              width: FEATURED_PHOTO_WIDTH,
+              height: FEATURED_PHOTO_HEIGHT,
+              createdAt: now,
+              updatedAt: now,
+            }
+
+            upsertYearFeaturedPhoto(newFeaturedPhoto)
+
+            // Rebuild view to show the new featured photo
+            if (onRebuild) onRebuild()
+          }
+
+          // Remove ghost
+          container.removeChild(dragGhost)
+          dragGhost = null
+        }
+      })
+
+      dragHandle.on('pointerupoutside', () => {
+        isDragging = false
+        dragHandle!.cursor = 'grab'
+        if (dragGhost) {
+          container.removeChild(dragGhost)
+          dragGhost = null
+        }
+      })
+
+      sliceContainer.addChild(dragHandle)
+    }
+
     // Tooltip (hidden by default)
     const tooltip = new Container()
     tooltip.visible = false
@@ -1925,6 +2168,11 @@ function buildL1View(
       slice.stroke({ width: 1, color: 0xffffff, alpha: 0.5 })
       tooltip.visible = true
 
+      // Show drag handle for photos
+      if (dragHandle) {
+        dragHandle.alpha = 1
+      }
+
       // Show event label (accessed from Map created after labels are rendered)
       const labelContainer = labelContainersByEventId.get(memory.eventId)
       if (labelContainer) {
@@ -1940,6 +2188,11 @@ function buildL1View(
         slice.stroke({ width: 1, color: 0xffffff, alpha: 0.2 })
       }
       tooltip.visible = false
+
+      // Hide drag handle for photos
+      if (dragHandle) {
+        dragHandle.alpha = 0
+      }
 
       // Hide event label
       const labelContainer = labelContainersByEventId.get(memory.eventId)
@@ -2420,7 +2673,382 @@ function buildL1View(
     container.addChild(sliceContainer)
   })
 
-  // ======= Layer 6: Tooltip Layer (on top of everything) =======
+  // ======= Layer 6: Featured Photos (above/below timeline) =======
+  const featuredPhotoLayer = new Container()
+  const connectionLineLayer = new Container()
+
+  // Load featured photos for this year
+  const featuredPhotos = getYearFeaturedPhotos(year.id)
+
+  // Render featured photos with connection lines
+  featuredPhotos.forEach((fp) => {
+    // Get the source event to find the photo content
+    const sourceEvent = getEventById(fp.eventId)
+    if (!sourceEvent) return
+
+    // Get the photo content and item for category (from event's featured photo or first photo item)
+    let photoContent: string | null = null
+    let sourceItem: Item | null = null
+    if (sourceEvent.featuredPhotoData) {
+      photoContent = sourceEvent.featuredPhotoData
+    } else if (fp.itemId) {
+      const item = getItemById(fp.itemId)
+      if (item && item.itemType === 'photo') {
+        photoContent = item.content
+        sourceItem = item
+      }
+    }
+    if (!photoContent) return
+
+    // Get the category color for the connection line
+    const categoryColor = getCategoryColor(sourceItem?.category)
+
+    // Calculate source X position (where the event is on the timeline)
+    const eventTimestamp = new Date(sourceEvent.startAt).getTime()
+    const sourceX = timestampToX(eventTimestamp)
+
+    // Create photo container
+    const photoContainer = new Container()
+    photoContainer.x = fp.x
+    photoContainer.y = fp.y
+    photoContainer.eventMode = 'static'
+    photoContainer.cursor = 'grab'
+
+    // Photo background
+    const photoBg = new Graphics()
+    photoBg.roundRect(-fp.width / 2, -fp.height / 2, fp.width, fp.height, 6)
+    photoBg.fill({ color: 0x222233 })
+    photoBg.stroke({ width: 2, color: 0x444466 })
+    photoContainer.addChild(photoBg)
+
+    // Load and display thumbnail
+    const loadThumbnail = async () => {
+      try {
+        let blob: Blob | null = null
+        let filePath: string = ''
+
+        const isFileRef = photoContent!.startsWith('file:')
+        const isDataUrl = photoContent!.startsWith('data:')
+
+        if (isFileRef) {
+          // Parse file path: "file:2024/Event/photo.jpg"
+          filePath = photoContent!.replace('file:', '')
+          const pathParts = filePath.split('/')
+          const fileName = pathParts.pop()!
+          const dirPath = pathParts
+
+          // Get blob directly from file system
+          blob = await readFileAsBlob(dirPath, fileName)
+        } else if (isDataUrl) {
+          // Convert data URL to blob
+          const response = await fetch(photoContent!)
+          blob = await response.blob()
+          filePath = `dataurl:${fp.id}`
+        }
+
+        if (!blob) {
+          console.warn('Failed to load image blob for featured photo:', fp.id)
+          return
+        }
+
+        // Get thumbnail (hardware-accelerated and cached)
+        const bitmap = await getThumbnail(filePath, blob, 'medium')
+
+        // Create sprite from ImageBitmap
+        const texture = Texture.from(bitmap)
+        const sprite = new Sprite(texture)
+
+        // Scale to fit container
+        const scale = Math.min(fp.width / bitmap.width, fp.height / bitmap.height)
+        sprite.width = bitmap.width * scale
+        sprite.height = bitmap.height * scale
+        sprite.x = -sprite.width / 2
+        sprite.y = -sprite.height / 2
+
+        // Create mask for rounded corners
+        const mask = new Graphics()
+        mask.roundRect(-fp.width / 2, -fp.height / 2, fp.width, fp.height, 6)
+        mask.fill({ color: 0xffffff })
+        sprite.mask = mask
+
+        photoContainer.addChild(mask)
+        photoContainer.addChild(sprite)
+      } catch (err) {
+        console.error('Failed to load featured photo thumbnail:', err)
+      }
+    }
+    loadThumbnail()
+
+    // Connection line from photo to source slice (using category color)
+    const line = new Graphics()
+
+    // Calculate bezier curve control points
+    const startY = fp.y > 0 ? -fp.height / 2 : fp.height / 2  // Bottom or top of photo
+    const endY = fp.y > 0
+      ? densityBarY + L1_DENSITY_BAR_HEIGHT / 2  // Below: connect to bottom of bar
+      : densityBarY - L1_DENSITY_BAR_HEIGHT / 2  // Above: connect to top of bar
+
+    // Draw bezier curve
+    line.moveTo(fp.x, fp.y + startY)
+    const controlY = (fp.y + startY + endY) / 2
+    line.bezierCurveTo(
+      fp.x, controlY,  // First control point
+      sourceX, controlY,  // Second control point
+      sourceX, endY  // End point
+    )
+    line.stroke({ width: 1, color: categoryColor, alpha: 0.4 })
+
+    connectionLineLayer.addChild(line)
+
+    // Hover effects
+    photoContainer.on('pointerover', () => {
+      photoBg.clear()
+      photoBg.roundRect(-fp.width / 2, -fp.height / 2, fp.width, fp.height, 6)
+      photoBg.fill({ color: 0x333344 })
+      photoBg.stroke({ width: 2, color: 0x6688aa })
+
+      // Highlight connection line
+      line.clear()
+      line.moveTo(fp.x, fp.y + startY)
+      line.bezierCurveTo(fp.x, controlY, sourceX, controlY, sourceX, endY)
+      line.stroke({ width: 2, color: categoryColor, alpha: 0.8 })
+
+      // Show event label
+      const labelContainer = labelContainersByEventId.get(fp.eventId)
+      if (labelContainer) {
+        labelContainer.alpha = 1
+      }
+    })
+
+    photoContainer.on('pointerout', () => {
+      photoBg.clear()
+      photoBg.roundRect(-fp.width / 2, -fp.height / 2, fp.width, fp.height, 6)
+      photoBg.fill({ color: 0x222233 })
+      photoBg.stroke({ width: 2, color: 0x444466 })
+
+      // Restore connection line
+      line.clear()
+      line.moveTo(fp.x, fp.y + startY)
+      line.bezierCurveTo(fp.x, controlY, sourceX, controlY, sourceX, endY)
+      line.stroke({ width: 1, color: categoryColor, alpha: 0.4 })
+
+      // Hide event label
+      const labelContainer = labelContainersByEventId.get(fp.eventId)
+      if (labelContainer) {
+        labelContainer.alpha = 0
+      }
+    })
+
+    // Click to open event
+    photoContainer.on('pointertap', () => {
+      if (sourceEvent) {
+        onEventClick(sourceEvent, sourceX)
+      }
+    })
+
+    // TODO: Add drag to reposition and resize handles
+
+    featuredPhotoLayer.addChild(photoContainer)
+  })
+
+  // ======= Layer 6b: Random Photo Fill =======
+  const randomPhotoLayer = new Container()
+
+  // Load filter settings from localStorage
+  const FILTER_STORAGE_KEY = 'timeline_filter_settings'
+  let filterSettings: TimelineFilterSettings = DEFAULT_TIMELINE_FILTERS
+  try {
+    const savedSettings = localStorage.getItem(FILTER_STORAGE_KEY)
+    if (savedSettings) {
+      filterSettings = { ...DEFAULT_TIMELINE_FILTERS, ...JSON.parse(savedSettings) }
+    }
+  } catch {
+    // Use defaults
+  }
+
+  // Only render random photos if enabled in settings
+  if (filterSettings.showRandomFill) {
+    // Get random photos for this year (filtered by settings)
+    const randomPhotos = getRandomPhotosForYear(
+      year.id,
+      {
+        categories: filterSettings.categories.length > 0 ? filterSettings.categories : undefined,
+        tags: filterSettings.tags.length > 0 ? filterSettings.tags : undefined,
+        people: filterSettings.people.length > 0 ? filterSettings.people : undefined,
+      },
+      filterSettings.maxRandomPhotos
+    )
+
+    // Calculate positions for random photos (avoid overlapping with featured photos)
+    const RANDOM_PHOTO_WIDTH = 80
+    const RANDOM_PHOTO_HEIGHT = 60
+    const usedPositions: { x: number; y: number; w: number; h: number }[] = []
+
+    // Add featured photo positions to used list
+    featuredPhotos.forEach((fp) => {
+      usedPositions.push({
+        x: fp.x - fp.width / 2,
+        y: fp.y - fp.height / 2,
+        w: fp.width,
+        h: fp.height,
+      })
+    })
+
+    // Check if a position overlaps with existing photos
+    const isOverlapping = (x: number, y: number, w: number, h: number): boolean => {
+      for (const pos of usedPositions) {
+        if (x < pos.x + pos.w && x + w > pos.x &&
+            y < pos.y + pos.h && y + h > pos.y) {
+          return true
+        }
+      }
+      return false
+    }
+
+    // Find a random position that doesn't overlap
+    const findPosition = (): { x: number; y: number } | null => {
+      const maxAttempts = 50
+      for (let i = 0; i < maxAttempts; i++) {
+        // Random X across the timeline
+        const x = (Math.random() - 0.5) * effectiveWidth * 0.9
+        // Random Y above or below the timeline
+        const aboveOrBelow = Math.random() > 0.5 ? -1 : 1
+        const yOffset = FEATURED_PHOTO_ZONE_OFFSET + Math.random() * 150
+        const y = aboveOrBelow * yOffset
+
+        if (!isOverlapping(x - RANDOM_PHOTO_WIDTH / 2, y - RANDOM_PHOTO_HEIGHT / 2, RANDOM_PHOTO_WIDTH, RANDOM_PHOTO_HEIGHT)) {
+          return { x, y }
+        }
+      }
+      return null
+    }
+
+    // Render random photos
+    randomPhotos.forEach((photo) => {
+      const position = findPosition()
+      if (!position) return  // No available position
+
+      // Mark position as used
+      usedPositions.push({
+        x: position.x - RANDOM_PHOTO_WIDTH / 2,
+        y: position.y - RANDOM_PHOTO_HEIGHT / 2,
+        w: RANDOM_PHOTO_WIDTH,
+        h: RANDOM_PHOTO_HEIGHT,
+      })
+
+      // Create photo container
+      const photoContainer = new Container()
+      photoContainer.x = position.x
+      photoContainer.y = position.y
+      photoContainer.eventMode = 'static'
+      photoContainer.cursor = 'pointer'
+      photoContainer.alpha = 0.6  // Slightly faded to distinguish from featured
+
+      // Photo background
+      const photoBg = new Graphics()
+      photoBg.roundRect(-RANDOM_PHOTO_WIDTH / 2, -RANDOM_PHOTO_HEIGHT / 2, RANDOM_PHOTO_WIDTH, RANDOM_PHOTO_HEIGHT, 4)
+      photoBg.fill({ color: 0x1a1a2e, alpha: 0.8 })
+      photoBg.stroke({ width: 1, color: 0x333355 })
+      photoContainer.addChild(photoBg)
+
+      // Get category color for this random photo
+      const randomCategoryColor = getCategoryColor(photo.category)
+
+      // Load and display thumbnail
+      const loadRandomThumbnail = async () => {
+        try {
+          let blob: Blob | null = null
+          let filePath: string = ''
+
+          const isFileRef = photo.content.startsWith('file:')
+          const isDataUrl = photo.content.startsWith('data:')
+
+          if (isFileRef) {
+            filePath = photo.content.replace('file:', '')
+            const pathParts = filePath.split('/')
+            const fileName = pathParts.pop()!
+            const dirPath = pathParts
+            blob = await readFileAsBlob(dirPath, fileName)
+          } else if (isDataUrl) {
+            const response = await fetch(photo.content)
+            blob = await response.blob()
+            filePath = `dataurl:${photo.itemId}`
+          }
+
+          if (!blob) return
+
+          // Use small thumbnail for random photos
+          const bitmap = await getThumbnail(filePath, blob, 'small')
+
+          const texture = Texture.from(bitmap)
+          const sprite = new Sprite(texture)
+
+          const scale = Math.min(RANDOM_PHOTO_WIDTH / bitmap.width, RANDOM_PHOTO_HEIGHT / bitmap.height)
+          sprite.width = bitmap.width * scale
+          sprite.height = bitmap.height * scale
+          sprite.x = -sprite.width / 2
+          sprite.y = -sprite.height / 2
+
+          const mask = new Graphics()
+          mask.roundRect(-RANDOM_PHOTO_WIDTH / 2, -RANDOM_PHOTO_HEIGHT / 2, RANDOM_PHOTO_WIDTH, RANDOM_PHOTO_HEIGHT, 4)
+          mask.fill({ color: 0xffffff })
+          sprite.mask = mask
+
+          photoContainer.addChild(mask)
+          photoContainer.addChild(sprite)
+        } catch (err) {
+          console.error('Failed to load random photo thumbnail:', err)
+        }
+      }
+      loadRandomThumbnail()
+
+      // Hover effects
+      photoContainer.on('pointerover', () => {
+        photoContainer.alpha = 1
+        photoBg.clear()
+        photoBg.roundRect(-RANDOM_PHOTO_WIDTH / 2, -RANDOM_PHOTO_HEIGHT / 2, RANDOM_PHOTO_WIDTH, RANDOM_PHOTO_HEIGHT, 4)
+        photoBg.fill({ color: 0x222244 })
+        photoBg.stroke({ width: 2, color: randomCategoryColor })
+
+        // Show event label
+        const labelContainer = labelContainersByEventId.get(photo.eventId)
+        if (labelContainer) {
+          labelContainer.alpha = 1
+        }
+      })
+
+      photoContainer.on('pointerout', () => {
+        photoContainer.alpha = 0.6
+        photoBg.clear()
+        photoBg.roundRect(-RANDOM_PHOTO_WIDTH / 2, -RANDOM_PHOTO_HEIGHT / 2, RANDOM_PHOTO_WIDTH, RANDOM_PHOTO_HEIGHT, 4)
+        photoBg.fill({ color: 0x1a1a2e, alpha: 0.8 })
+        photoBg.stroke({ width: 1, color: 0x333355 })
+
+        // Hide event label
+        const labelContainer = labelContainersByEventId.get(photo.eventId)
+        if (labelContainer) {
+          labelContainer.alpha = 0
+        }
+      })
+
+      // Click to open event
+      photoContainer.on('pointertap', () => {
+        const event = getEventById(photo.eventId)
+        if (event) {
+          onEventClick(event, timestampToX(photo.timestamp))
+        }
+      })
+
+      randomPhotoLayer.addChild(photoContainer)
+    })
+  }
+
+  // Add layers in order
+  container.addChild(connectionLineLayer)
+  container.addChild(randomPhotoLayer)
+  container.addChild(featuredPhotoLayer)
+
+  // ======= Layer 7: Tooltip Layer (on top of everything) =======
   container.addChild(tooltipLayer)
 
   // Return content bounds (based on effective width)
