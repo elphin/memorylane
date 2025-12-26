@@ -1,5 +1,6 @@
 export { SettingsModal } from './SettingsModal'
 export { SettingsStorage } from './SettingsStorage'
 export { SettingsCategories } from './SettingsCategories'
+export { SettingsTimelineFilters } from './SettingsTimelineFilters'
 export { SettingsAppearance } from './SettingsAppearance'
 export { SettingsAbout } from './SettingsAbout'

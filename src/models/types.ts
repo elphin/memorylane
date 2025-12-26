@@ -2,12 +2,28 @@ export type EventType = 'year' | 'period' | 'event' | 'item'
 export type ItemType = 'text' | 'photo' | 'video' | 'link' | 'audio'
 export type ItemCategory = 'persoonlijk' | 'werk' | 'familie' | 'creatief' | 'vakantie'
 
-export const ITEM_CATEGORIES: { value: ItemCategory; label: string }[] = [
-  { value: 'persoonlijk', label: 'Persoonlijk' },
-  { value: 'werk', label: 'Werk' },
-  { value: 'familie', label: 'Familie' },
-  { value: 'creatief', label: 'Creatief' },
-  { value: 'vakantie', label: 'Vakantie' },
+// Category configuration with colors
+export interface CategoryConfig {
+  id: string
+  label: string
+  color: string  // HEX kleur, bijv. "#4CAF50"
+}
+
+// Default category colors
+export const DEFAULT_CATEGORY_COLORS: Record<string, string> = {
+  'persoonlijk': '#64B5F6',  // Blauw
+  'werk': '#81C784',         // Groen
+  'familie': '#FFB74D',      // Oranje
+  'creatief': '#BA68C8',     // Paars
+  'vakantie': '#4DD0E1',     // Cyan
+}
+
+export const ITEM_CATEGORIES: CategoryConfig[] = [
+  { id: 'persoonlijk', label: 'Persoonlijk', color: '#64B5F6' },
+  { id: 'werk', label: 'Werk', color: '#81C784' },
+  { id: 'familie', label: 'Familie', color: '#FFB74D' },
+  { id: 'creatief', label: 'Creatief', color: '#BA68C8' },
+  { id: 'vakantie', label: 'Vakantie', color: '#4DD0E1' },
 ]
 
 export interface Location {
@@ -107,4 +123,37 @@ export interface L1EventCluster {
   memories: L1Memory[]
   startTimestamp: number
   endTimestamp: number
+}
+
+// Year Timeline Featured Photos
+export interface YearFeaturedPhoto {
+  id: string
+  yearId: string           // Year event ID
+  eventId: string          // Source event ID (for connection line)
+  itemId?: string          // Optional specific item ID
+  x: number                // X position relative to year timeline center
+  y: number                // Y position (positive = above, negative = below)
+  scale: number            // Size scale (1 = default)
+  width: number            // Rendered width
+  height: number           // Rendered height
+  createdAt: string
+  updatedAt: string
+}
+
+// Timeline filter settings (stored in localStorage)
+export interface TimelineFilterSettings {
+  categories: string[]     // Enabled category IDs (empty = all)
+  tags: string[]           // Enabled tags (empty = all)
+  people: string[]         // Enabled people (empty = all)
+  showRandomFill: boolean  // Enable random photo fill
+  maxRandomPhotos: number  // Max random photos per year (default: 20)
+}
+
+// Default timeline filter settings
+export const DEFAULT_TIMELINE_FILTERS: TimelineFilterSettings = {
+  categories: [],          // Empty = show all
+  tags: [],
+  people: [],
+  showRandomFill: true,
+  maxRandomPhotos: 20,
 }

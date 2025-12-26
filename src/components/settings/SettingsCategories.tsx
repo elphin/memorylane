@@ -1,26 +1,30 @@
 import { useState, useEffect } from 'react'
 import { Plus, Pencil, Trash2, Check, X } from 'lucide-react'
 import { getMeta, setMeta } from '../../db/database'
+import { ITEM_CATEGORIES, CategoryConfig } from '../../models/types'
 
-interface CategoryConfig {
-  id: string
-  label: string
-}
-
-const DEFAULT_CATEGORIES: CategoryConfig[] = [
-  { id: 'persoonlijk', label: 'Persoonlijk' },
-  { id: 'werk', label: 'Werk' },
-  { id: 'familie', label: 'Familie' },
-  { id: 'creatief', label: 'Creatief' },
-  { id: 'vakantie', label: 'Vakantie' },
+// Preset colors for easy selection
+const PRESET_COLORS = [
+  '#64B5F6', // Blue
+  '#81C784', // Green
+  '#FFB74D', // Orange
+  '#BA68C8', // Purple
+  '#4DD0E1', // Cyan
+  '#F06292', // Pink
+  '#FFD54F', // Yellow
+  '#A1887F', // Brown
+  '#90A4AE', // Gray
+  '#FF8A65', // Deep Orange
 ]
 
 export function SettingsCategories() {
-  const [categories, setCategories] = useState<CategoryConfig[]>(DEFAULT_CATEGORIES)
+  const [categories, setCategories] = useState<CategoryConfig[]>(ITEM_CATEGORIES)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editingLabel, setEditingLabel] = useState('')
+  const [editingColor, setEditingColor] = useState('')
   const [isAdding, setIsAdding] = useState(false)
   const [newLabel, setNewLabel] = useState('')
+  const [newColor, setNewColor] = useState(PRESET_COLORS[0])
 
   // Load categories from database
   useEffect(() => {
@@ -47,23 +51,34 @@ export function SettingsCategories() {
   const handleEdit = (cat: CategoryConfig) => {
     setEditingId(cat.id)
     setEditingLabel(cat.label)
+    setEditingColor(cat.color || PRESET_COLORS[0])
   }
 
   // Save edit
   const handleSaveEdit = () => {
     if (!editingId || !editingLabel.trim()) return
     const updated = categories.map(cat =>
-      cat.id === editingId ? { ...cat, label: editingLabel.trim() } : cat
+      cat.id === editingId ? { ...cat, label: editingLabel.trim(), color: editingColor } : cat
     )
     saveCategories(updated)
     setEditingId(null)
     setEditingLabel('')
+    setEditingColor('')
   }
 
   // Cancel edit
   const handleCancelEdit = () => {
     setEditingId(null)
     setEditingLabel('')
+    setEditingColor('')
+  }
+
+  // Update color only (without full edit mode)
+  const handleColorChange = (catId: string, color: string) => {
+    const updated = categories.map(cat =>
+      cat.id === catId ? { ...cat, color } : cat
+    )
+    saveCategories(updated)
   }
 
   // Delete category
@@ -81,15 +96,16 @@ export function SettingsCategories() {
     if (categories.some(cat => cat.id === id)) {
       return
     }
-    const updated = [...categories, { id, label: newLabel.trim() }]
+    const updated = [...categories, { id, label: newLabel.trim(), color: newColor }]
     saveCategories(updated)
     setNewLabel('')
+    setNewColor(PRESET_COLORS[0])
     setIsAdding(false)
   }
 
   // Reset to defaults
   const handleReset = () => {
-    saveCategories(DEFAULT_CATEGORIES)
+    saveCategories(ITEM_CATEGORIES)
   }
 
   return (
@@ -105,29 +121,56 @@ export function SettingsCategories() {
             <div key={cat.id} style={styles.categoryItem}>
               {editingId === cat.id ? (
                 // Edit mode
-                <div style={styles.editRow}>
-                  <input
-                    type="text"
-                    value={editingLabel}
-                    onChange={(e) => setEditingLabel(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') handleSaveEdit()
-                      if (e.key === 'Escape') handleCancelEdit()
-                    }}
-                    style={styles.editInput}
-                    autoFocus
-                  />
-                  <button style={styles.iconButton} onClick={handleSaveEdit}>
-                    <Check size={16} color="#4ade80" />
-                  </button>
-                  <button style={styles.iconButton} onClick={handleCancelEdit}>
-                    <X size={16} color="#888" />
-                  </button>
+                <div style={styles.editContainer}>
+                  <div style={styles.editRow}>
+                    <input
+                      type="text"
+                      value={editingLabel}
+                      onChange={(e) => setEditingLabel(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') handleSaveEdit()
+                        if (e.key === 'Escape') handleCancelEdit()
+                      }}
+                      style={styles.editInput}
+                      autoFocus
+                    />
+                    <button style={styles.iconButton} onClick={handleSaveEdit}>
+                      <Check size={16} color="#4ade80" />
+                    </button>
+                    <button style={styles.iconButton} onClick={handleCancelEdit}>
+                      <X size={16} color="#888" />
+                    </button>
+                  </div>
+                  <div style={styles.colorPicker}>
+                    {PRESET_COLORS.map(color => (
+                      <button
+                        key={color}
+                        style={{
+                          ...styles.colorSwatch,
+                          backgroundColor: color,
+                          ...(editingColor === color ? styles.colorSwatchSelected : {}),
+                        }}
+                        onClick={() => setEditingColor(color)}
+                      />
+                    ))}
+                  </div>
                 </div>
               ) : (
                 // View mode
                 <div style={styles.viewRow}>
-                  <span style={styles.categoryLabel}>{cat.label}</span>
+                  <div style={styles.labelWithColor}>
+                    <div style={styles.colorDot} >
+                      <input
+                        type="color"
+                        value={cat.color || PRESET_COLORS[0]}
+                        onChange={(e) => handleColorChange(cat.id, e.target.value)}
+                        style={styles.colorInput}
+                        title="Klik om kleur te wijzigen"
+                      />
+                      <span style={{ ...styles.colorDotInner, backgroundColor: cat.color || PRESET_COLORS[0] }} />
+                    </div>
+                    <span style={styles.categoryLabel}>{cat.label}</span>
+                  </div>
                   <div style={styles.actions}>
                     <button style={styles.iconButton} onClick={() => handleEdit(cat)}>
                       <Pencil size={14} />
@@ -148,31 +191,48 @@ export function SettingsCategories() {
           {/* Add new */}
           {isAdding ? (
             <div style={styles.categoryItem}>
-              <div style={styles.editRow}>
-                <input
-                  type="text"
-                  value={newLabel}
-                  onChange={(e) => setNewLabel(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') handleAdd()
-                    if (e.key === 'Escape') {
-                      setIsAdding(false)
-                      setNewLabel('')
-                    }
-                  }}
-                  placeholder="Nieuwe categorie..."
-                  style={styles.editInput}
-                  autoFocus
-                />
-                <button style={styles.iconButton} onClick={handleAdd}>
-                  <Check size={16} color="#4ade80" />
-                </button>
-                <button style={styles.iconButton} onClick={() => {
-                  setIsAdding(false)
-                  setNewLabel('')
-                }}>
-                  <X size={16} color="#888" />
-                </button>
+              <div style={styles.editContainer}>
+                <div style={styles.editRow}>
+                  <input
+                    type="text"
+                    value={newLabel}
+                    onChange={(e) => setNewLabel(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleAdd()
+                      if (e.key === 'Escape') {
+                        setIsAdding(false)
+                        setNewLabel('')
+                        setNewColor(PRESET_COLORS[0])
+                      }
+                    }}
+                    placeholder="Nieuwe categorie..."
+                    style={styles.editInput}
+                    autoFocus
+                  />
+                  <button style={styles.iconButton} onClick={handleAdd}>
+                    <Check size={16} color="#4ade80" />
+                  </button>
+                  <button style={styles.iconButton} onClick={() => {
+                    setIsAdding(false)
+                    setNewLabel('')
+                    setNewColor(PRESET_COLORS[0])
+                  }}>
+                    <X size={16} color="#888" />
+                  </button>
+                </div>
+                <div style={styles.colorPicker}>
+                  {PRESET_COLORS.map(color => (
+                    <button
+                      key={color}
+                      style={{
+                        ...styles.colorSwatch,
+                        backgroundColor: color,
+                        ...(newColor === color ? styles.colorSwatchSelected : {}),
+                      }}
+                      onClick={() => setNewColor(color)}
+                    />
+                  ))}
+                </div>
               </div>
             </div>
           ) : (
@@ -233,6 +293,35 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: 'center',
     justifyContent: 'space-between',
   },
+  labelWithColor: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+  },
+  colorDot: {
+    position: 'relative',
+    width: 20,
+    height: 20,
+    cursor: 'pointer',
+  },
+  colorDotInner: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    width: 20,
+    height: 20,
+    borderRadius: '50%',
+    pointerEvents: 'none',
+  },
+  colorInput: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    width: 20,
+    height: 20,
+    opacity: 0,
+    cursor: 'pointer',
+  },
   categoryLabel: {
     fontSize: 14,
     color: '#fff',
@@ -241,6 +330,11 @@ const styles: Record<string, React.CSSProperties> = {
   actions: {
     display: 'flex',
     gap: 4,
+  },
+  editContainer: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 10,
   },
   editRow: {
     display: 'flex',
@@ -256,6 +350,23 @@ const styles: Record<string, React.CSSProperties> = {
     color: '#fff',
     fontSize: 14,
     outline: 'none',
+  },
+  colorPicker: {
+    display: 'flex',
+    gap: 6,
+    flexWrap: 'wrap',
+  },
+  colorSwatch: {
+    width: 24,
+    height: 24,
+    borderRadius: 4,
+    border: '2px solid transparent',
+    cursor: 'pointer',
+    transition: 'transform 0.1s, border-color 0.1s',
+  },
+  colorSwatchSelected: {
+    borderColor: '#fff',
+    transform: 'scale(1.1)',
   },
   iconButton: {
     display: 'flex',

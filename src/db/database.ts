@@ -1,4 +1,4 @@
-import { Event, Item, CanvasItem, L1Memory, L1EventCluster, ItemType } from '../models/types'
+import { Event, Item, CanvasItem, L1Memory, L1EventCluster, ItemType, YearFeaturedPhoto } from '../models/types'
 import { v4 as uuidv4 } from 'uuid'
 import { hasStorageFolder, writeDatabaseFile } from './fileStorage'
 
@@ -103,12 +103,28 @@ const SCHEMA = `
     value TEXT NOT NULL
   );
 
+  -- Year timeline featured photos
+  CREATE TABLE IF NOT EXISTS year_featured_photos (
+    id TEXT PRIMARY KEY,
+    year_id TEXT NOT NULL REFERENCES events(id),
+    event_id TEXT NOT NULL REFERENCES events(id),
+    item_id TEXT REFERENCES items(id),
+    x REAL NOT NULL DEFAULT 0,
+    y REAL NOT NULL DEFAULT -100,
+    scale REAL NOT NULL DEFAULT 1,
+    width REAL DEFAULT 120,
+    height REAL DEFAULT 90,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+
   CREATE INDEX IF NOT EXISTS idx_events_parent ON events(parent_id);
   CREATE INDEX IF NOT EXISTS idx_events_start ON events(start_at);
   CREATE INDEX IF NOT EXISTS idx_events_folder ON events(folder_path);
   CREATE INDEX IF NOT EXISTS idx_items_event ON items(event_id);
   CREATE INDEX IF NOT EXISTS idx_items_slug ON items(slug);
   CREATE INDEX IF NOT EXISTS idx_canvas_event ON canvas_items(event_id);
+  CREATE INDEX IF NOT EXISTS idx_year_featured_year ON year_featured_photos(year_id);
 `
 
 const DB_STORAGE_KEY = 'memorylane_db'
@@ -308,10 +324,26 @@ function migrateDatabase(database: SqlJsDatabase): void {
         value TEXT NOT NULL
       )
     `)
+    database.run(`
+      CREATE TABLE IF NOT EXISTS year_featured_photos (
+        id TEXT PRIMARY KEY,
+        year_id TEXT NOT NULL REFERENCES events(id),
+        event_id TEXT NOT NULL REFERENCES events(id),
+        item_id TEXT REFERENCES items(id),
+        x REAL NOT NULL DEFAULT 0,
+        y REAL NOT NULL DEFAULT -100,
+        scale REAL NOT NULL DEFAULT 1,
+        width REAL DEFAULT 120,
+        height REAL DEFAULT 90,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    `)
     // Create indexes if not exist
     database.run('CREATE INDEX IF NOT EXISTS idx_events_folder ON events(folder_path)')
     database.run('CREATE INDEX IF NOT EXISTS idx_items_slug ON items(slug)')
     database.run('CREATE INDEX IF NOT EXISTS idx_canvas_event ON canvas_items(event_id)')
+    database.run('CREATE INDEX IF NOT EXISTS idx_year_featured_year ON year_featured_photos(year_id)')
   } catch (err) {
     // Tables might already exist
     console.log('Tables/indexes already exist or migration skipped')
@@ -1734,4 +1766,198 @@ export function searchMemories(query: string, filters?: SearchFilters): SearchRe
   })
 
   return results.slice(0, 50) // Limit total results
+}
+
+// ============================================================================
+// Year Featured Photos operations
+// ============================================================================
+
+export function getYearFeaturedPhotos(yearId: string): YearFeaturedPhoto[] {
+  if (!db) return []
+
+  const stmt = db.prepare(`
+    SELECT id, year_id, event_id, item_id, x, y, scale, width, height, created_at, updated_at
+    FROM year_featured_photos WHERE year_id = ?
+  `)
+  stmt.bind([yearId])
+
+  const photos: YearFeaturedPhoto[] = []
+  while (stmt.step()) {
+    const row = stmt.get()
+    photos.push({
+      id: row[0] as string,
+      yearId: row[1] as string,
+      eventId: row[2] as string,
+      itemId: row[3] as string | undefined,
+      x: row[4] as number,
+      y: row[5] as number,
+      scale: row[6] as number,
+      width: row[7] as number,
+      height: row[8] as number,
+      createdAt: row[9] as string,
+      updatedAt: row[10] as string,
+    })
+  }
+  stmt.free()
+  return photos
+}
+
+export function upsertYearFeaturedPhoto(photo: YearFeaturedPhoto): void {
+  if (!db) throw new Error('Database not initialized')
+
+  db.run(
+    `INSERT OR REPLACE INTO year_featured_photos
+     (id, year_id, event_id, item_id, x, y, scale, width, height, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      photo.id,
+      photo.yearId,
+      photo.eventId,
+      photo.itemId ?? null,
+      photo.x,
+      photo.y,
+      photo.scale,
+      photo.width,
+      photo.height,
+      photo.createdAt,
+      photo.updatedAt,
+    ]
+  )
+  saveToStorage()
+}
+
+export function deleteYearFeaturedPhoto(id: string): void {
+  if (!db) return
+  db.run('DELETE FROM year_featured_photos WHERE id = ?', [id])
+  saveToStorage()
+}
+
+export function deleteYearFeaturedPhotosForEvent(eventId: string): void {
+  if (!db) return
+  db.run('DELETE FROM year_featured_photos WHERE event_id = ?', [eventId])
+  saveToStorage()
+}
+
+// ============================================================================
+// Random photos for year timeline
+// ============================================================================
+
+export interface RandomPhotoResult {
+  itemId: string
+  eventId: string
+  content: string
+  caption?: string
+  category?: string
+  timestamp: number
+}
+
+/**
+ * Get random photo items for a year, optionally filtered by categories/tags/people
+ */
+export function getRandomPhotosForYear(
+  yearId: string,
+  filters?: {
+    categories?: string[]
+    tags?: string[]
+    people?: string[]
+  },
+  limit: number = 20
+): RandomPhotoResult[] {
+  if (!db) return []
+
+  // Build filter conditions
+  const conditions: string[] = ['i.item_type = \'photo\'']
+  const params: unknown[] = [yearId]
+
+  if (filters?.categories && filters.categories.length > 0) {
+    const placeholders = filters.categories.map(() => '?').join(', ')
+    conditions.push(`i.category IN (${placeholders})`)
+    params.push(...filters.categories)
+  }
+
+  // Tags filter - JSON array stored as string, use LIKE for matching
+  if (filters?.tags && filters.tags.length > 0) {
+    const tagConditions = filters.tags.map(() => 'i.tags LIKE ?')
+    conditions.push(`(${tagConditions.join(' OR ')})`)
+    params.push(...filters.tags.map(t => `%"${t}"%`))
+  }
+
+  // People filter - JSON array stored as string, use LIKE for matching
+  if (filters?.people && filters.people.length > 0) {
+    const peopleConditions = filters.people.map(() => 'i.people LIKE ?')
+    conditions.push(`(${peopleConditions.join(' OR ')})`)
+    params.push(...filters.people.map(p => `%"${p}"%`))
+  }
+
+  params.push(limit)
+
+  const query = `
+    SELECT i.id, i.event_id, i.content, i.caption, i.category,
+           COALESCE(i.happened_at, e.start_at) as timestamp
+    FROM items i
+    INNER JOIN events e ON i.event_id = e.id
+    WHERE e.parent_id = ? AND ${conditions.join(' AND ')}
+    ORDER BY RANDOM()
+    LIMIT ?
+  `
+
+  const stmt = db.prepare(query)
+  stmt.bind(params)
+
+  const photos: RandomPhotoResult[] = []
+  while (stmt.step()) {
+    const row = stmt.get()
+    photos.push({
+      itemId: row[0] as string,
+      eventId: row[1] as string,
+      content: row[2] as string,
+      caption: row[3] as string | undefined,
+      category: row[4] as string | undefined,
+      timestamp: new Date(row[5] as string).getTime(),
+    })
+  }
+  stmt.free()
+  return photos
+}
+
+/**
+ * Get all unique tags used in items
+ */
+export function getAllTags(): string[] {
+  if (!db) return []
+
+  const result = db.exec('SELECT DISTINCT tags FROM items WHERE tags IS NOT NULL AND tags != \'[]\'')
+  if (!result[0]) return []
+
+  const tagSet = new Set<string>()
+  for (const row of result[0].values) {
+    try {
+      const tags = JSON.parse(row[0] as string) as string[]
+      tags.forEach(t => tagSet.add(t))
+    } catch {
+      // Skip invalid JSON
+    }
+  }
+  return Array.from(tagSet).sort()
+}
+
+/**
+ * Get all unique people names used in items
+ */
+export function getAllPeople(): string[] {
+  if (!db) return []
+
+  const result = db.exec('SELECT DISTINCT people FROM items WHERE people IS NOT NULL AND people != \'[]\'')
+  if (!result[0]) return []
+
+  const peopleSet = new Set<string>()
+  for (const row of result[0].values) {
+    try {
+      const people = JSON.parse(row[0] as string) as string[]
+      people.forEach(p => peopleSet.add(p))
+    } catch {
+      // Skip invalid JSON
+    }
+  }
+  return Array.from(peopleSet).sort()
 }

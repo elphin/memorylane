@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback } from 'react'
-import { X, HardDrive, Folder, Palette, Info } from 'lucide-react'
+import { X, HardDrive, Folder, Palette, Info, Filter } from 'lucide-react'
 import { SettingsStorage } from './SettingsStorage'
 import { SettingsCategories } from './SettingsCategories'
+import { SettingsTimelineFilters } from './SettingsTimelineFilters'
 import { SettingsAppearance } from './SettingsAppearance'
 import { SettingsAbout } from './SettingsAbout'
 
-type SettingsTab = 'storage' | 'categories' | 'appearance' | 'about'
+type SettingsTab = 'storage' | 'categories' | 'timeline' | 'appearance' | 'about'
 
 interface SettingsModalProps {
   isOpen: boolean
@@ -23,6 +24,7 @@ interface SettingsModalProps {
 const TABS: { id: SettingsTab; label: string; icon: typeof HardDrive }[] = [
   { id: 'storage', label: 'Opslag', icon: HardDrive },
   { id: 'categories', label: 'Categorieën', icon: Folder },
+  { id: 'timeline', label: 'Timeline', icon: Filter },
   { id: 'appearance', label: 'Weergave', icon: Palette },
   { id: 'about', label: 'Over', icon: Info },
 ]
@@ -105,6 +107,7 @@ export function SettingsModal({
             />
           )}
           {activeTab === 'categories' && <SettingsCategories />}
+          {activeTab === 'timeline' && <SettingsTimelineFilters />}
           {activeTab === 'appearance' && (
             <SettingsAppearance
               darkMode={darkMode}

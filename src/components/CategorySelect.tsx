@@ -1,20 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Folder } from 'lucide-react'
 import { getMeta } from '../db/database'
-
-// Default categories (fallback if no custom categories saved)
-const DEFAULT_CATEGORIES = [
-  { id: 'persoonlijk', label: 'Persoonlijk' },
-  { id: 'werk', label: 'Werk' },
-  { id: 'familie', label: 'Familie' },
-  { id: 'creatief', label: 'Creatief' },
-  { id: 'vakantie', label: 'Vakantie' },
-]
-
-interface CategoryConfig {
-  id: string
-  label: string
-}
+import { ITEM_CATEGORIES, CategoryConfig } from '../models/types'
 
 interface CategorySelectProps {
   value?: string
@@ -22,9 +9,9 @@ interface CategorySelectProps {
 }
 
 export function CategorySelect({ value, onChange }: CategorySelectProps) {
-  const [categories, setCategories] = useState<CategoryConfig[]>(DEFAULT_CATEGORIES)
+  const [categories, setCategories] = useState<CategoryConfig[]>(ITEM_CATEGORIES)
 
-  // Load categories from database
+  // Load categories from database (custom categories override defaults)
   useEffect(() => {
     const saved = getMeta('custom_categories')
     if (saved) {
@@ -52,10 +39,24 @@ export function CategorySelect({ value, onChange }: CategorySelectProps) {
             type="button"
             style={{
               ...styles.option,
-              ...(value === cat.id ? styles.optionSelected : {}),
+              ...(value === cat.id ? {
+                ...styles.optionSelected,
+                backgroundColor: cat.color ? `${cat.color}33` : '#3d5a80',
+                borderColor: cat.color || '#5d7aa0',
+              } : {}),
             }}
             onClick={() => onChange(value === cat.id ? undefined : cat.id)}
           >
+            {cat.color && (
+              <span style={{
+                display: 'inline-block',
+                width: 8,
+                height: 8,
+                borderRadius: '50%',
+                backgroundColor: cat.color,
+                marginRight: 6,
+              }} />
+            )}
             {cat.label}
           </button>
         ))}
