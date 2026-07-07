@@ -103,7 +103,9 @@ v1's formaat blijft leesbaar; v2 breidt uit zodat de vault volledig is:
 - EXIF/HEIC/video-thumbs; achtergrond-queue met voortgang-events. ffmpeg gebundeld.
 - Vroeg risico afdekken: libheif static build op Windows testen; HEVC-detectie + transcode-optie.
 
-**Fase 4 — Render-core (bewijslast: soepelheid)**
+**Fase 4 — Render-core (bewijslast: soepelheid)** ✅ *afgerond & gecommit (2 review-rondes, GO)*
+
+*Gate-resultaat op GTX 1070 Ti (rAF-gedreven, getextureerde scene mét uploads, vsync-onafhankelijke werk-kost-meting): p50 1.0ms, p95 1.9ms, **p99 (1%-low) 2.4ms**, p999 28.4ms (1 GC-outlier op 640 frames) → PASS met ~7× marge op het 16.6ms-budget. Meet CPU-werk per frame (GPU-rasterisatie async, verwaarloosbaar voor quads). Drie harness-bugs gefixt onderweg: request-storm (pending-lifecycle), zwart scherm (evict-in-use), request-storm bij ver uitzoomen (streamen alleen band ≥2). Openstaand schaalpunt voor fase 5: de harness houdt 1 persistente Sprite per ooit-zichtbare cel aan → voor de echte tijdlijn een sprite-pool/recycling nodig.*
 - Camera + gestures + ticker + texture-pipeline + LOD-manager.
 - **Gate:** gemeten op **Jims echte hardware (fase 0-inventarisatie)**, met 4K-belasting gesimuleerd via geforceerde renderer-resolutie/DPR als er geen 4K-scherm is: (a) 5.000 sprites pan/zoom, (b) decode→upload-storm tijdens snelle pan over foto-dense content, (c) LOD-crossfade met twee banden tegelijk. Criterium: **1%-low frametimes ≤ 16.6ms**. Fps/frametime-overlay in dev.
 
