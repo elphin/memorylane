@@ -109,8 +109,9 @@ v1's formaat blijft leesbaar; v2 breidt uit zodat de vault volledig is:
 - Camera + gestures + ticker + texture-pipeline + LOD-manager.
 - **Gate:** gemeten op **Jims echte hardware (fase 0-inventarisatie)**, met 4K-belasting gesimuleerd via geforceerde renderer-resolutie/DPR als er geen 4K-scherm is: (a) 5.000 sprites pan/zoom, (b) decode→upload-storm tijdens snelle pan over foto-dense content, (c) LOD-crossfade met twee banden tegelijk. Criterium: **1%-low frametimes ≤ 16.6ms**. Fps/frametime-overlay in dev.
 
-**Fase 5 — L0 + L1 op echte data**
-- Lifeline met featured foto's (uit `_year.md`) + verbindingslijnen; jaar-view met densiteit, clusters, random-fill collage; jaar-navigatie. First-run/lege-vault-flow in de UI.
+**Fase 5 — L0 + L1 op echte data** ✅ *kern afgerond & gecommit (2 review-rondes, GO); zie uitgestelde items*
+- **Gebouwd:** L0-lifeline (jaar-tegels met cover-heuristiek = eerste gedateerde foto + cover-fit/mask), L1-jaarcollage (alle foto's/video's van het jaar, scrapbook-jitter/rotatie, culling + streaming), zoom-gedreven transities (tap→in, uitzoomen→terug), first-run vault-picker (dialog-plugin), lege/fout-staten. Backend-abstractie (Tauri-invoke + browser-mock). Geverifieerd in de mock; Tauri-runtime = handmatige smoke-test.
+- **Bewust uitgesteld naar fase 5b/later (geen polish maar aparte features):** echte `featuredPhotos`-curatie uit `_year.md` + verbindingslijnen (L0), densiteitsbalk + event-clusters (L1), jaar-navigatie (swipe volgend/vorig jaar), transitie-animaties, sprite-pooling/virtualisatie voor jaren met duizenden foto's.
 
 **Fase 6 — L2 event-canvas**
 - Automatische collage (eerst: grid + jitter), drag met physics, tekstblokjes/trefwoorden, knijp-uit, swipe naar volgend event.

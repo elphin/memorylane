@@ -62,6 +62,7 @@ pub fn run() {
     }
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .register_asynchronous_uri_scheme_protocol("thumb", move |ctx, request, responder| {
             let job = ThumbJob {
                 app: ctx.app_handle().clone(),
@@ -101,6 +102,7 @@ pub fn run() {
             commands::get_year,
             commands::get_event,
             commands::get_timeline_density,
+            commands::get_year_photos,
             commands::get_index_errors,
         ])
         .run(tauri::generate_context!())

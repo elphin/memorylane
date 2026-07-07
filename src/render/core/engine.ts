@@ -25,6 +25,9 @@ export class RenderEngine {
   /** Scene-hook, elke frame ná de camera-transform. */
   onFrame?: (ctx: FrameContext) => void
 
+  /** Tap-hook met wereldcoördinaten (voor hit-testing van tegels). */
+  onTap?: (worldX: number, worldY: number) => void
+
   private frame = 0
   private initialized = false
   private destroyed = false
@@ -55,6 +58,10 @@ export class RenderEngine {
       this.camera,
       () => this.viewport(),
       () => {},
+      (sx, sy) => {
+        const w = this.camera.screenToWorld(sx, sy, this.viewport())
+        this.onTap?.(w.x, w.y)
+      },
     )
 
     this.app.ticker.add(this.tick, undefined, UPDATE_PRIORITY.HIGH)

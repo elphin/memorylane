@@ -23,11 +23,16 @@ export class GestureController {
   private vx = 0
   private vy = 0
 
+  private downPos: PointerPos = { x: 0, y: 0 }
+  private downId = -1
+
   constructor(
     private canvas: HTMLCanvasElement,
     private camera: Camera,
     private getVp: () => Viewport,
     private onChange: () => void,
+    /** Aangeroepen bij een tap (klik zonder noemenswaardige beweging). */
+    private onTap?: (sx: number, sy: number) => void,
   ) {
     canvas.addEventListener('wheel', this.onWheel, { passive: false })
     canvas.addEventListener('pointerdown', this.onPointerDown)
@@ -69,13 +74,20 @@ export class GestureController {
   }
 
   private onPointerDown = (e: PointerEvent): void => {
-    this.canvas.setPointerCapture(e.pointerId)
+    // setPointerCapture kan gooien bij synthetische events; niet fataal.
+    try {
+      this.canvas.setPointerCapture(e.pointerId)
+    } catch {
+      /* genegeerd */
+    }
     const p = this.localPos(e)
     this.pointers.set(e.pointerId, p)
     if (this.pointers.size === 1) {
       this.dragging = true
       this.lastDrag = p
       this.lastMove = { x: 0, y: 0 }
+      this.downPos = p
+      this.downId = e.pointerId
       this.vx = 0
       this.vy = 0
     } else if (this.pointers.size === 2) {
@@ -114,9 +126,18 @@ export class GestureController {
     }
     if (this.pointers.size === 0 && this.dragging) {
       this.dragging = false
-      // Start inertie vanaf de laatste bewegingssnelheid.
-      this.vx = this.lastMove.x
-      this.vy = this.lastMove.y
+      // Tap: losgelaten pointer, nauwelijks bewogen → klik i.p.v. pan.
+      const p = this.localPos(e)
+      const moved = Math.hypot(p.x - this.downPos.x, p.y - this.downPos.y)
+      if (e.pointerId === this.downId && moved < 6) {
+        this.onTap?.(p.x, p.y)
+        this.vx = 0
+        this.vy = 0
+      } else {
+        // Start inertie vanaf de laatste bewegingssnelheid.
+        this.vx = this.lastMove.x
+        this.vy = this.lastMove.y
+      }
     } else if (this.pointers.size === 1) {
       // Terug naar één vinger: hervat drag vanaf de resterende pointer.
       const [pos] = [...this.pointers.values()]

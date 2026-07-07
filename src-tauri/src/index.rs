@@ -175,6 +175,8 @@ pub struct YearSummary {
     pub end_at: Option<String>,
     pub event_count: i64,
     pub item_count: i64,
+    /// Representatieve foto voor de lifeline-tegel (eerste gedateerde foto).
+    pub cover_item_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -204,6 +206,15 @@ pub struct EventDetail {
     pub canvas: Vec<CanvasItem>,
 }
 
+/// Een foto/video van een jaar voor de L1-collage (ook ongedateerde items).
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct YearPhoto {
+    pub item_id: String,
+    pub item_type: ItemType,
+    pub event_id: String,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DensityPoint {
@@ -220,7 +231,10 @@ pub fn list_years(conn: &Connection) -> rusqlite::Result<Vec<YearSummary>> {
     let mut stmt = conn.prepare(
         "SELECT y.id, y.year, y.title, y.start_at, y.end_at,
              (SELECT count(*) FROM events e WHERE e.year_id = y.id),
-             (SELECT count(*) FROM items i JOIN events e ON i.event_id = e.id WHERE e.year_id = y.id)
+             (SELECT count(*) FROM items i JOIN events e ON i.event_id = e.id WHERE e.year_id = y.id),
+             (SELECT i.id FROM items i JOIN events e ON i.event_id = e.id
+                 WHERE e.year_id = y.id AND i.item_type = 'photo'
+                 ORDER BY (i.timestamp_ms IS NULL), i.timestamp_ms LIMIT 1)
          FROM years y ORDER BY y.year",
     )?;
     let rows = stmt.query_map([], |r| {
@@ -232,6 +246,7 @@ pub fn list_years(conn: &Connection) -> rusqlite::Result<Vec<YearSummary>> {
             end_at: r.get(4)?,
             event_count: r.get(5)?,
             item_count: r.get(6)?,
+            cover_item_id: r.get(7)?,
         })
     })?;
     rows.collect()
@@ -406,6 +421,27 @@ pub fn put_hash(
         params![path, mtime_ms, size, hash],
     )?;
     Ok(())
+}
+
+/// Alle foto's/video's van een jaar voor de L1-collage. Anders dan de density
+/// (die getimestampte items op de tijdlijn plaatst) neemt dit ook ONgedateerde
+/// items mee, zodat een jaar vol foto's zonder EXIF-datum niet leeg oogt.
+pub fn list_year_photos(conn: &Connection, year_id: &str) -> rusqlite::Result<Vec<YearPhoto>> {
+    let mut stmt = conn.prepare(
+        "SELECT i.id, i.item_type, i.event_id
+         FROM items i JOIN events e ON i.event_id = e.id
+         WHERE e.year_id = ?1 AND i.item_type IN ('photo', 'video')
+         ORDER BY (i.timestamp_ms IS NULL), i.timestamp_ms, i.slug",
+    )?;
+    let rows = stmt.query_map(params![year_id], |r| {
+        let t: String = r.get(1)?;
+        Ok(YearPhoto {
+            item_id: r.get(0)?,
+            item_type: ItemType::parse(&t).unwrap_or(ItemType::Photo),
+            event_id: r.get(2)?,
+        })
+    })?;
+    rows.collect()
 }
 
 pub fn get_index_errors(conn: &Connection) -> rusqlite::Result<Vec<IndexError>> {
@@ -588,6 +624,7 @@ mod tests {
         assert_eq!(years.len(), 1);
         assert_eq!(years[0].event_count, 1);
         assert_eq!(years[0].item_count, 1);
+        assert_eq!(years[0].cover_item_id.as_deref(), Some("it1"));
 
         let yd = get_year(&conn, "y2024").unwrap().unwrap();
         assert_eq!(yd.events.len(), 1);
@@ -632,6 +669,38 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn year_photos_include_undated() {
+        let mut m = sample_model();
+        // Voeg een foto zonder timestamp toe aan hetzelfde event.
+        m.items.push(Item {
+            id: "it2".into(),
+            event_id: "ev1".into(),
+            item_type: ItemType::Photo,
+            media: Some("geen-datum.jpg".into()),
+            url: None,
+            caption: None,
+            happened_at: None,
+            timestamp_ms: None,
+            place: None,
+            people: vec![],
+            tags: vec![],
+            category: None,
+            body_text: None,
+            slug: Some("geen-datum".into()),
+            synthetic: false,
+        });
+        let mut conn = open_in_memory().unwrap();
+        load(&mut conn, &m).unwrap();
+
+        // Density laat de ongedateerde foto weg...
+        assert_eq!(get_timeline_density(&conn, "y2024").unwrap().len(), 1);
+        // ...maar de collage-query neemt beide mee.
+        let photos = list_year_photos(&conn, "y2024").unwrap();
+        assert_eq!(photos.len(), 2);
+        assert!(photos.iter().any(|p| p.item_id == "it2"));
     }
 
     #[test]
