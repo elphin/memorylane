@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 
 use crate::index::{self, DensityPoint, EventDetail, YearDetail, YearSummary};
+use crate::media::{self, cache::Tier};
 use crate::model::{IndexError, VaultModel};
 use crate::vault;
 
@@ -62,6 +63,66 @@ impl VaultService {
         let conn = self.conn.lock().map_err(lock_err)?;
         f(&conn).map_err(|e| e.to_string())
     }
+
+    /// Resolveert een item naar zijn bronmedia en zorgt dat de thumbnail voor
+    /// `tier` op schijf staat; geeft het cache-pad terug. Gebruikt de
+    /// content-hash-memo om her-hashen van ongewijzigde bestanden te vermijden.
+    pub fn resolve_thumb(
+        &self,
+        cache_root: &Path,
+        item_id: &str,
+        tier: Tier,
+    ) -> Result<PathBuf, String> {
+        let (folder, media) = {
+            let conn = self.conn.lock().map_err(lock_err)?;
+            index::item_media_ref(&conn, item_id)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("geen media voor item {item_id}"))?
+        };
+
+        let vault = {
+            let guard = self.vault_path.lock().map_err(lock_err)?;
+            guard.clone().ok_or("geen vault ingesteld")?
+        };
+        let src = vault.join(&folder).join(&media);
+        let meta = std::fs::metadata(&src).map_err(|e| format!("media niet leesbaar: {e}"))?;
+
+        // Containment: het bronbestand moet binnen de vault liggen. Beschermt
+        // tegen een gecraft `media:`-veld met `../` dat buiten de vault leest.
+        let canon_src = std::fs::canonicalize(&src).map_err(|e| e.to_string())?;
+        let canon_vault = std::fs::canonicalize(&vault).map_err(|e| e.to_string())?;
+        if !canon_src.starts_with(&canon_vault) {
+            return Err(format!("media buiten de vault geweigerd: {media}"));
+        }
+
+        let size = meta.len() as i64;
+        let mtime = mtime_ms(&meta);
+        let src_key = src.to_string_lossy().to_string();
+
+        // Content-hash via memo (of berekenen + opslaan).
+        let hash = {
+            let conn = self.conn.lock().map_err(lock_err)?;
+            match index::cached_hash(&conn, &src_key, mtime, size).map_err(|e| e.to_string())? {
+                Some(h) => h,
+                None => {
+                    let h = media::hash::hash_file(&src).map_err(|e| e.to_string())?;
+                    index::put_hash(&conn, &src_key, mtime, size, &h).map_err(|e| e.to_string())?;
+                    h
+                }
+            }
+        };
+
+        media::thumbs::ensure_thumb(&src, tier, cache_root, &hash).map_err(|e| e.to_string())
+    }
+}
+
+/// Modificatietijd in ms sinds epoch (0 als onbeschikbaar).
+fn mtime_ms(meta: &std::fs::Metadata) -> i64 {
+    meta.modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 /// Samenvatting van een indexeer-run, terug naar de UI.
@@ -196,4 +257,103 @@ pub fn get_timeline_density(
 #[tauri::command]
 pub fn get_index_errors(state: State<VaultService>) -> Result<Vec<IndexError>, String> {
     state.with_conn(index::get_index_errors)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use image::RgbImage;
+
+    /// Bouwt een mini-vault met één foto-item en indexeert die.
+    fn service_with_photo(root: &Path) -> VaultService {
+        std::fs::create_dir_all(root.join("2024/2024-01-01 test")).unwrap();
+        std::fs::write(
+            root.join("2024/_year.md"),
+            "---\nid: y24\ntype: year\ntitle: \"2024\"\nstartAt: 2024-01-01\n---\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("2024/2024-01-01 test/_event.md"),
+            "---\nid: ev1\ntype: event\ntitle: Test\nstartAt: 2024-01-01\n---\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("2024/2024-01-01 test/foto.md"),
+            "---\nid: photo1\ntype: photo\nmedia: foto.jpg\ncaption: Test\n---\n",
+        )
+        .unwrap();
+        RgbImage::from_fn(500, 300, |x, _| image::Rgb([(x % 256) as u8, 100, 150]))
+            .save(root.join("2024/2024-01-01 test/foto.jpg"))
+            .unwrap();
+
+        let service = VaultService::new().unwrap();
+        service.reindex_path(root).unwrap();
+        service
+    }
+
+    #[test]
+    fn resolve_thumb_generates_and_caches() {
+        let tmp = tempfile::tempdir().unwrap();
+        let service = service_with_photo(tmp.path());
+        let cache = tmp.path().join("cache");
+
+        let p = service
+            .resolve_thumb(&cache, "photo1", Tier::Micro)
+            .unwrap();
+        assert!(p.exists(), "thumbnail moet gegenereerd zijn");
+
+        // Tweede aanroep: gebruikt de hash-memo, zelfde pad.
+        let p2 = service
+            .resolve_thumb(&cache, "photo1", Tier::Micro)
+            .unwrap();
+        assert_eq!(p, p2);
+
+        // De hash is gememoiseerd in de index.
+        let conn = service.conn.lock().unwrap();
+        let count: i64 = conn
+            .query_row("SELECT count(*) FROM media_hash", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn resolve_thumb_unknown_item_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        let service = service_with_photo(tmp.path());
+        let cache = tmp.path().join("cache");
+        assert!(service.resolve_thumb(&cache, "nope", Tier::Small).is_err());
+    }
+
+    #[test]
+    fn resolve_thumb_rejects_path_traversal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("vault");
+        std::fs::create_dir_all(root.join("2024/2024-01-01 test")).unwrap();
+        std::fs::write(
+            root.join("2024/_year.md"),
+            "---\nid: y24\ntype: year\ntitle: \"2024\"\nstartAt: 2024-01-01\n---\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("2024/2024-01-01 test/_event.md"),
+            "---\nid: ev1\ntype: event\ntitle: Test\nstartAt: 2024-01-01\n---\n",
+        )
+        .unwrap();
+        // Gecraft item dat naar buiten de vault wijst.
+        std::fs::write(
+            root.join("2024/2024-01-01 test/evil.md"),
+            "---\nid: evil\ntype: photo\nmedia: ../../../secret.jpg\n---\n",
+        )
+        .unwrap();
+        // Bestand buiten de vault dat het zou proberen te lezen.
+        RgbImage::from_fn(10, 10, |_, _| image::Rgb([0u8, 0, 0]))
+            .save(tmp.path().join("secret.jpg"))
+            .unwrap();
+
+        let service = VaultService::new().unwrap();
+        service.reindex_path(&root).unwrap();
+        let cache = tmp.path().join("cache");
+        let result = service.resolve_thumb(&cache, "evil", Tier::Small);
+        assert!(result.is_err(), "path-traversal moet geweigerd worden");
+    }
 }

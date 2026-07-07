@@ -35,6 +35,11 @@ CREATE TABLE canvas_items (
     text_scale REAL, width REAL, height REAL
 );
 CREATE TABLE index_errors (path TEXT, severity TEXT, reason TEXT);
+-- Content-hash memo: vermijdt her-hashen van ongewijzigde media (mtime+size).
+-- Blijft bestaan over rebuilds heen (niet geleegd in `load`).
+CREATE TABLE media_hash (
+    path TEXT PRIMARY KEY, mtime_ms INTEGER NOT NULL, size INTEGER NOT NULL, hash TEXT NOT NULL
+);
 CREATE INDEX idx_events_year ON events(year_id);
 CREATE INDEX idx_items_event ON items(event_id);
 CREATE INDEX idx_items_ts ON items(timestamp_ms);
@@ -53,6 +58,8 @@ pub fn open_in_memory() -> rusqlite::Result<Connection> {
 /// Herbouwt de index volledig uit het model (idempotent).
 pub fn load(conn: &mut Connection, model: &VaultModel) -> rusqlite::Result<()> {
     let tx = conn.transaction()?;
+    // media_hash bewust NIET geleegd: het is een content-hash-cache die geldig
+    // blijft zolang mtime+size kloppen.
     tx.execute_batch(
         "DELETE FROM years; DELETE FROM events; DELETE FROM items;
          DELETE FROM canvas_items; DELETE FROM index_errors; DELETE FROM items_fts;",
@@ -348,6 +355,57 @@ pub fn get_timeline_density(
         })
     })?;
     rows.collect()
+}
+
+/// Vault-relatieve folder + mediabestandsnaam voor een item (voor `thumb://`).
+/// `None` als het item niet bestaat of geen media heeft.
+pub fn item_media_ref(
+    conn: &Connection,
+    item_id: &str,
+) -> rusqlite::Result<Option<(String, String)>> {
+    let row = conn
+        .query_row(
+            "SELECT e.folder_path, i.media
+             FROM items i JOIN events e ON i.event_id = e.id
+             WHERE i.id = ?1 AND i.media IS NOT NULL",
+            params![item_id],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+        )
+        .ok();
+    Ok(row)
+}
+
+/// Gememoiseerde content-hash voor `path`, geldig als mtime+size ongewijzigd.
+pub fn cached_hash(
+    conn: &Connection,
+    path: &str,
+    mtime_ms: i64,
+    size: i64,
+) -> rusqlite::Result<Option<String>> {
+    let hash = conn
+        .query_row(
+            "SELECT hash FROM media_hash WHERE path = ?1 AND mtime_ms = ?2 AND size = ?3",
+            params![path, mtime_ms, size],
+            |r| r.get::<_, String>(0),
+        )
+        .ok();
+    Ok(hash)
+}
+
+/// Slaat een content-hash op in de memo (upsert op pad).
+pub fn put_hash(
+    conn: &Connection,
+    path: &str,
+    mtime_ms: i64,
+    size: i64,
+    hash: &str,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO media_hash (path, mtime_ms, size, hash) VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(path) DO UPDATE SET mtime_ms = ?2, size = ?3, hash = ?4",
+        params![path, mtime_ms, size, hash],
+    )?;
+    Ok(())
 }
 
 pub fn get_index_errors(conn: &Connection) -> rusqlite::Result<Vec<IndexError>> {
