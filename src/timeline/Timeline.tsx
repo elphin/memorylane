@@ -2,7 +2,7 @@ import { useEffect, useRef, useCallback, forwardRef, useImperativeHandle, useSta
 import { Application, Container, Graphics, Text, TextStyle, Sprite, Texture } from 'pixi.js'
 import { Event, ZoomLevel, ViewState, Item, CanvasItem, ItemType, YearFeaturedPhoto, CategoryConfig, DEFAULT_CATEGORY_COLORS } from '../models/types'
 import { getMeta } from '../db/database'
-import { getItemsByEvent, getCanvasItems, upsertCanvasItem, getMemoriesForYear, getEventClustersForYear, getItemById, getYearFeaturedPhotos, upsertYearFeaturedPhoto, getEventById, getRandomPhotosForYear } from '../db/database'
+import { getItemsByEvent, getCanvasItems, upsertCanvasItem, getMemoriesForYear, getEventClustersForYear, getItemById, getYearFeaturedPhotos, upsertYearFeaturedPhoto, deleteYearFeaturedPhoto, getEventById, getRandomPhotosForYear } from '../db/database'
 import { TimelineFilterSettings, DEFAULT_TIMELINE_FILTERS } from '../models/types'
 import { v4 as uuidv4 } from 'uuid'
 import { updateCanvasItemWithFiles, saveCanvasLayout } from '../db/sync/writer'
@@ -45,10 +45,17 @@ const ITEM_TYPE_COLORS: Record<ItemType, number> = {
 }
 
 // Featured photo constants
-const FEATURED_PHOTO_WIDTH = 120       // Default width
-const FEATURED_PHOTO_HEIGHT = 90       // Default height (4:3 aspect)
+const FEATURED_PHOTO_WIDTH = 280       // Default width (2x random)
+const FEATURED_PHOTO_HEIGHT = 210      // Default height (4:3 aspect)
 const FEATURED_PHOTO_ZONE_OFFSET = 80  // Min distance from density bar
-const DRAG_HANDLE_SIZE = 32            // Size of drag handle thumbnail
+
+// Random photo collage size tiers (for organic varied layout)
+const COLLAGE_SIZES = {
+  hero:   { width: 240, height: 180 },  // ~15% of photos - attention grabbers
+  large:  { width: 180, height: 135 },  // ~25% of photos
+  medium: { width: 140, height: 105 },  // ~35% of photos
+  small:  { width: 100, height: 75 },   // ~25% of photos - fill gaps
+}
 
 // L2 Canvas constants
 const CANVAS_ITEM_WIDTH = 200
@@ -68,6 +75,51 @@ const ZOOM_OUT_SCALE = 1.3 // How much to zoom out from during exit transition
 
 // Text resolution for sharp scaling
 const TEXT_RESOLUTION = 3
+
+// Random photo cache types
+type SizeTier = 'hero' | 'large' | 'medium' | 'small'
+
+interface CachedRandomPhoto {
+  itemId: string
+  eventId: string
+  content: string
+  timestamp: number
+  x: number
+  y: number
+  tier: SizeTier
+}
+
+interface RandomPhotoCache {
+  photos: CachedRandomPhoto[]
+  lastRefresh: number  // timestamp
+  filterHash: string   // hash of filter settings to detect changes
+  scale: number        // scale at which positions were calculated
+}
+
+// Module-level cache for random photo positions (persists across rebuilds)
+const randomPhotoCacheByYear = new Map<string, RandomPhotoCache>()
+
+// Cache validity duration (24 hours in milliseconds)
+const RANDOM_CACHE_DURATION = 24 * 60 * 60 * 1000
+
+// Helper to create a hash of filter settings
+function hashFilterSettings(settings: TimelineFilterSettings): string {
+  return JSON.stringify({
+    categories: settings.categories.sort(),
+    tags: settings.tags.sort(),
+    people: settings.people.sort(),
+    maxRandomPhotos: settings.maxRandomPhotos,
+  })
+}
+
+// Helper to check if cache is valid
+function isRandomCacheValid(cache: RandomPhotoCache | undefined, filterHash: string, scale: number): boolean {
+  if (!cache) return false
+  if (cache.filterHash !== filterHash) return false
+  if (Math.abs(cache.scale - scale) > 0.01) return false  // Scale changed significantly
+  if (Date.now() - cache.lastRefresh > RANDOM_CACHE_DURATION) return false
+  return true
+}
 
 // Helper to convert hex color string to number for PixiJS
 function hexToNumber(hex: string): number {
@@ -242,9 +294,17 @@ export const Timeline = forwardRef<TimelineRef, TimelineProps>(function Timeline
       const childEvents = eventsRef.current.filter(e => e.parentId === focusedYear.id)
       // Reset L1 internal scale when entering L1
       l1InternalScaleRef.current = 1.0
-      const bounds = buildL1View(state.container, focusedYear, childEvents, 1.0, (event, centerX) => {
-        handleEventClickRef.current?.(event, centerX)
-      })
+      const bounds = buildL1View(
+        state.container,
+        focusedYear,
+        childEvents,
+        1.0,
+        (event, centerX) => {
+          handleEventClickRef.current?.(event, centerX)
+        },
+        () => rebuildL1View(),
+        isDraggingItemRef
+      )
       contentBoundsRef.current = bounds
       state.focusedEventId = focusedYear.id
     } else if (level === ZoomLevel.L2_Canvas && focusedEvent) {
@@ -1167,7 +1227,6 @@ export const Timeline = forwardRef<TimelineRef, TimelineProps>(function Timeline
           }
         })
 
-        console.log('PixiJS initialized with dual-container system')
       } catch (err) {
         console.error('Failed to initialize PixiJS:', err)
         initializingRef.current = false
@@ -1207,9 +1266,17 @@ export const Timeline = forwardRef<TimelineRef, TimelineProps>(function Timeline
     } else if (viewStateRef.current.zoomLevel === ZoomLevel.L1_Year && focusedYearRef.current) {
       const childEvents = events.filter(e => e.parentId === focusedYearRef.current?.id)
       activeState.container.removeChildren()
-      const bounds = buildL1View(activeState.container, focusedYearRef.current, childEvents, l1InternalScaleRef.current, (event, centerX) => {
-        handleEventClickRef.current?.(event, centerX)
-      })
+      const bounds = buildL1View(
+        activeState.container,
+        focusedYearRef.current,
+        childEvents,
+        l1InternalScaleRef.current,
+        (event, centerX) => {
+          handleEventClickRef.current?.(event, centerX)
+        },
+        () => rebuildL1View(),
+        isDraggingItemRef
+      )
       contentBoundsRef.current = bounds
     } else if (viewStateRef.current.zoomLevel === ZoomLevel.L2_Canvas && focusedEventRef.current) {
       // Rebuild L2 view when items change (e.g., after adding, deleting, or editing a memory)
@@ -1267,13 +1334,17 @@ export const Timeline = forwardRef<TimelineRef, TimelineProps>(function Timeline
   }, [navigateToLevel])
 
   // Rebuild L1 view with current internal scale (debounced)
+  // Uses fade-out of old content to minimize visual flash
   const rebuildL1View = useCallback(() => {
     const activeState = getActiveState()
     if (!activeState || activeState.zoomLevel !== ZoomLevel.L1_Year) return
     if (!focusedYearRef.current) return
 
+    // Collect old children for fade-out (but don't remove yet)
+    const oldChildren = [...activeState.container.children]
+
+    // Build new content directly into the container
     const childEvents = eventsRef.current.filter(e => e.parentId === focusedYearRef.current?.id)
-    activeState.container.removeChildren()
 
     // Create a stable reference that can be called recursively
     const doRebuild = () => rebuildL1View()
@@ -1286,9 +1357,48 @@ export const Timeline = forwardRef<TimelineRef, TimelineProps>(function Timeline
       (event, centerX) => {
         handleEventClickRef.current?.(event, centerX)
       },
-      doRebuild
+      doRebuild,
+      isDraggingItemRef
     )
     contentBoundsRef.current = bounds
+
+    // Now remove old children (new content is already added)
+    // Move old children to a fade-out container
+    if (oldChildren.length > 0) {
+      const fadeOutContainer = new Container()
+      fadeOutContainer.alpha = 1
+      oldChildren.forEach(child => {
+        if (child.parent === activeState.container) {
+          activeState.container.removeChild(child)
+          fadeOutContainer.addChild(child)
+        }
+      })
+      activeState.container.addChild(fadeOutContainer)  // On top
+
+      // Fade out animation
+      const FADE_DURATION = 120  // ms
+      const startTime = performance.now()
+
+      const animateFadeOut = () => {
+        const elapsed = performance.now() - startTime
+        const progress = Math.min(1, elapsed / FADE_DURATION)
+
+        // Ease out for smooth feel
+        fadeOutContainer.alpha = 1 - progress
+
+        if (progress < 1) {
+          requestAnimationFrame(animateFadeOut)
+        } else {
+          // Animation complete - remove and destroy old content
+          if (fadeOutContainer.parent) {
+            fadeOutContainer.parent.removeChild(fadeOutContainer)
+          }
+          fadeOutContainer.destroy({ children: true })
+        }
+      }
+
+      requestAnimationFrame(animateFadeOut)
+    }
   }, [getActiveState])
 
   // Wheel handler for pan/zoom
@@ -1353,17 +1463,38 @@ export const Timeline = forwardRef<TimelineRef, TimelineProps>(function Timeline
 
   const handlePointerMove = useCallback((e: PointerEvent) => {
     if (!isPotentialDragRef.current) return
-    if (isDraggingItemRef.current) return // Don't pan canvas if dragging an item
+
+    // Don't pan canvas if dragging an item - also cancel potential drag
+    if (isDraggingItemRef.current) {
+      isPotentialDragRef.current = false
+      isDraggingRef.current = false
+      return
+    }
 
     const dx = e.clientX - pointerDownPosRef.current.x
     const dy = e.clientY - pointerDownPosRef.current.y
     const distance = Math.sqrt(dx * dx + dy * dy)
 
     if (!isDraggingRef.current && distance > DRAG_THRESHOLD) {
+      // Double-check we're not dragging a PixiJS item (timing issue with event order)
+      if (isDraggingItemRef.current) {
+        isPotentialDragRef.current = false
+        return
+      }
       isDraggingRef.current = true
       if (pointerIdRef.current !== null) {
         containerRef.current?.setPointerCapture(pointerIdRef.current)
       }
+    }
+
+    // Triple-check: abort if item drag started after canvas drag
+    if (isDraggingRef.current && isDraggingItemRef.current) {
+      isPotentialDragRef.current = false
+      isDraggingRef.current = false
+      if (pointerIdRef.current !== null) {
+        containerRef.current?.releasePointerCapture(pointerIdRef.current)
+      }
+      return
     }
 
     if (isDraggingRef.current) {
@@ -1459,7 +1590,8 @@ export const Timeline = forwardRef<TimelineRef, TimelineProps>(function Timeline
     }
 
     // Click-to-go-back: if it was a click (not a drag) and we're not on L0
-    if (wasPotentialDrag && !wasDragging && !isTransitioningRef.current) {
+    // Also skip if user was interacting with a PixiJS item (featured photo, delete button, etc.)
+    if (wasPotentialDrag && !wasDragging && !isTransitioningRef.current && !isDraggingItemRef.current) {
       const currentLevel = viewStateRef.current.zoomLevel
 
       // Check if click was on empty area (canvas background)
@@ -1527,7 +1659,6 @@ export const Timeline = forwardRef<TimelineRef, TimelineProps>(function Timeline
     }
 
     const files = Array.from(e.dataTransfer.files)
-    console.log('Files dropped:', files.map(f => ({ name: f.name, type: f.type })))
 
     // Filter to only image files (including HEIC)
     const imageFiles = files.filter(file => {
@@ -1541,8 +1672,6 @@ export const Timeline = forwardRef<TimelineRef, TimelineProps>(function Timeline
         name.endsWith('.heic') ||
         name.endsWith('.heif')
     })
-
-    console.log('Image files after filter:', imageFiles.length)
 
     if (imageFiles.length === 0) return
 
@@ -1658,6 +1787,208 @@ function createYearBlock(event: Event, x: number, onClick: () => void): Containe
   return cont
 }
 
+// ============ Drag to Create Featured Item Helper ============
+
+interface DragToFeaturedConfig {
+  container: Container
+  sliceContainer: Container
+  dragLayer: Container  // Top layer for drag ghost (always visible)
+  year: Event
+  eventId: string
+  itemId: string | undefined
+  photoContent?: string  // Photo content for thumbnail preview
+  textContent?: string   // Text content for text items
+  onEventClick: () => void
+  onRebuild?: () => void
+  isDraggingItemRef?: React.MutableRefObject<boolean>  // Prevents timeline pan during drag
+}
+
+function setupDragToFeatured(config: DragToFeaturedConfig) {
+  const { container, sliceContainer, dragLayer, year, eventId, itemId, photoContent, textContent, onEventClick, onRebuild, isDraggingItemRef } = config
+
+  let isDragging = false
+  let dragGhost: Container | null = null
+  let dragStartPos = { x: 0, y: 0 }
+
+  sliceContainer.cursor = 'grab'
+
+  sliceContainer.on('pointerdown', (e) => {
+    isDragging = true
+    sliceContainer.cursor = 'grabbing'
+    dragStartPos = { x: e.global.x, y: e.global.y }
+
+    // Prevent timeline pan during drag
+    if (isDraggingItemRef) {
+      isDraggingItemRef.current = true
+    }
+
+    // Create drag ghost with content preview
+    dragGhost = new Container()
+
+    // Background
+    const ghostBg = new Graphics()
+    ghostBg.roundRect(-FEATURED_PHOTO_WIDTH / 2, -FEATURED_PHOTO_HEIGHT / 2, FEATURED_PHOTO_WIDTH, FEATURED_PHOTO_HEIGHT, 6)
+    ghostBg.fill({ color: 0x333344, alpha: 0.95 })
+    ghostBg.stroke({ width: 2, color: 0x66aaff })
+    dragGhost.addChild(ghostBg)
+
+    // Show text preview for text items
+    if (textContent) {
+      const textStyle = new TextStyle({
+        fontFamily: 'Georgia, "Times New Roman", serif',
+        fontSize: 14,
+        fontStyle: 'italic',
+        fill: 0xffffff,
+        wordWrap: true,
+        wordWrapWidth: FEATURED_PHOTO_WIDTH - 32,
+        align: 'center',
+        lineHeight: 20,
+      })
+
+      const maxChars = 100
+      const displayText = textContent.length > maxChars
+        ? textContent.slice(0, maxChars) + '...'
+        : textContent
+
+      const textPreview = new Text({
+        text: `"${displayText}"`,
+        style: textStyle,
+        resolution: TEXT_RESOLUTION,
+      })
+      textPreview.anchor.set(0.5, 0.5)
+
+      // Scale down if needed
+      if (textPreview.height > FEATURED_PHOTO_HEIGHT - 24) {
+        const scaleFactor = (FEATURED_PHOTO_HEIGHT - 24) / textPreview.height
+        textPreview.scale.set(Math.min(scaleFactor, 1))
+      }
+
+      dragGhost.addChild(textPreview)
+    }
+
+    // Load thumbnail if photo content available
+    if (photoContent && !textContent) {
+      const loadPreview = async () => {
+        try {
+          let blob: Blob | null = null
+          let filePath: string = ''
+
+          if (photoContent.startsWith('file:')) {
+            filePath = photoContent.replace('file:', '')
+            const pathParts = filePath.split('/')
+            const fileName = pathParts.pop()!
+            const dirPath = pathParts
+            blob = await readFileAsBlob(dirPath, fileName)
+          } else if (photoContent.startsWith('data:')) {
+            const response = await fetch(photoContent)
+            blob = await response.blob()
+            filePath = `preview:${itemId}`
+          }
+
+          if (blob && dragGhost) {
+            const bitmap = await getThumbnail(filePath, blob, 'small')
+            const texture = Texture.from(bitmap)
+            const sprite = new Sprite(texture)
+
+            const scale = Math.min(
+              (FEATURED_PHOTO_WIDTH - 8) / bitmap.width,
+              (FEATURED_PHOTO_HEIGHT - 8) / bitmap.height
+            )
+            sprite.width = bitmap.width * scale
+            sprite.height = bitmap.height * scale
+            sprite.x = -sprite.width / 2
+            sprite.y = -sprite.height / 2
+
+            // Rounded mask
+            const mask = new Graphics()
+            mask.roundRect(-FEATURED_PHOTO_WIDTH / 2 + 4, -FEATURED_PHOTO_HEIGHT / 2 + 4, FEATURED_PHOTO_WIDTH - 8, FEATURED_PHOTO_HEIGHT - 8, 4)
+            mask.fill({ color: 0xffffff })
+            sprite.mask = mask
+
+            dragGhost.addChild(mask)
+            dragGhost.addChild(sprite)
+          }
+        } catch (err) {
+          // Keep placeholder on error
+        }
+      }
+      loadPreview()
+    }
+
+    const localPos = container.toLocal(e.global)
+    dragGhost.x = localPos.x
+    dragGhost.y = localPos.y
+
+    // Add to drag layer (on top of everything)
+    dragLayer.addChild(dragGhost)
+    e.stopPropagation()
+  })
+
+  sliceContainer.on('globalpointermove', (e) => {
+    if (!isDragging || !dragGhost) return
+    const localPos = container.toLocal(e.global)
+    dragGhost.x = localPos.x
+    dragGhost.y = localPos.y
+  })
+
+  const handleDragEnd = (e: { global: { x: number; y: number } }) => {
+    if (!isDragging) return
+    isDragging = false
+    sliceContainer.cursor = 'grab'
+
+    // Re-enable timeline pan
+    if (isDraggingItemRef) {
+      isDraggingItemRef.current = false
+    }
+
+    if (dragGhost) {
+      const localPos = container.toLocal(e.global)
+      const dragDistance = Math.sqrt(
+        Math.pow(e.global.x - dragStartPos.x, 2) +
+        Math.pow(e.global.y - dragStartPos.y, 2)
+      )
+
+      // Remove ghost from drag layer
+      dragLayer.removeChild(dragGhost)
+      dragGhost = null
+
+      if (dragDistance > 10 && itemId) {
+        // Create featured photo entry at drop position
+        const featuredId = uuidv4()
+        const now = new Date().toISOString()
+
+        const newFeaturedPhoto: YearFeaturedPhoto = {
+          id: featuredId,
+          yearId: year.id,
+          eventId,
+          itemId,
+          x: localPos.x,
+          y: localPos.y,
+          scale: 1,
+          width: FEATURED_PHOTO_WIDTH,
+          height: FEATURED_PHOTO_HEIGHT,
+          createdAt: now,
+          updatedAt: now,
+        }
+
+        upsertYearFeaturedPhoto(newFeaturedPhoto)
+
+        // Trigger immediate rebuild
+        if (onRebuild) {
+          // Use setTimeout to ensure database write completes
+          setTimeout(() => onRebuild(), 10)
+        }
+      } else if (dragDistance <= 10) {
+        // It was a click, not a drag - trigger click handler
+        onEventClick()
+      }
+    }
+  }
+
+  sliceContainer.on('pointerup', handleDragEnd)
+  sliceContainer.on('pointerupoutside', handleDragEnd)
+}
+
 // ============ L1 View: Year Density Bar ============
 
 function buildL1View(
@@ -1666,7 +1997,8 @@ function buildL1View(
   childEvents: Event[],
   scale: number,
   onEventClick: (event: Event, eventCenterX: number) => void,
-  onRebuild?: () => void
+  onRebuild?: () => void,
+  isDraggingItemRef?: React.MutableRefObject<boolean>
 ): { minX: number; maxX: number } {
   // Get memories and event clusters for this year
   const memories = getMemoriesForYear(year.id)
@@ -1821,6 +2153,9 @@ function buildL1View(
   // Create a tooltip layer that will be added LAST (on top of everything)
   const tooltipLayer = new Container()
 
+  // Create a drag layer for drag ghosts (on top of everything)
+  const dragLayer = new Container()
+
   // Calculate slice positions - date ranges use actual width, single dates use fixed width
   const slicePositions: { memory: typeof sortedMemories[0], x: number, width: number, endX: number }[] = []
 
@@ -1873,7 +2208,7 @@ function buildL1View(
     const sliceContainer = new Container()
     sliceContainer.x = x
     sliceContainer.eventMode = 'static'
-    sliceContainer.cursor = 'pointer'
+    sliceContainer.cursor = 'grab'  // Show grab cursor on hover
 
     // The slice graphic - wider for date ranges
     const slice = new Graphics()
@@ -1892,154 +2227,31 @@ function buildL1View(
     }
     sliceContainer.addChild(slice)
 
-    // Hit area slightly larger for easier clicking
+    // Hit area for interaction
     const hitArea = new Graphics()
     hitArea.rect(-4, densityBarY - L1_DENSITY_BAR_HEIGHT / 2, width + 8, L1_DENSITY_BAR_HEIGHT)
     hitArea.fill({ color: 0x000000, alpha: 0 })
     sliceContainer.addChild(hitArea)
 
-    // Drag handle for photo items - appears on hover
-    let dragHandle: Container | null = null
-    if (memory.itemType === 'photo') {
-      dragHandle = new Container()
-      dragHandle.x = width / 2
-      dragHandle.y = densityBarY - L1_DENSITY_BAR_HEIGHT / 2 - DRAG_HANDLE_SIZE / 2 - 8
-      dragHandle.alpha = 0  // Hidden by default
-      dragHandle.eventMode = 'static'
-      dragHandle.cursor = 'grab'
-
-      // Drag handle background
-      const handleBg = new Graphics()
-      handleBg.roundRect(-DRAG_HANDLE_SIZE / 2, -DRAG_HANDLE_SIZE / 2, DRAG_HANDLE_SIZE, DRAG_HANDLE_SIZE, 6)
-      handleBg.fill({ color: 0x333355, alpha: 0.95 })
-      handleBg.stroke({ width: 2, color: 0x5577aa })
-      dragHandle.addChild(handleBg)
-
-      // Photo icon in the handle
-      const photoIcon = new Graphics()
-      const iconSize = DRAG_HANDLE_SIZE * 0.5
-      photoIcon.roundRect(-iconSize / 2, -iconSize / 2, iconSize, iconSize * 0.7, 2)
-      photoIcon.stroke({ width: 1.5, color: 0xaaccff })
-      // Camera lens circle
-      photoIcon.circle(-iconSize / 4, -iconSize * 0.1, iconSize * 0.15)
-      photoIcon.fill({ color: 0xaaccff })
-      dragHandle.addChild(photoIcon)
-
-      // Drag state tracking
-      let isDragging = false
-      let dragGhost: Container | null = null
-
-      dragHandle.on('pointerdown', (e) => {
-        isDragging = true
-        dragHandle!.cursor = 'grabbing'
-
-        // Create drag ghost (a smaller version of the photo)
-        dragGhost = new Container()
-        const ghostBg = new Graphics()
-        ghostBg.roundRect(-FEATURED_PHOTO_WIDTH / 2, -FEATURED_PHOTO_HEIGHT / 2, FEATURED_PHOTO_WIDTH, FEATURED_PHOTO_HEIGHT, 6)
-        ghostBg.fill({ color: 0x222244, alpha: 0.8 })
-        ghostBg.stroke({ width: 2, color: 0x5577aa })
-        dragGhost.addChild(ghostBg)
-
-        // Position ghost at mouse
-        const localPos = container.toLocal(e.global)
-        dragGhost.x = localPos.x
-        dragGhost.y = localPos.y
-        dragGhost.alpha = 0.7
-
-        // Add indicator text
-        const indicatorText = new Text({
-          text: 'Drop boven/onder timeline',
-          style: new TextStyle({
-            fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif',
-            fontSize: 10,
-            fill: 0xaaccff,
-          }),
-          resolution: TEXT_RESOLUTION,
-        })
-        indicatorText.x = -indicatorText.width / 2
-        indicatorText.y = FEATURED_PHOTO_HEIGHT / 2 + 8
-        dragGhost.addChild(indicatorText)
-
-        container.addChild(dragGhost)
-      })
-
-      dragHandle.on('globalpointermove', (e) => {
-        if (!isDragging || !dragGhost) return
-
-        const localPos = container.toLocal(e.global)
-        dragGhost.x = localPos.x
-        dragGhost.y = localPos.y
-
-        // Visual feedback: change color based on valid drop zone
-        const inDropZone = localPos.y < densityBarY - FEATURED_PHOTO_ZONE_OFFSET ||
-                          localPos.y > densityBarY + FEATURED_PHOTO_ZONE_OFFSET
-        const ghostBg = dragGhost.children[0] as Graphics
-        ghostBg.clear()
-        ghostBg.roundRect(-FEATURED_PHOTO_WIDTH / 2, -FEATURED_PHOTO_HEIGHT / 2, FEATURED_PHOTO_WIDTH, FEATURED_PHOTO_HEIGHT, 6)
-        if (inDropZone) {
-          ghostBg.fill({ color: 0x335544, alpha: 0.9 })
-          ghostBg.stroke({ width: 2, color: 0x66aa88 })
-        } else {
-          ghostBg.fill({ color: 0x222244, alpha: 0.8 })
-          ghostBg.stroke({ width: 2, color: 0x5577aa })
+    // Set up drag to create featured item (photo or text)
+    setupDragToFeatured({
+      container,
+      sliceContainer,
+      dragLayer,
+      year,
+      eventId: memory.eventId,
+      itemId: memory.itemId,
+      photoContent: memory.itemType === 'photo' ? memory.content : undefined,
+      textContent: memory.itemType === 'text' ? memory.content : undefined,
+      onEventClick: () => {
+        const parentEvent = clusters.find(c => c.event.id === memory.eventId)?.event
+        if (parentEvent) {
+          onEventClick(parentEvent, x + width / 2)
         }
-      })
-
-      dragHandle.on('pointerup', (e) => {
-        if (!isDragging) return
-        isDragging = false
-        dragHandle!.cursor = 'grab'
-
-        if (dragGhost) {
-          const localPos = container.toLocal(e.global)
-
-          // Check if dropped in valid zone
-          const inDropZone = localPos.y < densityBarY - FEATURED_PHOTO_ZONE_OFFSET ||
-                            localPos.y > densityBarY + FEATURED_PHOTO_ZONE_OFFSET
-
-          if (inDropZone) {
-            // Create featured photo entry
-            const featuredId = uuidv4()
-            const now = new Date().toISOString()
-
-            const newFeaturedPhoto: YearFeaturedPhoto = {
-              id: featuredId,
-              yearId: year.id,
-              eventId: memory.eventId,
-              itemId: memory.itemId,
-              x: localPos.x,
-              y: localPos.y,
-              scale: 1,
-              width: FEATURED_PHOTO_WIDTH,
-              height: FEATURED_PHOTO_HEIGHT,
-              createdAt: now,
-              updatedAt: now,
-            }
-
-            upsertYearFeaturedPhoto(newFeaturedPhoto)
-
-            // Rebuild view to show the new featured photo
-            if (onRebuild) onRebuild()
-          }
-
-          // Remove ghost
-          container.removeChild(dragGhost)
-          dragGhost = null
-        }
-      })
-
-      dragHandle.on('pointerupoutside', () => {
-        isDragging = false
-        dragHandle!.cursor = 'grab'
-        if (dragGhost) {
-          container.removeChild(dragGhost)
-          dragGhost = null
-        }
-      })
-
-      sliceContainer.addChild(dragHandle)
-    }
+      },
+      onRebuild,
+      isDraggingItemRef,
+    })
 
     // Tooltip (hidden by default)
     const tooltip = new Container()
@@ -2162,16 +2374,12 @@ function buildL1View(
 
     // Hover effects - use the actual width for this memory
     sliceContainer.on('pointerover', () => {
+      if (sliceContainer.cursor === 'grabbing') return  // Don't change appearance while dragging
       slice.clear()
       slice.roundRect(0, densityBarY - L1_DENSITY_BAR_HEIGHT / 2 + 4, width, L1_DENSITY_BAR_HEIGHT - 8, isDateRange ? 4 : 2)
       slice.fill({ color, alpha: 1 })
       slice.stroke({ width: 1, color: 0xffffff, alpha: 0.5 })
       tooltip.visible = true
-
-      // Show drag handle for photos
-      if (dragHandle) {
-        dragHandle.alpha = 1
-      }
 
       // Show event label (accessed from Map created after labels are rendered)
       const labelContainer = labelContainersByEventId.get(memory.eventId)
@@ -2181,6 +2389,7 @@ function buildL1View(
     })
 
     sliceContainer.on('pointerout', () => {
+      if (sliceContainer.cursor === 'grabbing') return  // Don't change appearance while dragging
       slice.clear()
       slice.roundRect(0, densityBarY - L1_DENSITY_BAR_HEIGHT / 2 + 4, width, L1_DENSITY_BAR_HEIGHT - 8, isDateRange ? 4 : 2)
       slice.fill({ color, alpha: isDateRange ? 0.9 : 0.85 })
@@ -2189,23 +2398,10 @@ function buildL1View(
       }
       tooltip.visible = false
 
-      // Hide drag handle for photos
-      if (dragHandle) {
-        dragHandle.alpha = 0
-      }
-
       // Hide event label
       const labelContainer = labelContainersByEventId.get(memory.eventId)
       if (labelContainer) {
         labelContainer.alpha = 0
-      }
-    })
-
-    // Click to open parent event
-    sliceContainer.on('pointertap', () => {
-      const parentEvent = clusters.find(c => c.event.id === memory.eventId)?.event
-      if (parentEvent) {
-        onEventClick(parentEvent, x + width / 2)  // Use center of block
       }
     })
 
@@ -2345,7 +2541,7 @@ function buildL1View(
     const sliceContainer = new Container()
     sliceContainer.x = centerX
     sliceContainer.eventMode = 'static'
-    sliceContainer.cursor = 'pointer'
+    sliceContainer.cursor = 'grab'
 
     // Block with filled style - this is a multi-day event container
     const slice = new Graphics()
@@ -2383,11 +2579,68 @@ function buildL1View(
       sliceContainer.addChild(titleText)
     }
 
-    // Hit area
+    // Hit area for interaction
     const hitArea = new Graphics()
     hitArea.rect(-blockWidth / 2 - 4, densityBarY - L1_DENSITY_BAR_HEIGHT / 2, blockWidth + 8, L1_DENSITY_BAR_HEIGHT)
     hitArea.fill({ color: 0x000000, alpha: 0 })
     sliceContainer.addChild(hitArea)
+
+    // Get item for featured creation - prefer event's featured item, then photos, then text
+    const eventMemories = memories.filter(m => m.eventId === event.id)
+    const eventPhotos = eventMemories.filter(m => m.itemType === 'photo')
+    const eventTexts = eventMemories.filter(m => m.itemType === 'text')
+
+    let featuredItemId: string | undefined
+    let featuredPhotoContent: string | undefined
+    let featuredTextContent: string | undefined
+
+    // Check if event has a featured item set
+    if (event.featuredPhotoId) {
+      // Find the memory matching the featured item ID
+      const featuredMemory = eventMemories.find(m => m.itemId === event.featuredPhotoId)
+      if (featuredMemory) {
+        featuredItemId = featuredMemory.itemId
+        if (featuredMemory.itemType === 'photo') {
+          featuredPhotoContent = featuredMemory.content
+        } else if (featuredMemory.itemType === 'text') {
+          featuredTextContent = featuredMemory.content
+        }
+      }
+    }
+
+    // If event has custom featured photo data (uploaded separately), use that for preview
+    if (event.featuredPhotoData && !featuredPhotoContent && !featuredTextContent) {
+      featuredPhotoContent = event.featuredPhotoData
+      // Use first photo item for the actual featured photo entry
+      featuredItemId = eventPhotos.length > 0 ? eventPhotos[0].itemId : undefined
+    }
+
+    // Fall back to first photo if no featured item is set
+    if (!featuredItemId && eventPhotos.length > 0) {
+      featuredItemId = eventPhotos[0].itemId
+      featuredPhotoContent = eventPhotos[0].content
+    }
+
+    // Fall back to first text item if no photos available
+    if (!featuredItemId && eventTexts.length > 0) {
+      featuredItemId = eventTexts[0].itemId
+      featuredTextContent = eventTexts[0].content
+    }
+
+    // Set up drag to create featured item
+    setupDragToFeatured({
+      container,
+      sliceContainer,
+      dragLayer,
+      year,
+      eventId: event.id,
+      itemId: featuredItemId,
+      photoContent: featuredPhotoContent,
+      textContent: featuredTextContent,
+      onEventClick: () => onEventClick(event, centerX),
+      onRebuild,
+      isDraggingItemRef,
+    })
 
     // Tooltip for multi-day event
     const tooltip = new Container()
@@ -2475,6 +2728,7 @@ function buildL1View(
     })
 
     sliceContainer.on('pointerout', () => {
+      if (sliceContainer.cursor === 'grabbing') return  // Don't change appearance while dragging
       slice.clear()
       slice.roundRect(-blockWidth / 2, densityBarY - L1_DENSITY_BAR_HEIGHT / 2 + 4, blockWidth, L1_DENSITY_BAR_HEIGHT - 8, 6)
       slice.fill({ color: multiDayEventColor, alpha: 0.7 })
@@ -2486,11 +2740,6 @@ function buildL1View(
       if (labelContainer) {
         labelContainer.alpha = 0
       }
-    })
-
-    // Click to open event
-    sliceContainer.on('pointertap', () => {
-      onEventClick(event, centerX)
     })
 
     container.addChild(sliceContainer)
@@ -2523,7 +2772,7 @@ function buildL1View(
     const sliceContainer = new Container()
     sliceContainer.x = centerX
     sliceContainer.eventMode = 'static'
-    sliceContainer.cursor = 'pointer'
+    sliceContainer.cursor = 'grab'
 
     // Block with outlined style to indicate it's a container
     const slice = new Graphics()
@@ -2680,32 +2929,40 @@ function buildL1View(
   // Load featured photos for this year
   const featuredPhotos = getYearFeaturedPhotos(year.id)
 
-  // Render featured photos with connection lines
+  // Render featured photos/items with connection lines
   featuredPhotos.forEach((fp) => {
-    // Get the source event to find the photo content
+    // Get the source event to find the content
     const sourceEvent = getEventById(fp.eventId)
     if (!sourceEvent) return
 
-    // Get the photo content and item for category (from event's featured photo or first photo item)
+    // Get the content and item for category
     let photoContent: string | null = null
+    let textContent: string | null = null
     let sourceItem: Item | null = null
+
     if (sourceEvent.featuredPhotoData) {
       photoContent = sourceEvent.featuredPhotoData
     } else if (fp.itemId) {
       const item = getItemById(fp.itemId)
-      if (item && item.itemType === 'photo') {
-        photoContent = item.content
+      if (item) {
         sourceItem = item
+        if (item.itemType === 'photo') {
+          photoContent = item.content
+        } else if (item.itemType === 'text') {
+          textContent = item.bodyText || item.content
+        }
       }
     }
-    if (!photoContent) return
+    if (!photoContent && !textContent) return
 
     // Get the category color for the connection line
     const categoryColor = getCategoryColor(sourceItem?.category)
 
-    // Calculate source X position (where the event is on the timeline)
-    const eventTimestamp = new Date(sourceEvent.startAt).getTime()
-    const sourceX = timestampToX(eventTimestamp)
+    // Calculate source X position (center of the event block on the timeline)
+    const eventStartTime = new Date(sourceEvent.startAt).getTime()
+    const eventEndTime = sourceEvent.endAt ? new Date(sourceEvent.endAt).getTime() : eventStartTime
+    const eventCenterTime = (eventStartTime + eventEndTime) / 2
+    const sourceX = timestampToX(eventCenterTime)
 
     // Create photo container
     const photoContainer = new Container()
@@ -2714,72 +2971,178 @@ function buildL1View(
     photoContainer.eventMode = 'static'
     photoContainer.cursor = 'grab'
 
-    // Photo background
+    // Photo background with category-colored border (distinguishes from random photos)
     const photoBg = new Graphics()
-    photoBg.roundRect(-fp.width / 2, -fp.height / 2, fp.width, fp.height, 6)
+    photoBg.roundRect(-fp.width / 2, -fp.height / 2, fp.width, fp.height, 8)
     photoBg.fill({ color: 0x222233 })
-    photoBg.stroke({ width: 2, color: 0x444466 })
+    photoBg.stroke({ width: 3, color: categoryColor })  // Colored border!
     photoContainer.addChild(photoBg)
 
-    // Load and display thumbnail
-    const loadThumbnail = async () => {
-      try {
-        let blob: Blob | null = null
-        let filePath: string = ''
+    // References to sprite and mask for resizing
+    let photoSprite: Sprite | null = null
+    let photoMask: Graphics | null = null
+    let textContainer: Container | null = null
+    let textElement: Text | null = null
+    let originalImageSize = { width: 0, height: 0 }
 
-        const isFileRef = photoContent!.startsWith('file:')
-        const isDataUrl = photoContent!.startsWith('data:')
+    // Load and display content (photo or text)
+    const loadContent = async () => {
+      if (textContent) {
+        // Render text card
+        textContainer = new Container()
 
-        if (isFileRef) {
-          // Parse file path: "file:2024/Event/photo.jpg"
-          filePath = photoContent!.replace('file:', '')
-          const pathParts = filePath.split('/')
-          const fileName = pathParts.pop()!
-          const dirPath = pathParts
+        // Text style - elegant quote-like appearance
+        const textStyle = new TextStyle({
+          fontFamily: 'Georgia, "Times New Roman", serif',
+          fontSize: 16,
+          fontStyle: 'italic',
+          fill: 0xffffff,
+          wordWrap: true,
+          wordWrapWidth: fp.width - 32,
+          align: 'center',
+          lineHeight: 22,
+        })
 
-          // Get blob directly from file system
-          blob = await readFileAsBlob(dirPath, fileName)
-        } else if (isDataUrl) {
-          // Convert data URL to blob
-          const response = await fetch(photoContent!)
-          blob = await response.blob()
-          filePath = `dataurl:${fp.id}`
+        // Truncate text if too long
+        const maxChars = 200
+        const displayText = textContent.length > maxChars
+          ? textContent.slice(0, maxChars) + '...'
+          : textContent
+
+        // Create text with quotes for a quote-like appearance
+        textElement = new Text({
+          text: `"${displayText}"`,
+          style: textStyle,
+          resolution: TEXT_RESOLUTION,
+        })
+        textElement.anchor.set(0.5, 0.5)
+        textElement.x = 0
+        textElement.y = 0
+
+        // Ensure text fits within container height
+        if (textElement.height > fp.height - 24) {
+          const scaleFactor = (fp.height - 24) / textElement.height
+          textElement.scale.set(Math.min(scaleFactor, 1))
         }
 
-        if (!blob) {
-          console.warn('Failed to load image blob for featured photo:', fp.id)
-          return
+        textContainer.addChild(textElement)
+
+        // Keep background visible for text (nice dark card)
+        photoBg.visible = true
+
+        photoContainer.addChild(textContainer)
+
+        // Re-add resize handle on top
+        if (resizeHandle.parent === photoContainer) {
+          photoContainer.removeChild(resizeHandle)
         }
+        photoContainer.addChild(resizeHandle)
+        return
+      }
 
-        // Get thumbnail (hardware-accelerated and cached)
-        const bitmap = await getThumbnail(filePath, blob, 'medium')
+      // Load photo thumbnail
+      if (photoContent) {
+        try {
+          let blob: Blob | null = null
+          let filePath: string = ''
 
-        // Create sprite from ImageBitmap
-        const texture = Texture.from(bitmap)
-        const sprite = new Sprite(texture)
+          const isFileRef = photoContent.startsWith('file:')
+          const isDataUrl = photoContent.startsWith('data:')
 
-        // Scale to fit container
-        const scale = Math.min(fp.width / bitmap.width, fp.height / bitmap.height)
-        sprite.width = bitmap.width * scale
-        sprite.height = bitmap.height * scale
-        sprite.x = -sprite.width / 2
-        sprite.y = -sprite.height / 2
+          if (isFileRef) {
+            // Parse file path: "file:2024/Event/photo.jpg"
+            filePath = photoContent.replace('file:', '')
+            const pathParts = filePath.split('/')
+            const fileName = pathParts.pop()!
+            const dirPath = pathParts
 
-        // Create mask for rounded corners
-        const mask = new Graphics()
-        mask.roundRect(-fp.width / 2, -fp.height / 2, fp.width, fp.height, 6)
-        mask.fill({ color: 0xffffff })
-        sprite.mask = mask
+            // Get blob directly from file system
+            blob = await readFileAsBlob(dirPath, fileName)
+          } else if (isDataUrl) {
+            // Convert data URL to blob
+            const response = await fetch(photoContent)
+            blob = await response.blob()
+            filePath = `dataurl:${fp.id}`
+          }
 
-        photoContainer.addChild(mask)
-        photoContainer.addChild(sprite)
-      } catch (err) {
-        console.error('Failed to load featured photo thumbnail:', err)
+          if (!blob) {
+            console.warn('Failed to load image blob for featured photo:', fp.id)
+            return
+          }
+
+          // Get thumbnail (hardware-accelerated and cached) - use large for featured photos
+          const bitmap = await getThumbnail(filePath, blob, 'large')
+
+          // Store original image dimensions for aspect ratio
+          originalImageSize = { width: bitmap.width, height: bitmap.height }
+
+          // Create sprite from ImageBitmap
+          const texture = Texture.from(bitmap)
+          photoSprite = new Sprite(texture)
+
+          // Scale to fit container while maintaining aspect ratio
+          const scale = Math.min(fp.width / bitmap.width, fp.height / bitmap.height)
+          photoSprite.width = bitmap.width * scale
+          photoSprite.height = bitmap.height * scale
+          photoSprite.x = -photoSprite.width / 2
+          photoSprite.y = -photoSprite.height / 2
+
+          // Create mask for rounded corners
+          photoMask = new Graphics()
+          photoMask.roundRect(-fp.width / 2, -fp.height / 2, fp.width, fp.height, 6)
+          photoMask.fill({ color: 0xffffff })
+          photoSprite.mask = photoMask
+
+          // Hide background, show image
+          photoBg.visible = false
+
+          photoContainer.addChild(photoMask)
+          photoContainer.addChild(photoSprite)
+
+          // Re-add resize handle on top so it's not covered by the photo
+          // Note: resizeIndicator === resizeHandle, so only need to move once
+          if (resizeHandle.parent === photoContainer) {
+            photoContainer.removeChild(resizeHandle)
+          }
+          photoContainer.addChild(resizeHandle)
+        } catch (err) {
+          console.error('Failed to load featured photo thumbnail:', err)
+        }
       }
     }
-    loadThumbnail()
+    loadContent()
+
+    // Helper to update sprite/text and mask size
+    const updateContentSize = (newWidth: number, newHeight: number) => {
+      if (photoSprite && photoMask && originalImageSize.width > 0) {
+        // Scale sprite to fit new container size
+        const scale = Math.min(newWidth / originalImageSize.width, newHeight / originalImageSize.height)
+        photoSprite.width = originalImageSize.width * scale
+        photoSprite.height = originalImageSize.height * scale
+        photoSprite.x = -photoSprite.width / 2
+        photoSprite.y = -photoSprite.height / 2
+
+        // Update mask
+        photoMask.clear()
+        photoMask.roundRect(-newWidth / 2, -newHeight / 2, newWidth, newHeight, 6)
+        photoMask.fill({ color: 0xffffff })
+      }
+
+      if (textElement) {
+        // Update text word wrap width
+        textElement.style.wordWrapWidth = newWidth - 32
+        // Ensure text fits within container height
+        if (textElement.height > newHeight - 24) {
+          const scaleFactor = (newHeight - 24) / textElement.height
+          textElement.scale.set(Math.min(scaleFactor, 1))
+        } else {
+          textElement.scale.set(1)
+        }
+      }
+    }
 
     // Connection line from photo to source slice (using category color)
+    const lineContainer = new Container()
     const line = new Graphics()
 
     // Calculate bezier curve control points
@@ -2788,7 +3151,7 @@ function buildL1View(
       ? densityBarY + L1_DENSITY_BAR_HEIGHT / 2  // Below: connect to bottom of bar
       : densityBarY - L1_DENSITY_BAR_HEIGHT / 2  // Above: connect to top of bar
 
-    // Draw bezier curve
+    // Draw bezier curve - featured photo connection line
     line.moveTo(fp.x, fp.y + startY)
     const controlY = (fp.y + startY + endY) / 2
     line.bezierCurveTo(
@@ -2796,57 +3159,388 @@ function buildL1View(
       sourceX, controlY,  // Second control point
       sourceX, endY  // End point
     )
-    line.stroke({ width: 1, color: categoryColor, alpha: 0.4 })
+    // Use category color - thin elegant line
+    line.stroke({ width: 1.5, color: categoryColor, alpha: 0.5 })
 
-    connectionLineLayer.addChild(line)
+    // Hit area for line (thicker invisible stroke for easier clicking)
+    const lineHitArea = new Graphics()
+    lineHitArea.moveTo(fp.x, fp.y + startY)
+    lineHitArea.bezierCurveTo(fp.x, controlY, sourceX, controlY, sourceX, endY)
+    lineHitArea.stroke({ width: 16, color: 0x000000, alpha: 0 })
+    lineHitArea.eventMode = 'static'
+    lineHitArea.cursor = 'pointer'
 
-    // Hover effects
-    photoContainer.on('pointerover', () => {
-      photoBg.clear()
-      photoBg.roundRect(-fp.width / 2, -fp.height / 2, fp.width, fp.height, 6)
-      photoBg.fill({ color: 0x333344 })
-      photoBg.stroke({ width: 2, color: 0x6688aa })
+    // Delete button (appears on line hover) - subtle and small
+    const deleteBtn = new Container()
+    // Position at midpoint of line
+    const midX = (fp.x + sourceX) / 2
+    const midY = controlY
+    deleteBtn.x = midX
+    deleteBtn.y = midY
+    deleteBtn.visible = false
+    deleteBtn.eventMode = 'static'
+    deleteBtn.cursor = 'pointer'
 
-      // Highlight connection line
+    // Delete button background (subtle transparent circle)
+    const deleteBg = new Graphics()
+    deleteBg.circle(0, 0, 8)
+    deleteBg.fill({ color: 0x000000, alpha: 0.3 })
+    deleteBtn.addChild(deleteBg)
+
+    // Delete button X icon (smaller, red)
+    const deleteIcon = new Graphics()
+    deleteIcon.moveTo(-3, -3)
+    deleteIcon.lineTo(3, 3)
+    deleteIcon.moveTo(3, -3)
+    deleteIcon.lineTo(-3, 3)
+    deleteIcon.stroke({ width: 1.5, color: 0xff6666 })
+    deleteBtn.addChild(deleteIcon)
+
+    // Hit area for delete button
+    const deleteBtnHitArea = new Graphics()
+    deleteBtnHitArea.circle(0, 0, 16)
+    deleteBtnHitArea.fill({ color: 0x000000, alpha: 0 })
+    deleteBtn.addChild(deleteBtnHitArea)
+
+    // Line hover events
+    lineHitArea.on('pointerover', () => {
+      deleteBtn.visible = true
+      // Highlight line slightly
       line.clear()
       line.moveTo(fp.x, fp.y + startY)
       line.bezierCurveTo(fp.x, controlY, sourceX, controlY, sourceX, endY)
-      line.stroke({ width: 2, color: categoryColor, alpha: 0.8 })
+      line.stroke({ width: 2, color: categoryColor, alpha: 0.7 })
+    })
+
+    lineHitArea.on('pointerout', () => {
+      deleteBtn.visible = false
+      // Restore thin line
+      line.clear()
+      line.moveTo(fp.x, fp.y + startY)
+      line.bezierCurveTo(fp.x, controlY, sourceX, controlY, sourceX, endY)
+      line.stroke({ width: 1.5, color: categoryColor, alpha: 0.5 })
+    })
+
+    // Delete button click
+    deleteBtn.on('pointerdown', (e) => {
+      e.stopPropagation()
+      // Block click-to-zoom-out by marking as item interaction
+      if (isDraggingItemRef) {
+        isDraggingItemRef.current = true
+        // Reset after a short delay to allow DOM event handlers to complete
+        setTimeout(() => {
+          isDraggingItemRef.current = false
+        }, 100)
+      }
+      // Delete the featured photo
+      deleteYearFeaturedPhoto(fp.id)
+      // Rebuild timeline
+      if (onRebuild) onRebuild()
+    })
+
+    // Delete button hover (keep visible, subtle highlight)
+    deleteBtn.on('pointerover', () => {
+      deleteBtn.visible = true
+      deleteBg.clear()
+      deleteBg.circle(0, 0, 10)
+      deleteBg.fill({ color: 0x000000, alpha: 0.5 })
+      deleteIcon.clear()
+      deleteIcon.moveTo(-3, -3)
+      deleteIcon.lineTo(3, 3)
+      deleteIcon.moveTo(3, -3)
+      deleteIcon.lineTo(-3, 3)
+      deleteIcon.stroke({ width: 2, color: 0xff4444 })
+    })
+
+    deleteBtn.on('pointerout', () => {
+      deleteBg.clear()
+      deleteBg.circle(0, 0, 8)
+      deleteBg.fill({ color: 0x000000, alpha: 0.3 })
+      deleteIcon.clear()
+      deleteIcon.moveTo(-3, -3)
+      deleteIcon.lineTo(3, 3)
+      deleteIcon.moveTo(3, -3)
+      deleteIcon.lineTo(-3, 3)
+      deleteIcon.stroke({ width: 1.5, color: 0xff6666 })
+    })
+
+    lineContainer.addChild(line)
+    lineContainer.addChild(lineHitArea)
+    lineContainer.addChild(deleteBtn)
+    connectionLineLayer.addChild(lineContainer)
+
+    // Drag state for repositioning
+    let isDraggingPhoto = false
+    let photoDragStartPos = { x: 0, y: 0 }
+    let photoStartPos = { x: fp.x, y: fp.y }
+
+    // Resize state
+    let isResizing = false
+    let resizeStartPos = { x: 0, y: 0 }
+    let resizeStartSize = { width: fp.width, height: fp.height }
+
+    // Resize handle container (bottom-right corner) - more visible!
+    const resizeHandle = new Container()
+    resizeHandle.x = fp.width / 2 - 24
+    resizeHandle.y = fp.height / 2 - 24
+    resizeHandle.eventMode = 'static'
+    resizeHandle.cursor = 'nwse-resize'
+    resizeHandle.visible = false  // Show on hover
+
+    // Resize handle background (rounded square)
+    const resizeHandleBg = new Graphics()
+    resizeHandleBg.roundRect(0, 0, 24, 24, 4)
+    resizeHandleBg.fill({ color: categoryColor, alpha: 0.9 })
+    resizeHandle.addChild(resizeHandleBg)
+
+    // Resize handle icon (diagonal arrows)
+    const resizeIcon = new Graphics()
+    // Draw diagonal resize lines
+    resizeIcon.moveTo(6, 18)
+    resizeIcon.lineTo(18, 6)
+    resizeIcon.stroke({ width: 2, color: 0xffffff, alpha: 0.9 })
+    resizeIcon.moveTo(10, 18)
+    resizeIcon.lineTo(18, 10)
+    resizeIcon.stroke({ width: 2, color: 0xffffff, alpha: 0.9 })
+    resizeIcon.moveTo(14, 18)
+    resizeIcon.lineTo(18, 14)
+    resizeIcon.stroke({ width: 2, color: 0xffffff, alpha: 0.9 })
+    resizeHandle.addChild(resizeIcon)
+
+    // Hit area for resize (larger than visual)
+    const resizeHitArea = new Graphics()
+    resizeHitArea.rect(-4, -4, 32, 32)
+    resizeHitArea.fill({ color: 0x000000, alpha: 0 })
+    resizeHandle.addChild(resizeHitArea)
+
+    photoContainer.addChild(resizeHandle)
+
+    // Legacy reference for compatibility
+    const resizeIndicator = resizeHandle
+
+    // Hover effects (combined with resize indicator)
+    photoContainer.on('pointerover', () => {
+      if (isDraggingPhoto || isResizing) return
+
+      photoBg.clear()
+      photoBg.roundRect(-fp.width / 2, -fp.height / 2, fp.width, fp.height, 8)
+      photoBg.fill({ color: 0x333344 })
+      photoBg.stroke({ width: 4, color: categoryColor })  // Thicker colored border on hover
+
+      // Highlight connection line (also show delete button)
+      line.clear()
+      line.moveTo(fp.x, fp.y + startY)
+      line.bezierCurveTo(fp.x, controlY, sourceX, controlY, sourceX, endY)
+      line.stroke({ width: 2, color: categoryColor, alpha: 0.7 })
+      deleteBtn.visible = true
 
       // Show event label
       const labelContainer = labelContainersByEventId.get(fp.eventId)
       if (labelContainer) {
         labelContainer.alpha = 1
       }
+
+      // Show resize indicator
+      resizeIndicator.visible = true
     })
 
     photoContainer.on('pointerout', () => {
-      photoBg.clear()
-      photoBg.roundRect(-fp.width / 2, -fp.height / 2, fp.width, fp.height, 6)
-      photoBg.fill({ color: 0x222233 })
-      photoBg.stroke({ width: 2, color: 0x444466 })
+      if (isDraggingPhoto || isResizing) return
 
-      // Restore connection line
+      photoBg.clear()
+      photoBg.roundRect(-fp.width / 2, -fp.height / 2, fp.width, fp.height, 8)
+      photoBg.fill({ color: 0x222233 })
+      photoBg.stroke({ width: 3, color: categoryColor })  // Keep colored border
+
+      // Restore connection line (hide delete button)
       line.clear()
       line.moveTo(fp.x, fp.y + startY)
       line.bezierCurveTo(fp.x, controlY, sourceX, controlY, sourceX, endY)
-      line.stroke({ width: 1, color: categoryColor, alpha: 0.4 })
+      line.stroke({ width: 1.5, color: categoryColor, alpha: 0.5 })
+      deleteBtn.visible = false
 
       // Hide event label
       const labelContainer = labelContainersByEventId.get(fp.eventId)
       if (labelContainer) {
         labelContainer.alpha = 0
       }
+
+      // Hide resize indicator
+      resizeIndicator.visible = false
     })
 
-    // Click to open event
-    photoContainer.on('pointertap', () => {
-      if (sourceEvent) {
-        onEventClick(sourceEvent, sourceX)
+    // Resize handle events
+    resizeHandle.on('pointerdown', (e) => {
+      isResizing = true
+      resizeStartPos = { x: e.global.x, y: e.global.y }
+      resizeStartSize = { width: fp.width, height: fp.height }
+
+      // Prevent timeline pan during resize
+      if (isDraggingItemRef) {
+        isDraggingItemRef.current = true
       }
+
+      e.stopPropagation()
     })
 
-    // TODO: Add drag to reposition and resize handles
+    resizeHandle.on('globalpointermove', (e) => {
+      if (!isResizing) return
+
+      const dx = e.global.x - resizeStartPos.x
+      const dy = e.global.y - resizeStartPos.y
+
+      // Use photo's aspect ratio if available, otherwise use stored aspect ratio
+      const aspectRatio = originalImageSize.width > 0
+        ? originalImageSize.height / originalImageSize.width
+        : resizeStartSize.height / resizeStartSize.width
+
+      // Maintain aspect ratio using the larger delta
+      const delta = Math.max(dx, dy)
+      const newWidth = Math.max(60, Math.min(400, resizeStartSize.width + delta))
+      const newHeight = newWidth * aspectRatio
+
+      // Update photo container visuals (background)
+      photoBg.clear()
+      photoBg.roundRect(-newWidth / 2, -newHeight / 2, newWidth, newHeight, 6)
+      photoBg.fill({ color: 0x333344 })
+      photoBg.stroke({ width: 3, color: categoryColor })
+
+      // Update photo sprite/text and mask
+      updateContentSize(newWidth, newHeight)
+
+      // Update resize handle position (it's a Container now)
+      resizeHandle.x = newWidth / 2 - 24
+      resizeHandle.y = newHeight / 2 - 24
+
+      // Update connection line to follow resize
+      const newStartY = fp.y > 0 ? -newHeight / 2 : newHeight / 2
+      const newControlY = (fp.y + newStartY + endY) / 2
+
+      line.clear()
+      line.moveTo(fp.x, fp.y + newStartY)
+      line.bezierCurveTo(fp.x, newControlY, sourceX, newControlY, sourceX, endY)
+      line.stroke({ width: 2, color: categoryColor, alpha: 0.6 })
+
+      lineHitArea.clear()
+      lineHitArea.moveTo(fp.x, fp.y + newStartY)
+      lineHitArea.bezierCurveTo(fp.x, newControlY, sourceX, newControlY, sourceX, endY)
+      lineHitArea.stroke({ width: 16, color: 0x000000, alpha: 0 })
+
+      deleteBtn.x = (fp.x + sourceX) / 2
+      deleteBtn.y = newControlY
+
+      // Store new size temporarily
+      fp.width = newWidth
+      fp.height = newHeight
+    })
+
+    const handleResizeEnd = () => {
+      if (!isResizing) return
+      isResizing = false
+
+      // Re-enable timeline pan
+      if (isDraggingItemRef) {
+        isDraggingItemRef.current = false
+      }
+
+      // Save the new size (no rebuild needed - visual already updated)
+      upsertYearFeaturedPhoto({
+        ...fp,
+        updatedAt: new Date().toISOString(),
+      })
+      // Note: Connection line will update on next natural rebuild (zoom/navigate)
+    }
+
+    resizeHandle.on('pointerup', handleResizeEnd)
+    resizeHandle.on('pointerupoutside', handleResizeEnd)
+
+    // Drag to reposition
+    photoContainer.on('pointerdown', (e) => {
+      // Don't start drag if clicking resize handle
+      if (isResizing) return
+
+      isDraggingPhoto = true
+      photoContainer.cursor = 'grabbing'
+      photoDragStartPos = { x: e.global.x, y: e.global.y }
+      photoStartPos = { x: photoContainer.x, y: photoContainer.y }
+
+      // Prevent timeline pan during drag
+      if (isDraggingItemRef) {
+        isDraggingItemRef.current = true
+      }
+
+      e.stopPropagation()
+    })
+
+    photoContainer.on('globalpointermove', (e) => {
+      if (!isDraggingPhoto) return
+
+      const dx = e.global.x - photoDragStartPos.x
+      const dy = e.global.y - photoDragStartPos.y
+
+      photoContainer.x = photoStartPos.x + dx
+      photoContainer.y = photoStartPos.y + dy
+
+      // Update connection line in real-time
+      const newStartY = photoContainer.y > 0 ? -fp.height / 2 : fp.height / 2
+      const newControlY = (photoContainer.y + newStartY + endY) / 2
+
+      line.clear()
+      line.moveTo(photoContainer.x, photoContainer.y + newStartY)
+      line.bezierCurveTo(
+        photoContainer.x, newControlY,
+        sourceX, newControlY,
+        sourceX, endY
+      )
+      line.stroke({ width: 2, color: categoryColor, alpha: 0.6 })
+
+      // Update line hit area
+      lineHitArea.clear()
+      lineHitArea.moveTo(photoContainer.x, photoContainer.y + newStartY)
+      lineHitArea.bezierCurveTo(photoContainer.x, newControlY, sourceX, newControlY, sourceX, endY)
+      lineHitArea.stroke({ width: 16, color: 0x000000, alpha: 0 })
+
+      // Update delete button position (midpoint of line)
+      deleteBtn.x = (photoContainer.x + sourceX) / 2
+      deleteBtn.y = newControlY
+    })
+
+    const handlePhotoDragEnd = (e: { global: { x: number; y: number } }) => {
+      if (!isDraggingPhoto) return
+      isDraggingPhoto = false
+      photoContainer.cursor = 'grab'
+
+      // Re-enable timeline pan
+      if (isDraggingItemRef) {
+        isDraggingItemRef.current = false
+      }
+
+      // Check if we actually moved (not just clicked)
+      const dragDistance = Math.sqrt(
+        Math.pow(e.global.x - photoDragStartPos.x, 2) +
+        Math.pow(e.global.y - photoDragStartPos.y, 2)
+      )
+
+      if (dragDistance > 5) {
+        // Save new position (no rebuild needed - visual already updated)
+        fp.x = photoContainer.x
+        fp.y = photoContainer.y
+
+        upsertYearFeaturedPhoto({
+          ...fp,
+          updatedAt: new Date().toISOString(),
+        })
+        // Note: Connection line will update on next natural rebuild (zoom/navigate)
+      } else {
+        // It was a click - open the event
+        if (sourceEvent) {
+          onEventClick(sourceEvent, sourceX)
+        }
+      }
+    }
+
+    photoContainer.on('pointerup', handlePhotoDragEnd)
+    photoContainer.on('pointerupoutside', handlePhotoDragEnd)
 
     featuredPhotoLayer.addChild(photoContainer)
   })
@@ -2868,91 +3562,178 @@ function buildL1View(
 
   // Only render random photos if enabled in settings
   if (filterSettings.showRandomFill) {
-    // Get random photos for this year (filtered by settings)
-    const randomPhotos = getRandomPhotosForYear(
-      year.id,
-      {
-        categories: filterSettings.categories.length > 0 ? filterSettings.categories : undefined,
-        tags: filterSettings.tags.length > 0 ? filterSettings.tags : undefined,
-        people: filterSettings.people.length > 0 ? filterSettings.people : undefined,
-      },
-      filterSettings.maxRandomPhotos
-    )
+    // Check if we have a valid cache for this year
+    const filterHash = hashFilterSettings(filterSettings)
+    const existingCache = randomPhotoCacheByYear.get(year.id)
 
-    // Calculate positions for random photos (avoid overlapping with featured photos)
-    const RANDOM_PHOTO_WIDTH = 80
-    const RANDOM_PHOTO_HEIGHT = 60
-    const usedPositions: { x: number; y: number; w: number; h: number }[] = []
+    let cachedPhotos: CachedRandomPhoto[]
 
-    // Add featured photo positions to used list
-    featuredPhotos.forEach((fp) => {
-      usedPositions.push({
-        x: fp.x - fp.width / 2,
-        y: fp.y - fp.height / 2,
-        w: fp.width,
-        h: fp.height,
-      })
-    })
+    if (isRandomCacheValid(existingCache, filterHash, scale)) {
+      // Use cached positions - no flash!
+      cachedPhotos = existingCache!.photos
+    } else {
+      // Generate new random layout and cache it
+      const randomPhotos = getRandomPhotosForYear(
+        year.id,
+        {
+          categories: filterSettings.categories.length > 0 ? filterSettings.categories : undefined,
+          tags: filterSettings.tags.length > 0 ? filterSettings.tags : undefined,
+          people: filterSettings.people.length > 0 ? filterSettings.people : undefined,
+        },
+        filterSettings.maxRandomPhotos
+      )
 
-    // Check if a position overlaps with existing photos
-    const isOverlapping = (x: number, y: number, w: number, h: number): boolean => {
-      for (const pos of usedPositions) {
-        if (x < pos.x + pos.w && x + w > pos.x &&
-            y < pos.y + pos.h && y + h > pos.y) {
-          return true
-        }
+      // ===== HIGH-END COLLAGE LAYOUT =====
+
+      // Assign size tiers to photos for visual variety
+      const assignSizeTier = (index: number, total: number): SizeTier => {
+        // Distribution: 15% hero, 25% large, 35% medium, 25% small
+        const ratio = index / total
+        if (ratio < 0.15) return 'hero'
+        if (ratio < 0.40) return 'large'
+        if (ratio < 0.75) return 'medium'
+        return 'small'
       }
-      return false
-    }
 
-    // Find a random position that doesn't overlap
-    const findPosition = (): { x: number; y: number } | null => {
-      const maxAttempts = 50
-      for (let i = 0; i < maxAttempts; i++) {
-        // Random X across the timeline
-        const x = (Math.random() - 0.5) * effectiveWidth * 0.9
-        // Random Y above or below the timeline
-        const aboveOrBelow = Math.random() > 0.5 ? -1 : 1
-        const yOffset = FEATURED_PHOTO_ZONE_OFFSET + Math.random() * 150
-        const y = aboveOrBelow * yOffset
-
-        if (!isOverlapping(x - RANDOM_PHOTO_WIDTH / 2, y - RANDOM_PHOTO_HEIGHT / 2, RANDOM_PHOTO_WIDTH, RANDOM_PHOTO_HEIGHT)) {
-          return { x, y }
-        }
-      }
-      return null
-    }
-
-    // Render random photos
-    randomPhotos.forEach((photo) => {
-      const position = findPosition()
-      if (!position) return  // No available position
-
-      // Mark position as used
-      usedPositions.push({
-        x: position.x - RANDOM_PHOTO_WIDTH / 2,
-        y: position.y - RANDOM_PHOTO_HEIGHT / 2,
-        w: RANDOM_PHOTO_WIDTH,
-        h: RANDOM_PHOTO_HEIGHT,
+      // Shuffle indices for random size distribution
+      const shuffledIndices = randomPhotos.map((_, i) => i).sort(() => Math.random() - 0.5)
+      const photoSizes = new Map<number, SizeTier>()
+      shuffledIndices.forEach((originalIndex, sortedIndex) => {
+        photoSizes.set(originalIndex, assignSizeTier(sortedIndex, randomPhotos.length))
       })
 
-      // Create photo container
+      // Track used positions for overlap detection (with padding for breathing room)
+      const usedPositions: { x: number; y: number; w: number; h: number }[] = []
+      const POSITION_PADDING = 20  // Space between photos
+
+      // Add featured photo positions to used list
+      featuredPhotos.forEach((fp) => {
+        usedPositions.push({
+          x: fp.x - fp.width / 2 - POSITION_PADDING,
+          y: fp.y - fp.height / 2 - POSITION_PADDING,
+          w: fp.width + POSITION_PADDING * 2,
+          h: fp.height + POSITION_PADDING * 2,
+        })
+      })
+
+      // Check if a position overlaps with existing photos
+      const isOverlapping = (x: number, y: number, w: number, h: number): boolean => {
+        for (const pos of usedPositions) {
+          if (x < pos.x + pos.w && x + w > pos.x &&
+              y < pos.y + pos.h && y + h > pos.y) {
+            return true
+          }
+        }
+        return false
+      }
+
+      // Find position with size awareness
+      const findPosition = (size: { width: number; height: number }): { x: number; y: number } | null => {
+        const maxAttempts = 80
+        for (let i = 0; i < maxAttempts; i++) {
+          // Random X across the timeline (wider spread for more coverage)
+          const x = (Math.random() - 0.5) * effectiveWidth * 0.95
+          // Random Y above or below the timeline with varied distances
+          const aboveOrBelow = Math.random() > 0.5 ? -1 : 1
+          // Closer photos for smaller sizes, further for larger
+          const baseOffset = FEATURED_PHOTO_ZONE_OFFSET + 20
+          const maxOffset = 220 + (size.width / 240) * 80  // Larger photos can be further out
+          const yOffset = baseOffset + Math.random() * (maxOffset - baseOffset)
+          const y = aboveOrBelow * yOffset
+
+          const checkW = size.width + POSITION_PADDING * 2
+          const checkH = size.height + POSITION_PADDING * 2
+
+          if (!isOverlapping(x - checkW / 2, y - checkH / 2, checkW, checkH)) {
+            return { x, y }
+          }
+        }
+        return null
+      }
+
+      // Sort photos: render larger ones first (they need more space)
+      const sortedPhotos = randomPhotos
+        .map((photo, index) => ({ photo, index, tier: photoSizes.get(index)! }))
+        .sort((a, b) => {
+          const tierOrder: Record<SizeTier, number> = { hero: 0, large: 1, medium: 2, small: 3 }
+          return tierOrder[a.tier] - tierOrder[b.tier]
+        })
+
+      // Generate positions and build cache
+      cachedPhotos = []
+      sortedPhotos.forEach(({ photo, tier }) => {
+        const sizeConfig = COLLAGE_SIZES[tier]
+        const position = findPosition(sizeConfig)
+        if (!position) return  // No available position
+
+        // Mark position as used
+        usedPositions.push({
+          x: position.x - sizeConfig.width / 2 - POSITION_PADDING,
+          y: position.y - sizeConfig.height / 2 - POSITION_PADDING,
+          w: sizeConfig.width + POSITION_PADDING * 2,
+          h: sizeConfig.height + POSITION_PADDING * 2,
+        })
+
+        // Add to cache
+        cachedPhotos.push({
+          itemId: photo.itemId,
+          eventId: photo.eventId,
+          content: photo.content,
+          timestamp: photo.timestamp,
+          x: position.x,
+          y: position.y,
+          tier,
+        })
+      })
+
+      // Save to cache
+      randomPhotoCacheByYear.set(year.id, {
+        photos: cachedPhotos,
+        lastRefresh: Date.now(),
+        filterHash,
+        scale,
+      })
+    }
+
+    // Render cached photos
+    cachedPhotos.forEach((photo, index) => {
+      const tier = photo.tier
+      const sizeConfig = COLLAGE_SIZES[tier]
+
+      // Create photo container - random photos are decorative, no connection lines
       const photoContainer = new Container()
-      photoContainer.x = position.x
-      photoContainer.y = position.y
+      photoContainer.x = photo.x
+      photoContainer.y = photo.y
       photoContainer.eventMode = 'static'
       photoContainer.cursor = 'pointer'
-      photoContainer.alpha = 0.6  // Slightly faded to distinguish from featured
 
-      // Photo background
+      // Random photos are more subtle/decorative than featured photos
+      const baseAlpha = tier === 'hero' ? 0.75 : tier === 'large' ? 0.7 : tier === 'medium' ? 0.65 : 0.6
+      photoContainer.alpha = baseAlpha
+
+      // Subtle shadow (less prominent than featured photos)
+      const shadowOffset = tier === 'hero' ? 4 : tier === 'large' ? 3 : 2
+      const shadow = new Graphics()
+      shadow.roundRect(
+        -sizeConfig.width / 2 + shadowOffset,
+        -sizeConfig.height / 2 + shadowOffset,
+        sizeConfig.width,
+        sizeConfig.height,
+        6
+      )
+      shadow.fill({ color: 0x000000, alpha: 0.2 })
+      photoContainer.addChild(shadow)
+
+      // Photo background (placeholder until image loads) - subtle styling
       const photoBg = new Graphics()
-      photoBg.roundRect(-RANDOM_PHOTO_WIDTH / 2, -RANDOM_PHOTO_HEIGHT / 2, RANDOM_PHOTO_WIDTH, RANDOM_PHOTO_HEIGHT, 4)
-      photoBg.fill({ color: 0x1a1a2e, alpha: 0.8 })
-      photoBg.stroke({ width: 1, color: 0x333355 })
+      photoBg.roundRect(-sizeConfig.width / 2, -sizeConfig.height / 2, sizeConfig.width, sizeConfig.height, 6)
+      photoBg.fill({ color: 0x1a1a2e })
+      photoBg.stroke({ width: 1, color: 0x2a2a4a })  // Subtle border
       photoContainer.addChild(photoBg)
 
-      // Get category color for this random photo
-      const randomCategoryColor = getCategoryColor(photo.category)
+      // Track actual dimensions after load
+      let actualWidth = sizeConfig.width
+      let actualHeight = sizeConfig.height
 
       // Load and display thumbnail
       const loadRandomThumbnail = async () => {
@@ -2977,22 +3758,56 @@ function buildL1View(
 
           if (!blob) return
 
-          // Use small thumbnail for random photos
-          const bitmap = await getThumbnail(filePath, blob, 'small')
+          // Use larger thumbnails for bigger photos
+          const thumbnailSize = (tier === 'hero' || tier === 'large') ? 'large' : 'medium'
+          const bitmap = await getThumbnail(filePath, blob, thumbnailSize)
+
+          // Calculate actual dimensions maintaining aspect ratio
+          const aspectRatio = bitmap.width / bitmap.height
+          if (aspectRatio > 1) {
+            // Landscape
+            actualWidth = sizeConfig.width
+            actualHeight = sizeConfig.width / aspectRatio
+          } else {
+            // Portrait or square
+            actualHeight = sizeConfig.height
+            actualWidth = sizeConfig.height * aspectRatio
+          }
+
+          // Update shadow for actual size
+          shadow.clear()
+          shadow.roundRect(
+            -actualWidth / 2 + shadowOffset,
+            -actualHeight / 2 + shadowOffset,
+            actualWidth,
+            actualHeight,
+            6
+          )
+          shadow.fill({ color: 0x000000, alpha: 0.2 })
+
+          // Update background to exact photo size
+          photoBg.clear()
+          photoBg.roundRect(-actualWidth / 2, -actualHeight / 2, actualWidth, actualHeight, 6)
+          photoBg.fill({ color: 0x1a1a2e })
+          photoBg.stroke({ width: 1, color: 0x2a2a4a })
 
           const texture = Texture.from(bitmap)
           const sprite = new Sprite(texture)
 
-          const scale = Math.min(RANDOM_PHOTO_WIDTH / bitmap.width, RANDOM_PHOTO_HEIGHT / bitmap.height)
-          sprite.width = bitmap.width * scale
-          sprite.height = bitmap.height * scale
-          sprite.x = -sprite.width / 2
-          sprite.y = -sprite.height / 2
+          // Scale sprite to exact card size
+          sprite.width = actualWidth
+          sprite.height = actualHeight
+          sprite.x = -actualWidth / 2
+          sprite.y = -actualHeight / 2
 
+          // Create mask for rounded corners
           const mask = new Graphics()
-          mask.roundRect(-RANDOM_PHOTO_WIDTH / 2, -RANDOM_PHOTO_HEIGHT / 2, RANDOM_PHOTO_WIDTH, RANDOM_PHOTO_HEIGHT, 4)
+          mask.roundRect(-actualWidth / 2, -actualHeight / 2, actualWidth, actualHeight, 6)
           mask.fill({ color: 0xffffff })
           sprite.mask = mask
+
+          // Hide background, show image
+          photoBg.visible = false
 
           photoContainer.addChild(mask)
           photoContainer.addChild(sprite)
@@ -3002,13 +3817,10 @@ function buildL1View(
       }
       loadRandomThumbnail()
 
-      // Hover effects
+      // Simple hover effect - just brighten (no resize, no connection lines)
       photoContainer.on('pointerover', () => {
         photoContainer.alpha = 1
-        photoBg.clear()
-        photoBg.roundRect(-RANDOM_PHOTO_WIDTH / 2, -RANDOM_PHOTO_HEIGHT / 2, RANDOM_PHOTO_WIDTH, RANDOM_PHOTO_HEIGHT, 4)
-        photoBg.fill({ color: 0x222244 })
-        photoBg.stroke({ width: 2, color: randomCategoryColor })
+        photoContainer.zIndex = 1000
 
         // Show event label
         const labelContainer = labelContainersByEventId.get(photo.eventId)
@@ -3018,11 +3830,8 @@ function buildL1View(
       })
 
       photoContainer.on('pointerout', () => {
-        photoContainer.alpha = 0.6
-        photoBg.clear()
-        photoBg.roundRect(-RANDOM_PHOTO_WIDTH / 2, -RANDOM_PHOTO_HEIGHT / 2, RANDOM_PHOTO_WIDTH, RANDOM_PHOTO_HEIGHT, 4)
-        photoBg.fill({ color: 0x1a1a2e, alpha: 0.8 })
-        photoBg.stroke({ width: 1, color: 0x333355 })
+        photoContainer.alpha = baseAlpha
+        photoContainer.zIndex = index
 
         // Hide event label
         const labelContainer = labelContainersByEventId.get(photo.eventId)
@@ -3041,15 +3850,84 @@ function buildL1View(
 
       randomPhotoLayer.addChild(photoContainer)
     })
+
+    // Enable z-index sorting for hover effects
+    randomPhotoLayer.sortableChildren = true
   }
 
-  // Add layers in order
-  container.addChild(connectionLineLayer)
-  container.addChild(randomPhotoLayer)
-  container.addChild(featuredPhotoLayer)
+  // Add layers in order (random photos first as background, then lines, then featured)
+  container.addChild(randomPhotoLayer)       // Background - decorative
+  container.addChild(connectionLineLayer)    // Lines visible above random photos
+  container.addChild(featuredPhotoLayer)     // Featured photos on top
+
+  // ======= Layer 6c: Refresh Random Photos Button =======
+  if (filterSettings.showRandomFill && onRebuild) {
+    const refreshBtn = new Container()
+    refreshBtn.x = effectiveWidth / 2 - 60  // Bottom right area
+    refreshBtn.y = 320  // Below timeline area
+    refreshBtn.eventMode = 'static'
+    refreshBtn.cursor = 'pointer'
+
+    // Button background
+    const btnBg = new Graphics()
+    btnBg.roundRect(-40, -14, 80, 28, 14)
+    btnBg.fill({ color: 0x2a2a4a, alpha: 0.8 })
+    refreshBtn.addChild(btnBg)
+
+    // Refresh icon (circular arrow)
+    const refreshIcon = new Graphics()
+    refreshIcon.arc(-22, 0, 6, -0.5, Math.PI * 1.5, false)
+    refreshIcon.stroke({ width: 2, color: 0xaaaacc })
+    // Arrow head
+    refreshIcon.moveTo(-22 + 6, -3)
+    refreshIcon.lineTo(-22 + 6, 3)
+    refreshIcon.lineTo(-22 + 10, 0)
+    refreshIcon.closePath()
+    refreshIcon.fill({ color: 0xaaaacc })
+    refreshBtn.addChild(refreshIcon)
+
+    // Label
+    const btnLabel = new Text({
+      text: 'Shuffle',
+      style: new TextStyle({
+        fontFamily: 'Inter, system-ui, sans-serif',
+        fontSize: 11,
+        fill: 0xaaaacc,
+      }),
+    })
+    btnLabel.x = -12
+    btnLabel.y = -6
+    refreshBtn.addChild(btnLabel)
+
+    // Hover effect
+    refreshBtn.on('pointerover', () => {
+      btnBg.clear()
+      btnBg.roundRect(-40, -14, 80, 28, 14)
+      btnBg.fill({ color: 0x3a3a5a, alpha: 0.9 })
+      btnLabel.style.fill = 0xffffff
+    })
+
+    refreshBtn.on('pointerout', () => {
+      btnBg.clear()
+      btnBg.roundRect(-40, -14, 80, 28, 14)
+      btnBg.fill({ color: 0x2a2a4a, alpha: 0.8 })
+      btnLabel.style.fill = 0xaaaacc
+    })
+
+    // Click handler: clear cache and rebuild
+    refreshBtn.on('pointertap', () => {
+      randomPhotoCacheByYear.delete(year.id)
+      onRebuild()
+    })
+
+    container.addChild(refreshBtn)
+  }
 
   // ======= Layer 7: Tooltip Layer (on top of everything) =======
   container.addChild(tooltipLayer)
+
+  // ======= Layer 8: Drag Layer (for drag ghosts, always on top) =======
+  container.addChild(dragLayer)
 
   // Return content bounds (based on effective width)
   const padding = 100
@@ -3420,8 +4298,6 @@ function createCanvasItemBlock(
           const imgHeight = bitmap.height
           const aspectRatio = imgWidth / imgHeight
 
-          console.log(`[Card] Image ${item.id}: ${imgWidth}x${imgHeight}, ratio=${aspectRatio.toFixed(2)}`)
-
           // Calculate card dimensions that match photo's aspect ratio
           // while maintaining similar total area for visual consistency
           // cardWidth * cardHeight = BASE_CARD_AREA
@@ -3449,15 +4325,12 @@ function createCanvasItemBlock(
             cardWidth = Math.round(cardHeight * aspectRatio)
           }
 
-          console.log(`[Card] New dimensions: ${cardWidth}x${cardHeight}`)
-
           // Update container pivot for new dimensions
           cont.pivot.set(cardWidth / 2, cardHeight / 2)
 
           // Hide the initial background - the image fills the card with rounded mask
           // No need for a visible background behind the image
           bg.visible = false
-          console.log(`[Card] Background hidden, image fills card`)
 
           // Update hover overlay position and size
           if (hoverOverlay) {

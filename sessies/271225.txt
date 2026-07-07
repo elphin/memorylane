@@ -1,0 +1,1136 @@
+
+ * ▐▛███▜▌ *   Claude Code v2.0.76
+* ▝▜█████▛▘ *  Opus 4.5 · Claude Max
+ *  ▘▘ ▝▝  *   K:\Cursor\memorylane
+
+  A gift for you
+  Your rate limits are 2x higher through 12/31. Enjoy the extra room to think!
+═══════════════════════════════════════════════ Conversation compacted · ctrl+o for history ══════════════════════════════════════════════
+  ⎿  Referenced file src\db\sync\writer.ts
+  ⎿  Referenced file src\timeline\Timeline.tsx
+  ⎿  Referenced file src\components\EventPropertiesDialog.tsx
+  ⎿  Read src\db\markdown\schema.ts (84 lines)
+  ⎿  Read src\db\markdown\generator.ts (273 lines)
+  ⎿  Todo list read (6 items)
+  ⎿  Plan file referenced (C:\Users\Jim\.claude\plans\wild-hopping-riddle.md)
+
+● I'll continue working on fixing the featured photo saving issue. Let me check the current state of the writer.ts file to see what's been implemented and what still needs to be done.
+
+● Read(src\db\sync\writer.ts)
+  ⎿  Read 625 lines
+
+● The writer.ts has the basic structure for featured photo handling. Now I need to check the full flow - let me look at the EventPropertiesDialog to see what's being sent, and then check how App.tsx handles it.
+
+● Read(src\components\EventPropertiesDialog.tsx)
+  ⎿  Read 764 lines
+
+● Read(src\models\types.ts)
+  ⎿  Read 160 lines
+
+● Now let me check App.tsx to see how handleSaveEventProperties passes the data to updateEventWithFiles:
+
+● Search(pattern: "handleSaveEventProperties", path: "src")
+  ⎿  Found 1 file (ctrl+o to expand)
+
+● Search(pattern: "handleSaveEventProperties", path: "src\App.tsx", output_mode: "content")
+  ⎿  Found 103 lines (ctrl+o to expand)
+
+● I found the issue! In App.tsx lines 515-516, null values are being converted to undefined, but null means "clear the value" while undefined means "no change". This is why the featured photo setting isn't being saved/cleared properly.
+
+  Let me also check the database to ensure these fields are stored:
+
+● Search(pattern: "featuredPhoto", path: "src\db\database.ts", output_mode: "content")
+  ⎿  Found 26 lines (ctrl+o to expand)
+
+● I see the issue clearly now. Let me check the database schema to understand the column structure:
+
+● Search(pattern: "CREATE TABLE.*events", path: "src\db\database.ts", output_mode: "content")
+  ⎿  Found 21 lines (ctrl+o to expand)
+
+● The database has all three columns but looking at the row mappings, there's a bug! The mapping shows row[5] being used for featuredPhotoData but the schema has featured_photo_slug at index 5 and featured_photo_data at index 6. Let me verify the SELECT statement:
+
+● Search(pattern: "SELECT.*FROM events", path: "src\db\database.ts", output_mode: "content")
+  ⎿  Found 3 lines (ctrl+o to expand)
+
+● Search(pattern: "getEventById|getAllEvents", path: "src\db\database.ts", output_mode: "content")
+  ⎿  Found 95 lines (ctrl+o to expand)
+
+● I found multiple issues:
+
+  1. App.tsx: Converting null to undefined for featured photo fields breaks clearing
+  2. database.ts: The SELECT queries don't include featured_photo_slug column
+
+  Let me fix both issues:
+
+● Read(src\App.tsx)
+  ⎿  Read 50 lines
+
+● Now I'll fix App.tsx - the featured photo fields should NOT convert null to undefined because null means "clear the value":
+
+● Update(src\App.tsx)
+  ⎿  Added 5 lines, removed 3 lines
+      506        const canUseFileBased = hasStorageFolder() && eventToUpdate?.folderPath
+      507
+      508        if (canUseFileBased) {
+      509 -        // Convert null to undefined for file-based update (null means "clear", undefined means "no change")
+      509 +        // Featured photo fields: null = clear, undefined = no change, string = set value
+      510 +        // Other fields: convert null to undefined for backwards compatibility
+      511          const fileUpdates = {
+      512            ...updates,
+      513            description: updates.description === null ? undefined : updates.description,
+      514            endAt: updates.endAt === null ? undefined : updates.endAt,
+      515            location: updates.location === null ? undefined : updates.location,
+      516 -          featuredPhotoId: updates.featuredPhotoId === null ? undefined : updates.featuredPhotoId,
+      517 -          featuredPhotoData: updates.featuredPhotoData === null ? undefined : updates.featuredPhotoData,
+      516 +          // Featured photo fields keep null to properly clear values
+      517 +          featuredPhotoId: updates.featuredPhotoId,
+      518 +          featuredPhotoData: updates.featuredPhotoData,
+      519          }
+      520          await updateEventWithFiles(eventId, fileUpdates)
+      521        } else {
+
+● Now I need to update the database.ts to include featured_photo_slug in the SELECT queries. Let me read the relevant parts:
+
+● Read(src\db\database.ts)
+  ⎿  Read 50 lines
+
+● I need to fix multiple SELECT queries. Let me update getAllEvents first:
+
+● Update(src\db\database.ts)
+  ⎿  Added 13 lines, removed 12 lines
+      531      return []
+      532    }
+      533    const result = db.exec(`
+      534 -    SELECT id, type, title, description, featured_photo_id, featured_photo_data,
+      534 +    SELECT id, type, title, description, featured_photo_id, featured_photo_slug, featured_photo_data,
+      535             location_lat, location_lng, location_label,
+      536             start_at, end_at, parent_id, cover_media_id, created_at, updated_at
+      537      FROM events ORDER BY start_at
+     ...
+      544      title: row[2] as string | undefined,
+      545      description: row[3] as string | undefined,
+      546      featuredPhotoId: row[4] as string | undefined,
+      547 -    featuredPhotoData: row[5] as string | undefined,
+      548 -    location: row[6] != null ? {
+      549 -      lat: row[6] as number,
+      550 -      lng: row[7] as number,
+      551 -      label: row[8] as string | undefined,
+      547 +    featuredPhotoSlug: row[5] as string | undefined,
+      548 +    featuredPhotoData: row[6] as string | undefined,
+      549 +    location: row[7] != null ? {
+      550 +      lat: row[7] as number,
+      551 +      lng: row[8] as number,
+      552 +      label: row[9] as string | undefined,
+      553      } : undefined,
+      554 -    startAt: row[9] as string,
+      555 -    endAt: row[10] as string | undefined,
+      556 -    parentId: row[11] as string | undefined,
+      557 -    coverMediaId: row[12] as string | undefined,
+      558 -    createdAt: row[13] as string,
+      559 -    updatedAt: row[14] as string,
+      554 +    startAt: row[10] as string,
+      555 +    endAt: row[11] as string | undefined,
+      556 +    parentId: row[12] as string | undefined,
+      557 +    coverMediaId: row[13] as string | undefined,
+      558 +    createdAt: row[14] as string,
+      559 +    updatedAt: row[15] as string,
+      560    }))
+      561  }
+      562
+
+● Read(src\db\database.ts)
+  ⎿  Read 60 lines
+
+● Update(src\db\database.ts)
+  ⎿  Added 13 lines, removed 12 lines
+      567    const year = dateStr.split('-')[0]
+      568
+      569    const stmt = db.prepare(`
+      570 -    SELECT id, type, title, description, featured_photo_id, featured_photo_data,
+      570 +    SELECT id, type, title, description, featured_photo_id, featured_photo_slug, featured_photo_data,
+      571             location_lat, location_lng, location_label,
+      572             start_at, end_at, parent_id, cover_media_id, created_at, updated_at
+      573      FROM events WHERE type = 'year' AND title = ?
+     ...
+      583        title: row[2] as string | undefined,
+      584        description: row[3] as string | undefined,
+      585        featuredPhotoId: row[4] as string | undefined,
+      586 -      featuredPhotoData: row[5] as string | undefined,
+      587 -      location: row[6] != null ? {
+      588 -        lat: row[6] as number,
+      589 -        lng: row[7] as number,
+      590 -        label: row[8] as string | undefined,
+      586 +      featuredPhotoSlug: row[5] as string | undefined,
+      587 +      featuredPhotoData: row[6] as string | undefined,
+      588 +      location: row[7] != null ? {
+      589 +        lat: row[7] as number,
+      590 +        lng: row[8] as number,
+      591 +        label: row[9] as string | undefined,
+      592        } : undefined,
+      593 -      startAt: row[9] as string,
+      594 -      endAt: row[10] as string | undefined,
+      595 -      parentId: row[11] as string | undefined,
+      596 -      coverMediaId: row[12] as string | undefined,
+      597 -      createdAt: row[13] as string,
+      598 -      updatedAt: row[14] as string,
+      593 +      startAt: row[10] as string,
+      594 +      endAt: row[11] as string | undefined,
+      595 +      parentId: row[12] as string | undefined,
+      596 +      coverMediaId: row[13] as string | undefined,
+      597 +      createdAt: row[14] as string,
+      598 +      updatedAt: row[15] as string,
+      599      }
+      600    }
+      601
+
+● Now let me fix getEventById:
+
+● Read(src\db\database.ts)
+  ⎿  Read 60 lines
+
+● Update(src\db\database.ts)
+  ⎿  Added 15 lines, removed 14 lines
+      861    if (!db) return null
+      862
+      863    const stmt = db.prepare(`
+      864 -    SELECT id, type, title, description, featured_photo_id, featured_photo_data,
+      864 +    SELECT id, type, title, description, featured_photo_id, featured_photo_slug, featured_photo_data,
+      865             location_lat, location_lng, location_label,
+      866             start_at, end_at, parent_id, cover_media_id, created_at, updated_at,
+      867             file_path, folder_path
+     ...
+      878        title: row[2] as string | undefined,
+      879        description: row[3] as string | undefined,
+      880        featuredPhotoId: row[4] as string | undefined,
+      881 -      featuredPhotoData: row[5] as string | undefined,
+      882 -      location: row[6] != null ? {
+      883 -        lat: row[6] as number,
+      884 -        lng: row[7] as number,
+      885 -        label: row[8] as string | undefined,
+      881 +      featuredPhotoSlug: row[5] as string | undefined,
+      882 +      featuredPhotoData: row[6] as string | undefined,
+      883 +      location: row[7] != null ? {
+      884 +        lat: row[7] as number,
+      885 +        lng: row[8] as number,
+      886 +        label: row[9] as string | undefined,
+      887        } : undefined,
+      888 -      startAt: row[9] as string,
+      889 -      endAt: row[10] as string | undefined,
+      890 -      parentId: row[11] as string | undefined,
+      891 -      coverMediaId: row[12] as string | undefined,
+      892 -      createdAt: row[13] as string,
+      893 -      updatedAt: row[14] as string,
+      894 -      filePath: row[15] as string | undefined,
+      895 -      folderPath: row[16] as string | undefined,
+      888 +      startAt: row[10] as string,
+      889 +      endAt: row[11] as string | undefined,
+      890 +      parentId: row[12] as string | undefined,
+      891 +      coverMediaId: row[13] as string | undefined,
+      892 +      createdAt: row[14] as string,
+      893 +      updatedAt: row[15] as string,
+      894 +      filePath: row[16] as string | undefined,
+      895 +      folderPath: row[17] as string | undefined,
+      896      }
+      897    }
+      898
+
+● Now let me check for any other SELECT queries on the events table:
+
+● Search(pattern: "featured_photo_id, featured_photo_data", path: "src\db\database.ts", output_mode: "content")
+  ⎿  Found 3 lines (ctrl+o to expand)
+
+● Let me check these remaining queries:
+
+● Read(src\db\database.ts)
+  ⎿  Read 120 lines
+
+● Let me fix the INSERT statements and getEventsByType:
+
+● Update(src\db\database.ts)
+  ⎿  Added 3 lines, removed 2 lines
+      623
+      624    // Create new year event
+      625    db.run(
+      626 -    `INSERT INTO events (id, type, title, description, featured_photo_id, featured_photo_data,
+      626 +    `INSERT INTO events (id, type, title, description, featured_photo_id, featured_photo_slug, featured_photo_data,
+      627                           location_lat, location_lng, location_label,
+      628                           start_at, end_at, parent_id, cover_media_id, created_at, updated_at)
+      629 -     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      629 +     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      630      [
+      631        id,
+      632        'year',
+     ...
+      637        null,
+      638        null,
+      639        null,
+      640 +      null,
+      641        `${year}-01-01`,  // startAt
+      642        `${year}-12-31`,  // endAt
+      643        null,  // No parent for year
+
+● Update(src\db\database.ts)
+  ⎿  Added 13 lines, removed 12 lines
+      666      return []
+      667    }
+      668    const stmt = db.prepare(`
+      669 -    SELECT id, type, title, description, featured_photo_id, featured_photo_data,
+      669 +    SELECT id, type, title, description, featured_photo_id, featured_photo_slug, featured_photo_data,
+      670             location_lat, location_lng, location_label,
+      671             start_at, end_at, parent_id, cover_media_id, created_at, updated_at
+      672      FROM events WHERE type = ? ORDER BY start_at
+     ...
+      682        title: row[2] as string | undefined,
+      683        description: row[3] as string | undefined,
+      684        featuredPhotoId: row[4] as string | undefined,
+      685 -      featuredPhotoData: row[5] as string | undefined,
+      686 -      location: row[6] != null ? {
+      687 -        lat: row[6] as number,
+      688 -        lng: row[7] as number,
+      689 -        label: row[8] as string | undefined,
+      685 +      featuredPhotoSlug: row[5] as string | undefined,
+      686 +      featuredPhotoData: row[6] as string | undefined,
+      687 +      location: row[7] != null ? {
+      688 +        lat: row[7] as number,
+      689 +        lng: row[8] as number,
+      690 +        label: row[9] as string | undefined,
+      691        } : undefined,
+      692 -      startAt: row[9] as string,
+      693 -      endAt: row[10] as string | undefined,
+      694 -      parentId: row[11] as string | undefined,
+      695 -      coverMediaId: row[12] as string | undefined,
+      696 -      createdAt: row[13] as string,
+      697 -      updatedAt: row[14] as string,
+      692 +      startAt: row[10] as string,
+      693 +      endAt: row[11] as string | undefined,
+      694 +      parentId: row[12] as string | undefined,
+      695 +      coverMediaId: row[13] as string | undefined,
+      696 +      createdAt: row[14] as string,
+      697 +      updatedAt: row[15] as string,
+      698      })
+      699    }
+      700    stmt.free()
+
+● Now let me fix createEvent:
+
+● Update(src\db\database.ts)
+  ⎿  Added 3 lines, removed 2 lines
+      707    const now = new Date().toISOString()
+      708
+      709    db.run(
+      710 -    `INSERT INTO events (id, type, title, description, featured_photo_id, featured_photo_data,
+      710 +    `INSERT INTO events (id, type, title, description, featured_photo_id, featured_photo_slug, featured_photo_data,
+      711                           location_lat, location_lng, location_label,
+      712                           start_at, end_at, parent_id, cover_media_id, created_at, updated_at)
+      713 -     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      713 +     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      714      [
+      715        id,
+      716        event.type,
+      717        event.title ?? null,
+      718        event.description ?? null,
+      719        event.featuredPhotoId ?? null,
+      720 +      event.featuredPhotoSlug ?? null,
+      721        event.featuredPhotoData ?? null,
+      722        event.location?.lat ?? null,
+      723        event.location?.lng ?? null,
+
+● Now let me also check the updateEvent function and insertEventFromFile:
+
+● Read(src\db\database.ts)
+  ⎿  Read 80 lines
+
+● Let me check insertEventFromFile:
+
+● Search(pattern: "insertEventFromFile", path: "src\db\database.ts", output_mode: "content")
+  ⎿  Found 36 lines (ctrl+o to expand)
+
+● insertEventFromFile already handles featuredPhotoSlug. Now let me check if updateEventWithFiles properly sets the slug on the Event object before calling insertEventFromFile:
+
+● Read(src\db\sync\writer.ts)
+  ⎿  Read 80 lines
+
+● I found another bug! When building updatedEvent, we need to set featuredPhotoSlug on the Event object:
+
+● Update(src\db\sync\writer.ts)
+  ⎿  Added 4 lines, removed 1 line
+      246    // Write file
+      247    await writeFile(folderPath, '_event.md', markdown)
+      248
+      249 -  // Update database
+      249 +  // Update database - include the converted slug
+      250    const updatedEvent: Event = {
+      251      ...event,
+      252      ...updates,
+      253 +    featuredPhotoSlug,
+      254 +    // Clear both ID and slug when ID is null
+      255 +    ...(updates.featuredPhotoId === null ? { featuredPhotoId: undefined, featuredPhotoSlug: undefined } : {}),
+      256      updatedAt: now,
+      257    }
+      258    insertEventFromFile(updatedEvent)
+
+● Now let me also handle the case where custom photo data is being set (we should clear the slug in that case):
+
+● Update(src\db\sync\writer.ts)
+  ⎿  Added 15 lines, removed 1 line
+      211
+      212    // Handle featured photo - convert ID to slug for markdown
+      213    let featuredPhotoSlug: string | undefined = existing.frontmatter.featuredPhoto
+      214 +  let featuredPhotoData: string | undefined = event.featuredPhotoData
+      215 +
+      216    if (updates.featuredPhotoId !== undefined) {
+      217      if (updates.featuredPhotoId === null) {
+      218 -      // Clear featured photo
+      218 +      // Clear featured photo from item selection
+      219        featuredPhotoSlug = undefined
+      220      } else {
+      221        // Look up item to get its slug
+     ...
+      224      }
+      225    }
+      226
+      227 +  // Handle custom photo data
+      228 +  if (updates.featuredPhotoData !== undefined) {
+      229 +    if (updates.featuredPhotoData === null) {
+      230 +      // Clear custom photo
+      231 +      featuredPhotoData = undefined
+      232 +    } else {
+      233 +      // Setting custom photo - clear the slug since they're mutually exclusive
+      234 +      featuredPhotoData = updates.featuredPhotoData
+      235 +      featuredPhotoSlug = undefined
+      236 +    }
+      237 +  }
+      238 +
+      239    // Merge updates
+      240    const merged: EventFrontmatter = {
+      241      ...existing.frontmatter,
+
+● Now I need to also update the updatedEvent object to properly include featuredPhotoData:
+
+● Update(src\db\sync\writer.ts)
+  ⎿  Added 2 lines, removed 3 lines
+      260    // Write file
+      261    await writeFile(folderPath, '_event.md', markdown)
+      262
+      263 -  // Update database - include the converted slug
+      263 +  // Update database - include the converted slug and data
+      264    const updatedEvent: Event = {
+      265      ...event,
+      266      ...updates,
+      267      featuredPhotoSlug,
+      268 -    // Clear both ID and slug when ID is null
+      269 -    ...(updates.featuredPhotoId === null ? { featuredPhotoId: undefined, featuredPhotoSlug: undefined } : {}),
+      268 +    featuredPhotoData,
+      269      updatedAt: now,
+      270    }
+      271    insertEventFromFile(updatedEvent)
+
+● Now let me build the project to verify there are no errors:
+
+● Bash(npm run build 2>&1)
+  ⎿  Error: Exit code 2
+
+     > lifeline@0.0.1 build
+     > tsc && vite build
+
+     src/db/sync/writer.ts(264,9): error TS2322: Type '{ featuredPhotoSlug: string | undefined; featuredPhotoData: string | undefined;
+     updatedAt: string; type: EventType; title?: string; description?: string; startAt: string; ... 9 more ...; createdAt: string; }' is
+     not assignable to type 'Event'.
+       Types of property 'featuredPhotoId' are incompatible.
+         Type 'string | null | undefined' is not assignable to type 'string | undefined'.
+           Type 'null' is not assignable to type 'string | undefined'.
+
+● I need to fix the type error - null needs to be converted to undefined:
+
+● Update(src\db\sync\writer.ts)
+  ⎿  Added 9 lines, removed 1 line
+      261    await writeFile(folderPath, '_event.md', markdown)
+      262
+      263    // Update database - include the converted slug and data
+      264 +  // Convert null to undefined for Event type compatibility
+      265    const updatedEvent: Event = {
+      266      ...event,
+      267 -    ...updates,
+      267 +    type: updates.type || event.type,
+      268 +    title: updates.title ?? event.title,
+      269 +    description: updates.description ?? event.description,
+      270 +    startAt: updates.startAt || event.startAt,
+      271 +    endAt: updates.endAt ?? event.endAt,
+      272 +    location: updates.location ?? event.location,
+      273 +    tags: updates.tags ?? event.tags,
+      274 +    featuredPhotoId: updates.featuredPhotoId === null ? undefined : (updates.featuredPhotoId ?? event.featuredPhotoId),
+      275      featuredPhotoSlug,
+      276      featuredPhotoData,
+      277      updatedAt: now,
+
+● Bash(npm run build 2>&1)
+  ⎿  > lifeline@0.0.1 build
+     > tsc && vite build
+     … +52 lines (ctrl+o to expand)
+
+● The build succeeded. Let me update the todo list and move on to the next task:
+
+● Now let me work on task 5: using the event's featured photo when creating a featured on the timeline. Let me find the relevant code in Timeline.tsx:
+
+● Search(pattern: "featured.*drag|drag.*featured|createFeaturedPhoto", path: "src\timeline\Timeline.tsx", output_mode: "content")
+  ⎿  Found 7 lines (ctrl+o to expand)
+
+● Read(src\timeline\Timeline.tsx)
+  ⎿  Read 120 lines
+
+● Read(src\timeline\Timeline.tsx)
+  ⎿  Read 100 lines
+
+● Let me see where setupDragToFeatured is called and what data is passed:
+
+● Read(src\timeline\Timeline.tsx)
+  ⎿  Read 80 lines
+
+● Let me also check the second call to setupDragToFeatured (for date range slices):
+
+● Read(src\timeline\Timeline.tsx)
+  ⎿  Read 80 lines
+
+● I need to modify the date range slice code to use the event's featured photo if set. Let me fix this:
+
+● Update(src\timeline\Timeline.tsx)
+  ⎿  Added 31 lines, removed 5 lines
+      2549      hitArea.fill({ color: 0x000000, alpha: 0 })
+      2550      sliceContainer.addChild(hitArea)
+      2551
+      2552 -    // Get first photo from event for featured photo creation
+      2553 -    const eventPhotos = memories.filter(m => m.eventId === event.id && m.itemType === 'photo')
+      2554 -    const firstPhoto = eventPhotos.length > 0 ? eventPhotos[0] : null
+      2552 +    // Get photo for featured photo creation - prefer event's featured photo if set
+      2553 +    const eventMemories = memories.filter(m => m.eventId === event.id)
+      2554 +    const eventPhotos = eventMemories.filter(m => m.itemType === 'photo')
+      2555
+      2556 +    let featuredItemId: string | undefined
+      2557 +    let featuredPhotoContent: string | undefined
+      2558 +
+      2559 +    // Check if event has a featured photo set
+      2560 +    if (event.featuredPhotoId) {
+      2561 +      // Find the memory matching the featured photo ID
+      2562 +      const featuredMemory = eventMemories.find(m => m.itemId === event.featuredPhotoId)
+      2563 +      if (featuredMemory && featuredMemory.itemType === 'photo') {
+      2564 +        featuredItemId = featuredMemory.itemId
+      2565 +        featuredPhotoContent = featuredMemory.content
+      2566 +      }
+      2567 +    }
+      2568 +
+      2569 +    // If event has custom featured photo data (uploaded separately), use that for preview
+      2570 +    if (event.featuredPhotoData && !featuredPhotoContent) {
+      2571 +      featuredPhotoContent = event.featuredPhotoData
+      2572 +      // Use first photo item for the actual featured photo entry
+      2573 +      featuredItemId = eventPhotos.length > 0 ? eventPhotos[0].itemId : undefined
+      2574 +    }
+      2575 +
+      2576 +    // Fall back to first photo if no featured photo is set
+      2577 +    if (!featuredItemId && eventPhotos.length > 0) {
+      2578 +      featuredItemId = eventPhotos[0].itemId
+      2579 +      featuredPhotoContent = eventPhotos[0].content
+      2580 +    }
+      2581 +
+      2582      // Set up drag to create featured photo
+      2583      setupDragToFeatured({
+      2584        container,
+     ...
+      2560        dragLayer,
+      2561        year,
+      2562        eventId: event.id,
+      2563 -      itemId: firstPhoto?.itemId,
+      2564 -      photoContent: firstPhoto?.content,
+      2563 +      itemId: featuredItemId,
+      2564 +      photoContent: featuredPhotoContent,
+      2565        onEventClick: () => onEventClick(event, centerX),
+      2566        onRebuild,
+      2567        isDraggingItemRef,
+
+● Let me build to verify the changes compile:
+
+● Bash(npm run build 2>&1)
+  ⎿  > lifeline@0.0.1 build
+     > tsc && vite build
+     … +52 lines (ctrl+o to expand)
+
+● Excellent! Build succeeded. Let me update the todo and start the last task:
+
+● Now let me work on allowing text memories as featured items. First, let me check how featured photos are currently rendered:
+
+● Search(pattern: "renderFeaturedPhoto|FEATURED_PHOTO|featured.*text", path: "src\timeline\Timeline.tsx", output_mode: "content")
+  ⎿  Found 10 lines (ctrl+o to expand)
+
+● Let me look at how the featured photos are rendered on the timeline:
+
+● Search(pattern: "getYearFeaturedPhotos|YearFeaturedPhoto", path: "src\timeline\Timeline.tsx", output_mode: "content")
+  ⎿  Found 8 lines (ctrl+o to expand)
+
+● Read(src\timeline\Timeline.tsx)
+  ⎿  Read 150 lines
+
+● I need to modify the featured photo rendering to also handle text items. Let me update this:
+
+● Update(src\timeline\Timeline.tsx)
+  ⎿  Added 14 lines, removed 6 lines
+      2880    // Load featured photos for this year
+      2881    const featuredPhotos = getYearFeaturedPhotos(year.id)
+      2882
+      2883 -  // Render featured photos with connection lines
+      2883 +  // Render featured photos/items with connection lines
+      2884    featuredPhotos.forEach((fp) => {
+      2885 -    // Get the source event to find the photo content
+      2885 +    // Get the source event to find the content
+      2886      const sourceEvent = getEventById(fp.eventId)
+      2887      if (!sourceEvent) return
+      2888
+      2889 -    // Get the photo content and item for category (from event's featured photo or first photo item)
+      2889 +    // Get the content and item for category
+      2890      let photoContent: string | null = null
+      2891 +    let textContent: string | null = null
+      2892      let sourceItem: Item | null = null
+      2893 +    let itemType: ItemType = 'photo'
+      2894 +
+      2895      if (sourceEvent.featuredPhotoData) {
+      2896        photoContent = sourceEvent.featuredPhotoData
+      2897      } else if (fp.itemId) {
+      2898        const item = getItemById(fp.itemId)
+      2899 -      if (item && item.itemType === 'photo') {
+      2900 -        photoContent = item.content
+      2899 +      if (item) {
+      2900          sourceItem = item
+      2901 +        itemType = item.itemType
+      2902 +        if (item.itemType === 'photo') {
+      2903 +          photoContent = item.content
+      2904 +        } else if (item.itemType === 'text') {
+      2905 +          textContent = item.bodyText || item.content
+      2906 +        }
+      2907        }
+      2908      }
+      2909 -    if (!photoContent) return
+      2909 +    if (!photoContent && !textContent) return
+      2910
+      2911      // Get the category color for the connection line
+      2912      const categoryColor = getCategoryColor(sourceItem?.category)
+
+● Now I need to add conditional rendering for text items. Let me modify the thumbnail loading section:
+
+● Read(src\timeline\Timeline.tsx)
+  ⎿  Read 100 lines
+
+● Update(src\timeline\Timeline.tsx)
+  ⎿  Added 111 lines, removed 53 lines
+      2934      // References to sprite and mask for resizing
+      2935      let photoSprite: Sprite | null = null
+      2936      let photoMask: Graphics | null = null
+      2937 +    let textContainer: Container | null = null
+      2938 +    let textElement: Text | null = null
+      2939      let originalImageSize = { width: 0, height: 0 }
+      2940
+      2941 -    // Load and display thumbnail
+      2942 -    const loadThumbnail = async () => {
+      2943 -      try {
+      2944 -        let blob: Blob | null = null
+      2945 -        let filePath: string = ''
+      2941 +    // Load and display content (photo or text)
+      2942 +    const loadContent = async () => {
+      2943 +      if (textContent) {
+      2944 +        // Render text card
+      2945 +        textContainer = new Container()
+      2946
+      2947 -        const isFileRef = photoContent!.startsWith('file:')
+      2948 -        const isDataUrl = photoContent!.startsWith('data:')
+      2947 +        // Text style - elegant quote-like appearance
+      2948 +        const textStyle = new TextStyle({
+      2949 +          fontFamily: 'Georgia, "Times New Roman", serif',
+      2950 +          fontSize: 16,
+      2951 +          fontStyle: 'italic',
+      2952 +          fill: 0xffffff,
+      2953 +          wordWrap: true,
+      2954 +          wordWrapWidth: fp.width - 32,
+      2955 +          align: 'center',
+      2956 +          lineHeight: 22,
+      2957 +        })
+      2958
+      2959 -        if (isFileRef) {
+      2960 -          // Parse file path: "file:2024/Event/photo.jpg"
+      2961 -          filePath = photoContent!.replace('file:', '')
+      2962 -          const pathParts = filePath.split('/')
+      2963 -          const fileName = pathParts.pop()!
+      2964 -          const dirPath = pathParts
+      2959 +        // Truncate text if too long
+      2960 +        const maxChars = 200
+      2961 +        const displayText = textContent.length > maxChars
+      2962 +          ? textContent.slice(0, maxChars) + '...'
+      2963 +          : textContent
+      2964
+      2965 -          // Get blob directly from file system
+      2966 -          blob = await readFileAsBlob(dirPath, fileName)
+      2967 -        } else if (isDataUrl) {
+      2968 -          // Convert data URL to blob
+      2969 -          const response = await fetch(photoContent!)
+      2970 -          blob = await response.blob()
+      2971 -          filePath = `dataurl:${fp.id}`
+      2965 +        // Create text with quotes for a quote-like appearance
+      2966 +        textElement = new Text({
+      2967 +          text: `"${displayText}"`,
+      2968 +          style: textStyle,
+      2969 +          resolution: TEXT_RESOLUTION,
+      2970 +        })
+      2971 +        textElement.anchor.set(0.5, 0.5)
+      2972 +        textElement.x = 0
+      2973 +        textElement.y = 0
+      2974 +
+      2975 +        // Ensure text fits within container height
+      2976 +        if (textElement.height > fp.height - 24) {
+      2977 +          const scaleFactor = (fp.height - 24) / textElement.height
+      2978 +          textElement.scale.set(Math.min(scaleFactor, 1))
+      2979          }
+      2980
+      2981 -        if (!blob) {
+      2982 -          console.warn('Failed to load image blob for featured photo:', fp.id)
+      2983 -          return
+      2981 +        textContainer.addChild(textElement)
+      2982 +
+      2983 +        // Keep background visible for text (nice dark card)
+      2984 +        photoBg.visible = true
+      2985 +
+      2986 +        photoContainer.addChild(textContainer)
+      2987 +
+      2988 +        // Re-add resize handle on top
+      2989 +        if (resizeHandle.parent === photoContainer) {
+      2990 +          photoContainer.removeChild(resizeHandle)
+      2991          }
+      2992 +        photoContainer.addChild(resizeHandle)
+      2993 +        return
+      2994 +      }
+      2995
+      2996 -        // Get thumbnail (hardware-accelerated and cached) - use large for featured photos
+      2997 -        const bitmap = await getThumbnail(filePath, blob, 'large')
+      2996 +      // Load photo thumbnail
+      2997 +      if (photoContent) {
+      2998 +        try {
+      2999 +          let blob: Blob | null = null
+      3000 +          let filePath: string = ''
+      3001
+      3002 -        // Store original image dimensions for aspect ratio
+      3003 -        originalImageSize = { width: bitmap.width, height: bitmap.height }
+      3002 +          const isFileRef = photoContent.startsWith('file:')
+      3003 +          const isDataUrl = photoContent.startsWith('data:')
+      3004
+      3005 -        // Create sprite from ImageBitmap
+      3006 -        const texture = Texture.from(bitmap)
+      3007 -        photoSprite = new Sprite(texture)
+      3005 +          if (isFileRef) {
+      3006 +            // Parse file path: "file:2024/Event/photo.jpg"
+      3007 +            filePath = photoContent.replace('file:', '')
+      3008 +            const pathParts = filePath.split('/')
+      3009 +            const fileName = pathParts.pop()!
+      3010 +            const dirPath = pathParts
+      3011
+      3012 -        // Scale to fit container while maintaining aspect ratio
+      3013 -        const scale = Math.min(fp.width / bitmap.width, fp.height / bitmap.height)
+      3014 -        photoSprite.width = bitmap.width * scale
+      3015 -        photoSprite.height = bitmap.height * scale
+      3016 -        photoSprite.x = -photoSprite.width / 2
+      3017 -        photoSprite.y = -photoSprite.height / 2
+      3012 +            // Get blob directly from file system
+      3013 +            blob = await readFileAsBlob(dirPath, fileName)
+      3014 +          } else if (isDataUrl) {
+      3015 +            // Convert data URL to blob
+      3016 +            const response = await fetch(photoContent)
+      3017 +            blob = await response.blob()
+      3018 +            filePath = `dataurl:${fp.id}`
+      3019 +          }
+      3020
+      3021 -        // Create mask for rounded corners
+      3022 -        photoMask = new Graphics()
+      3023 -        photoMask.roundRect(-fp.width / 2, -fp.height / 2, fp.width, fp.height, 6)
+      3024 -        photoMask.fill({ color: 0xffffff })
+      3025 -        photoSprite.mask = photoMask
+      3021 +          if (!blob) {
+      3022 +            console.warn('Failed to load image blob for featured photo:', fp.id)
+      3023 +            return
+      3024 +          }
+      3025
+      3026 -        // Hide background, show image
+      3027 -        photoBg.visible = false
+      3026 +          // Get thumbnail (hardware-accelerated and cached) - use large for featured photos
+      3027 +          const bitmap = await getThumbnail(filePath, blob, 'large')
+      3028
+      3029 -        photoContainer.addChild(photoMask)
+      3030 -        photoContainer.addChild(photoSprite)
+      3029 +          // Store original image dimensions for aspect ratio
+      3030 +          originalImageSize = { width: bitmap.width, height: bitmap.height }
+      3031
+      3032 -        // Re-add resize handle on top so it's not covered by the photo
+      3033 -        // Note: resizeIndicator === resizeHandle, so only need to move once
+      3034 -        if (resizeHandle.parent === photoContainer) {
+      3035 -          photoContainer.removeChild(resizeHandle)
+      3032 +          // Create sprite from ImageBitmap
+      3033 +          const texture = Texture.from(bitmap)
+      3034 +          photoSprite = new Sprite(texture)
+      3035 +
+      3036 +          // Scale to fit container while maintaining aspect ratio
+      3037 +          const scale = Math.min(fp.width / bitmap.width, fp.height / bitmap.height)
+      3038 +          photoSprite.width = bitmap.width * scale
+      3039 +          photoSprite.height = bitmap.height * scale
+      3040 +          photoSprite.x = -photoSprite.width / 2
+      3041 +          photoSprite.y = -photoSprite.height / 2
+      3042 +
+      3043 +          // Create mask for rounded corners
+      3044 +          photoMask = new Graphics()
+      3045 +          photoMask.roundRect(-fp.width / 2, -fp.height / 2, fp.width, fp.height, 6)
+      3046 +          photoMask.fill({ color: 0xffffff })
+      3047 +          photoSprite.mask = photoMask
+      3048 +
+      3049 +          // Hide background, show image
+      3050 +          photoBg.visible = false
+      3051 +
+      3052 +          photoContainer.addChild(photoMask)
+      3053 +          photoContainer.addChild(photoSprite)
+      3054 +
+      3055 +          // Re-add resize handle on top so it's not covered by the photo
+      3056 +          // Note: resizeIndicator === resizeHandle, so only need to move once
+      3057 +          if (resizeHandle.parent === photoContainer) {
+      3058 +            photoContainer.removeChild(resizeHandle)
+      3059 +          }
+      3060 +          photoContainer.addChild(resizeHandle)
+      3061 +        } catch (err) {
+      3062 +          console.error('Failed to load featured photo thumbnail:', err)
+      3063          }
+      3064 -        photoContainer.addChild(resizeHandle)
+      3065 -      } catch (err) {
+      3066 -        console.error('Failed to load featured photo thumbnail:', err)
+      3064        }
+      3065      }
+      3066 -    loadThumbnail()
+      3066 +    loadContent()
+      3067
+      3068      // Helper to update sprite and mask size
+      3069      const updatePhotoSize = (newWidth: number, newHeight: number) => {
+
+● Now I need to also update the updatePhotoSize function to handle text resizing:
+
+● Read(src\timeline\Timeline.tsx)
+  ⎿  Read 30 lines
+
+● Update(src\timeline\Timeline.tsx)
+  ⎿  Added 14 lines, removed 2 lines
+      3065      }
+      3066      loadContent()
+      3067
+      3068 -    // Helper to update sprite and mask size
+      3069 -    const updatePhotoSize = (newWidth: number, newHeight: number) => {
+      3068 +    // Helper to update sprite/text and mask size
+      3069 +    const updateContentSize = (newWidth: number, newHeight: number) => {
+      3070        if (photoSprite && photoMask && originalImageSize.width > 0) {
+      3071          // Scale sprite to fit new container size
+      3072          const scale = Math.min(newWidth / originalImageSize.width, newHeight / originalImageSize.height)
+     ...
+      3080          photoMask.roundRect(-newWidth / 2, -newHeight / 2, newWidth, newHeight, 6)
+      3081          photoMask.fill({ color: 0xffffff })
+      3082        }
+      3083 +
+      3084 +      if (textElement) {
+      3085 +        // Update text word wrap width
+      3086 +        textElement.style.wordWrapWidth = newWidth - 32
+      3087 +        // Ensure text fits within container height
+      3088 +        if (textElement.height > newHeight - 24) {
+      3089 +          const scaleFactor = (newHeight - 24) / textElement.height
+      3090 +          textElement.scale.set(Math.min(scaleFactor, 1))
+      3091 +        } else {
+      3092 +          textElement.scale.set(1)
+      3093 +        }
+      3094 +      }
+      3095      }
+      3096
+      3097      // Connection line from photo to source slice (using category color)
+
+● I renamed the function, now I need to update any calls to it:
+
+● Search(pattern: "updatePhotoSize", path: "src\timeline\Timeline.tsx", output_mode: "content")
+  ⎿  Found 1 line (ctrl+o to expand)
+
+● Read(src\timeline\Timeline.tsx)
+  ⎿  Read 20 lines
+
+● Update(src\timeline\Timeline.tsx)
+  ⎿  Added 2 lines, removed 2 lines
+      3358        photoBg.fill({ color: 0x333344 })
+      3359        photoBg.stroke({ width: 3, color: categoryColor })
+      3360
+      3361 -      // Update photo sprite and mask
+      3362 -      updatePhotoSize(newWidth, newHeight)
+      3361 +      // Update photo sprite/text and mask
+      3362 +      updateContentSize(newWidth, newHeight)
+      3363
+      3364        // Update resize handle position (it's a Container now)
+      3365        resizeHandle.x = newWidth / 2 - 24
+
+● Now I need to update setupDragToFeatured to also support text items. Let me modify it to handle both:
+
+● Read(src\timeline\Timeline.tsx)
+  ⎿  Read 100 lines
+
+● Update(src\timeline\Timeline.tsx)
+  ⎿  Added 39 lines, removed 4 lines
+      1787    return cont
+      1788  }
+      1789
+      1790 -// ============ Drag to Create Featured Photo Helper ============
+      1790 +// ============ Drag to Create Featured Item Helper ============
+      1791
+      1792  interface DragToFeaturedConfig {
+      1793    container: Container
+     ...
+      1797    eventId: string
+      1798    itemId: string | undefined
+      1799    photoContent?: string  // Photo content for thumbnail preview
+      1800 +  textContent?: string   // Text content for text items
+      1801    onEventClick: () => void
+      1802    onRebuild?: () => void
+      1803    isDraggingItemRef?: React.MutableRefObject<boolean>  // Prevents timeline pan during drag
+      1804  }
+      1805
+      1806  function setupDragToFeatured(config: DragToFeaturedConfig) {
+      1807 -  const { container, sliceContainer, dragLayer, year, eventId, itemId, photoContent,
+           -onEventClick, onRebuild, isDraggingItemRef } = config
+      1807 +  const { container, sliceContainer, dragLayer, year, eventId, itemId, photoContent, textContent,
+           +onEventClick, onRebuild, isDraggingItemRef } = config
+      1808
+      1809    let isDragging = false
+      1810    let dragGhost: Container | null = null
+     ...
+      1821        isDraggingItemRef.current = true
+      1822      }
+      1823
+      1824 -    // Create drag ghost with thumbnail preview
+      1824 +    // Create drag ghost with content preview
+      1825      dragGhost = new Container()
+      1826
+      1827      // Background
+     ...
+      1831      ghostBg.stroke({ width: 2, color: 0x66aaff })
+      1832      dragGhost.addChild(ghostBg)
+      1833
+      1834 +    // Show text preview for text items
+      1835 +    if (textContent) {
+      1836 +      const textStyle = new TextStyle({
+      1837 +        fontFamily: 'Georgia, "Times New Roman", serif',
+      1838 +        fontSize: 14,
+      1839 +        fontStyle: 'italic',
+      1840 +        fill: 0xffffff,
+      1841 +        wordWrap: true,
+      1842 +        wordWrapWidth: FEATURED_PHOTO_WIDTH - 32,
+      1843 +        align: 'center',
+      1844 +        lineHeight: 20,
+      1845 +      })
+      1846 +
+      1847 +      const maxChars = 100
+      1848 +      const displayText = textContent.length > maxChars
+      1849 +        ? textContent.slice(0, maxChars) + '...'
+      1850 +        : textContent
+      1851 +
+      1852 +      const textPreview = new Text({
+      1853 +        text: `"${displayText}"`,
+      1854 +        style: textStyle,
+      1855 +        resolution: TEXT_RESOLUTION,
+      1856 +      })
+      1857 +      textPreview.anchor.set(0.5, 0.5)
+      1858 +
+      1859 +      // Scale down if needed
+      1860 +      if (textPreview.height > FEATURED_PHOTO_HEIGHT - 24) {
+      1861 +        const scaleFactor = (FEATURED_PHOTO_HEIGHT - 24) / textPreview.height
+      1862 +        textPreview.scale.set(Math.min(scaleFactor, 1))
+      1863 +      }
+      1864 +
+      1865 +      dragGhost.addChild(textPreview)
+      1866 +    }
+      1867 +
+      1868      // Load thumbnail if photo content available
+      1869 -    if (photoContent) {
+      1869 +    if (photoContent && !textContent) {
+      1870        const loadPreview = async () => {
+      1871          try {
+      1872            let blob: Blob | null = null
+
+● Now I need to update the call sites to pass textContent for text items. First, let me check the individual memory slice call:
+
+● Read(src\timeline\Timeline.tsx)
+  ⎿  Read 30 lines
+
+● Update(src\timeline\Timeline.tsx)
+  ⎿  Added 2 lines, removed 1 line
+      2233      hitArea.fill({ color: 0x000000, alpha: 0 })
+      2234      sliceContainer.addChild(hitArea)
+      2235
+      2236 -    // Set up drag to create featured photo
+      2236 +    // Set up drag to create featured item (photo or text)
+      2237      setupDragToFeatured({
+      2238        container,
+      2239        sliceContainer,
+     ...
+      2242        eventId: memory.eventId,
+      2243        itemId: memory.itemId,
+      2244        photoContent: memory.itemType === 'photo' ? memory.content : undefined,
+      2245 +      textContent: memory.itemType === 'text' ? memory.content : undefined,
+      2246        onEventClick: () => {
+      2247          const parentEvent = clusters.find(c => c.event.id === memory.eventId)?.event
+      2248          if (parentEvent) {
+
+● Now let me update the event block call site to also support text items:
+
+● Read(src\timeline\Timeline.tsx)
+  ⎿  Read 40 lines
+
+● Update(src\timeline\Timeline.tsx)
+  ⎿  Added 21 lines, removed 8 lines
+      2585      hitArea.fill({ color: 0x000000, alpha: 0 })
+      2586      sliceContainer.addChild(hitArea)
+      2587
+      2588 -    // Get photo for featured photo creation - prefer event's featured photo if set
+      2588 +    // Get item for featured creation - prefer event's featured item, then photos, then text
+      2589      const eventMemories = memories.filter(m => m.eventId === event.id)
+      2590      const eventPhotos = eventMemories.filter(m => m.itemType === 'photo')
+      2591 +    const eventTexts = eventMemories.filter(m => m.itemType === 'text')
+      2592
+      2593      let featuredItemId: string | undefined
+      2594      let featuredPhotoContent: string | undefined
+      2595 +    let featuredTextContent: string | undefined
+      2596
+      2597 -    // Check if event has a featured photo set
+      2597 +    // Check if event has a featured item set
+      2598      if (event.featuredPhotoId) {
+      2599 -      // Find the memory matching the featured photo ID
+      2599 +      // Find the memory matching the featured item ID
+      2600        const featuredMemory = eventMemories.find(m => m.itemId === event.featuredPhotoId)
+      2601 -      if (featuredMemory && featuredMemory.itemType === 'photo') {
+      2601 +      if (featuredMemory) {
+      2602          featuredItemId = featuredMemory.itemId
+      2603 -        featuredPhotoContent = featuredMemory.content
+      2603 +        if (featuredMemory.itemType === 'photo') {
+      2604 +          featuredPhotoContent = featuredMemory.content
+      2605 +        } else if (featuredMemory.itemType === 'text') {
+      2606 +          featuredTextContent = featuredMemory.content
+      2607 +        }
+      2608        }
+      2609      }
+      2610
+      2611      // If event has custom featured photo data (uploaded separately), use that for preview
+      2612 -    if (event.featuredPhotoData && !featuredPhotoContent) {
+      2612 +    if (event.featuredPhotoData && !featuredPhotoContent && !featuredTextContent) {
+      2613        featuredPhotoContent = event.featuredPhotoData
+      2614        // Use first photo item for the actual featured photo entry
+      2615        featuredItemId = eventPhotos.length > 0 ? eventPhotos[0].itemId : undefined
+      2616      }
+      2617
+      2618 -    // Fall back to first photo if no featured photo is set
+      2618 +    // Fall back to first photo if no featured item is set
+      2619      if (!featuredItemId && eventPhotos.length > 0) {
+      2620        featuredItemId = eventPhotos[0].itemId
+      2621        featuredPhotoContent = eventPhotos[0].content
+      2622      }
+      2623
+      2624 -    // Set up drag to create featured photo
+      2624 +    // Fall back to first text item if no photos available
+      2625 +    if (!featuredItemId && eventTexts.length > 0) {
+      2626 +      featuredItemId = eventTexts[0].itemId
+      2627 +      featuredTextContent = eventTexts[0].content
+      2628 +    }
+      2629 +
+      2630 +    // Set up drag to create featured item
+      2631      setupDragToFeatured({
+      2632        container,
+      2633        sliceContainer,
+     ...
+      2624        eventId: event.id,
+      2625        itemId: featuredItemId,
+      2626        photoContent: featuredPhotoContent,
+      2627 +      textContent: featuredTextContent,
+      2628        onEventClick: () => onEventClick(event, centerX),
+      2629        onRebuild,
+      2630        isDraggingItemRef,
+
+● Now let me build to verify everything works:
+
+● Bash(npm run build 2>&1)
+  ⎿  Error: Exit code 2
+
+     > lifeline@0.0.1 build
+     > tsc && vite build
+
+     src/timeline/Timeline.tsx(2942,9): error TS6133: 'itemType' is declared but its value is never read.
+
+● Read(src\timeline\Timeline.tsx)
+  ⎿  Read 15 lines
+
+● Update(src\timeline\Timeline.tsx)
+  ⎿  Removed 2 lines
+      2939      let photoContent: string | null = null
+      2940      let textContent: string | null = null
+      2941      let sourceItem: Item | null = null
+      2942 -    let itemType: ItemType = 'photo'
+      2942
+      2943      if (sourceEvent.featuredPhotoData) {
+      2944        photoContent = sourceEvent.featuredPhotoData
+     ...
+      2947        const item = getItemById(fp.itemId)
+      2948        if (item) {
+      2949          sourceItem = item
+      2950 -        itemType = item.itemType
+      2950          if (item.itemType === 'photo') {
+      2951            photoContent = item.content
+      2952          } else if (item.itemType === 'text') {
+
+● Bash(npm run build 2>&1)
+  ⎿  > lifeline@0.0.1 build
+     > tsc && vite build
+     … +52 lines (ctrl+o to expand)
+
+● All tasks completed! Let me update the todo list:
+
+● All tasks completed! Here's a summary of the changes made:
+
+  Summary of Changes
+
+  1. ✅ Connection line thinner
+
+  - Changed line width from default to 1.5 with alpha: 0.5 for a more subtle appearance
+
+  2. ✅ Delete button more subtle
+
+  - Made the button smaller (8px radius)
+  - Added transparent background (alpha: 0.3)
+  - Reduced X icon size and changed color to subtle red (0xff6666)
+
+  3. ✅ Line from center of block
+
+  - Updated line origin calculation to use the center of the event's time range:
+  const eventCenterTime = (eventStartTime + eventEndTime) / 2
+  const sourceX = timestampToX(eventCenterTime)
+
+  4. ✅ Featured photo setting not saving
+
+  - Fixed App.tsx to NOT convert null to undefined for featured photo fields
+  - Added featured_photo_slug column to all SELECT queries in database.ts
+  - Updated all INSERT statements to include featured_photo_slug
+  - Fixed writer.ts to properly set featuredPhotoSlug and featuredPhotoData on the Event object
+
+  5. ✅ Use event's featured photo when creating featured on timeline
+
+  - Updated event block drag logic to check for event.featuredPhotoId first
+  - If an event has a featured photo set, that photo is used when dragging from the slice
+  - Falls back to first photo if no featured photo is explicitly set
+
+  6. ✅ Allow text memories as featured items
+
+  - Extended setupDragToFeatured to accept textContent parameter
+  - Added text preview in drag ghost (styled as italic quote)
+  - Updated featured item rendering to handle text items with styled quote appearance (Georgia serif font, centered, with quotes)
+  - Falls back to text items when no photos are available for an event
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+> npm run dev                                                                                                                      ↵ send
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ bypass permissions on · 4 background tasks
+PS K:\Cursor\memorylane>

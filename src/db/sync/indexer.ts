@@ -25,6 +25,8 @@ import {
   setMeta,
   getMeta,
   exportDatabase,
+  getAllYearFeaturedPhotos,
+  upsertYearFeaturedPhoto,
 } from '../database'
 import { writeDatabaseFile } from '../fileStorage'
 import {
@@ -74,6 +76,11 @@ export async function rebuildFullIndex(): Promise<IndexResult> {
   }
 
   console.log('Starting full index rebuild...')
+
+  // IMPORTANT: Save featured photos BEFORE creating fresh database
+  // These are UI state that isn't stored in markdown files
+  const savedFeaturedPhotos = getAllYearFeaturedPhotos()
+  console.log(`Preserving ${savedFeaturedPhotos.length} featured photos`)
 
   // Create fresh database
   await createFreshDatabase()
@@ -150,6 +157,21 @@ export async function rebuildFullIndex(): Promise<IndexResult> {
   // Update meta
   setMeta('last_full_index', new Date().toISOString())
   setMeta('index_version', '2')
+
+  // IMPORTANT: Restore featured photos after rebuild
+  // Only restore photos that still have valid event references
+  let restoredCount = 0
+  for (const photo of savedFeaturedPhotos) {
+    try {
+      // The photo's eventId should still exist after rebuild
+      // If the event was deleted, the photo won't be restored (which is correct)
+      upsertYearFeaturedPhoto(photo)
+      restoredCount++
+    } catch (err) {
+      console.warn(`Could not restore featured photo ${photo.id}:`, err)
+    }
+  }
+  console.log(`Restored ${restoredCount} of ${savedFeaturedPhotos.length} featured photos`)
 
   // Save database to file
   const dbData = exportDatabase()

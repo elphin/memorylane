@@ -531,7 +531,7 @@ export function getAllEvents(): Event[] {
     return []
   }
   const result = db.exec(`
-    SELECT id, type, title, description, featured_photo_id, featured_photo_data,
+    SELECT id, type, title, description, featured_photo_id, featured_photo_slug, featured_photo_data,
            location_lat, location_lng, location_label,
            start_at, end_at, parent_id, cover_media_id, created_at, updated_at
     FROM events ORDER BY start_at
@@ -544,18 +544,19 @@ export function getAllEvents(): Event[] {
     title: row[2] as string | undefined,
     description: row[3] as string | undefined,
     featuredPhotoId: row[4] as string | undefined,
-    featuredPhotoData: row[5] as string | undefined,
-    location: row[6] != null ? {
-      lat: row[6] as number,
-      lng: row[7] as number,
-      label: row[8] as string | undefined,
+    featuredPhotoSlug: row[5] as string | undefined,
+    featuredPhotoData: row[6] as string | undefined,
+    location: row[7] != null ? {
+      lat: row[7] as number,
+      lng: row[8] as number,
+      label: row[9] as string | undefined,
     } : undefined,
-    startAt: row[9] as string,
-    endAt: row[10] as string | undefined,
-    parentId: row[11] as string | undefined,
-    coverMediaId: row[12] as string | undefined,
-    createdAt: row[13] as string,
-    updatedAt: row[14] as string,
+    startAt: row[10] as string,
+    endAt: row[11] as string | undefined,
+    parentId: row[12] as string | undefined,
+    coverMediaId: row[13] as string | undefined,
+    createdAt: row[14] as string,
+    updatedAt: row[15] as string,
   }))
 }
 
@@ -566,7 +567,7 @@ export function getYearForDate(dateStr: string): Event | null {
   const year = dateStr.split('-')[0]
 
   const stmt = db.prepare(`
-    SELECT id, type, title, description, featured_photo_id, featured_photo_data,
+    SELECT id, type, title, description, featured_photo_id, featured_photo_slug, featured_photo_data,
            location_lat, location_lng, location_label,
            start_at, end_at, parent_id, cover_media_id, created_at, updated_at
     FROM events WHERE type = 'year' AND title = ?
@@ -582,18 +583,19 @@ export function getYearForDate(dateStr: string): Event | null {
       title: row[2] as string | undefined,
       description: row[3] as string | undefined,
       featuredPhotoId: row[4] as string | undefined,
-      featuredPhotoData: row[5] as string | undefined,
-      location: row[6] != null ? {
-        lat: row[6] as number,
-        lng: row[7] as number,
-        label: row[8] as string | undefined,
+      featuredPhotoSlug: row[5] as string | undefined,
+      featuredPhotoData: row[6] as string | undefined,
+      location: row[7] != null ? {
+        lat: row[7] as number,
+        lng: row[8] as number,
+        label: row[9] as string | undefined,
       } : undefined,
-      startAt: row[9] as string,
-      endAt: row[10] as string | undefined,
-      parentId: row[11] as string | undefined,
-      coverMediaId: row[12] as string | undefined,
-      createdAt: row[13] as string,
-      updatedAt: row[14] as string,
+      startAt: row[10] as string,
+      endAt: row[11] as string | undefined,
+      parentId: row[12] as string | undefined,
+      coverMediaId: row[13] as string | undefined,
+      createdAt: row[14] as string,
+      updatedAt: row[15] as string,
     }
   }
 
@@ -621,14 +623,15 @@ export function getOrCreateYear(dateStr: string): Event {
 
   // Create new year event
   db.run(
-    `INSERT INTO events (id, type, title, description, featured_photo_id, featured_photo_data,
+    `INSERT INTO events (id, type, title, description, featured_photo_id, featured_photo_slug, featured_photo_data,
                          location_lat, location_lng, location_label,
                          start_at, end_at, parent_id, cover_media_id, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       'year',
       year,  // Title is just the year number
+      null,
       null,
       null,
       null,
@@ -663,7 +666,7 @@ export function getEventsByType(type: Event['type']): Event[] {
     return []
   }
   const stmt = db.prepare(`
-    SELECT id, type, title, description, featured_photo_id, featured_photo_data,
+    SELECT id, type, title, description, featured_photo_id, featured_photo_slug, featured_photo_data,
            location_lat, location_lng, location_label,
            start_at, end_at, parent_id, cover_media_id, created_at, updated_at
     FROM events WHERE type = ? ORDER BY start_at
@@ -679,18 +682,19 @@ export function getEventsByType(type: Event['type']): Event[] {
       title: row[2] as string | undefined,
       description: row[3] as string | undefined,
       featuredPhotoId: row[4] as string | undefined,
-      featuredPhotoData: row[5] as string | undefined,
-      location: row[6] != null ? {
-        lat: row[6] as number,
-        lng: row[7] as number,
-        label: row[8] as string | undefined,
+      featuredPhotoSlug: row[5] as string | undefined,
+      featuredPhotoData: row[6] as string | undefined,
+      location: row[7] != null ? {
+        lat: row[7] as number,
+        lng: row[8] as number,
+        label: row[9] as string | undefined,
       } : undefined,
-      startAt: row[9] as string,
-      endAt: row[10] as string | undefined,
-      parentId: row[11] as string | undefined,
-      coverMediaId: row[12] as string | undefined,
-      createdAt: row[13] as string,
-      updatedAt: row[14] as string,
+      startAt: row[10] as string,
+      endAt: row[11] as string | undefined,
+      parentId: row[12] as string | undefined,
+      coverMediaId: row[13] as string | undefined,
+      createdAt: row[14] as string,
+      updatedAt: row[15] as string,
     })
   }
   stmt.free()
@@ -703,16 +707,17 @@ export function createEvent(event: Omit<Event, 'id' | 'createdAt' | 'updatedAt'>
   const now = new Date().toISOString()
 
   db.run(
-    `INSERT INTO events (id, type, title, description, featured_photo_id, featured_photo_data,
+    `INSERT INTO events (id, type, title, description, featured_photo_id, featured_photo_slug, featured_photo_data,
                          location_lat, location_lng, location_label,
                          start_at, end_at, parent_id, cover_media_id, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       event.type,
       event.title ?? null,
       event.description ?? null,
       event.featuredPhotoId ?? null,
+      event.featuredPhotoSlug ?? null,
       event.featuredPhotoData ?? null,
       event.location?.lat ?? null,
       event.location?.lng ?? null,
@@ -859,7 +864,7 @@ export function getEventById(eventId: string): Event | null {
   if (!db) return null
 
   const stmt = db.prepare(`
-    SELECT id, type, title, description, featured_photo_id, featured_photo_data,
+    SELECT id, type, title, description, featured_photo_id, featured_photo_slug, featured_photo_data,
            location_lat, location_lng, location_label,
            start_at, end_at, parent_id, cover_media_id, created_at, updated_at,
            file_path, folder_path
@@ -876,20 +881,21 @@ export function getEventById(eventId: string): Event | null {
       title: row[2] as string | undefined,
       description: row[3] as string | undefined,
       featuredPhotoId: row[4] as string | undefined,
-      featuredPhotoData: row[5] as string | undefined,
-      location: row[6] != null ? {
-        lat: row[6] as number,
-        lng: row[7] as number,
-        label: row[8] as string | undefined,
+      featuredPhotoSlug: row[5] as string | undefined,
+      featuredPhotoData: row[6] as string | undefined,
+      location: row[7] != null ? {
+        lat: row[7] as number,
+        lng: row[8] as number,
+        label: row[9] as string | undefined,
       } : undefined,
-      startAt: row[9] as string,
-      endAt: row[10] as string | undefined,
-      parentId: row[11] as string | undefined,
-      coverMediaId: row[12] as string | undefined,
-      createdAt: row[13] as string,
-      updatedAt: row[14] as string,
-      filePath: row[15] as string | undefined,
-      folderPath: row[16] as string | undefined,
+      startAt: row[10] as string,
+      endAt: row[11] as string | undefined,
+      parentId: row[12] as string | undefined,
+      coverMediaId: row[13] as string | undefined,
+      createdAt: row[14] as string,
+      updatedAt: row[15] as string,
+      filePath: row[16] as string | undefined,
+      folderPath: row[17] as string | undefined,
     }
   }
 
@@ -1836,6 +1842,35 @@ export function deleteYearFeaturedPhotosForEvent(eventId: string): void {
   if (!db) return
   db.run('DELETE FROM year_featured_photos WHERE event_id = ?', [eventId])
   saveToStorage()
+}
+
+export function getAllYearFeaturedPhotos(): YearFeaturedPhoto[] {
+  if (!db) return []
+
+  const stmt = db.prepare(`
+    SELECT id, year_id, event_id, item_id, x, y, scale, width, height, created_at, updated_at
+    FROM year_featured_photos
+  `)
+
+  const photos: YearFeaturedPhoto[] = []
+  while (stmt.step()) {
+    const row = stmt.get()
+    photos.push({
+      id: row[0] as string,
+      yearId: row[1] as string,
+      eventId: row[2] as string,
+      itemId: row[3] as string | undefined,
+      x: row[4] as number,
+      y: row[5] as number,
+      scale: row[6] as number,
+      width: row[7] as number,
+      height: row[8] as number,
+      createdAt: row[9] as string,
+      updatedAt: row[10] as string,
+    })
+  }
+  stmt.free()
+  return photos
 }
 
 // ============================================================================

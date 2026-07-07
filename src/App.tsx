@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { Timeline, TimelineRef } from './timeline/Timeline'
-import { initDatabase, getEventsByType, getAllEvents, deleteItem, deleteEvent, updateItem, getEventById, updateEvent, getPhotoItemsForEvent, createItem, upsertCanvasItem, getAllItems, updateItemContent, getItemsByEvent } from './db/database'
+import { initDatabase, getEventsByType, getAllEvents, deleteEvent, updateItem, getEventById, updateEvent, getPhotoItemsForEvent, createItem, upsertCanvasItem, getAllItems, updateItemContent, getItemsByEvent } from './db/database'
 import { Event, ZoomLevel, Item } from './models/types'
 import { QuickAdd, QuickAddRef } from './components/QuickAdd'
 import { ConfirmDialog } from './components/ConfirmDialog'
@@ -27,7 +27,7 @@ import {
 } from './db/fileStorage'
 import { rebuildFullIndex, needsFullRebuild, recoverFromPhotos, cleanupDuplicateMarkdownFiles } from './db/sync/indexer'
 import { syncOnFocus } from './db/sync/syncService'
-import { updateEventWithFiles, createItemWithFiles, updateCanvasItemWithFiles } from './db/sync/writer'
+import { updateEventWithFiles, createItemWithFiles, updateCanvasItemWithFiles, deleteItemWithFiles } from './db/sync/writer'
 import { importDatabase } from './db/database'
 import { migrateToFileBasedStorage } from './db/migration'
 
@@ -397,11 +397,11 @@ export default function App() {
   }, [])
 
   // Confirm delete item
-  const handleConfirmDelete = useCallback(() => {
+  const handleConfirmDelete = useCallback(async () => {
     if (!itemToDelete) return
 
     try {
-      deleteItem(itemToDelete.id)
+      await deleteItemWithFiles(itemToDelete.id)
       // Refresh events to trigger view rebuild
       const allEvents = getAllEvents()
       setEvents(allEvents.filter(e => e.type !== 'year'))
@@ -506,14 +506,16 @@ export default function App() {
       const canUseFileBased = hasStorageFolder() && eventToUpdate?.folderPath
 
       if (canUseFileBased) {
-        // Convert null to undefined for file-based update (null means "clear", undefined means "no change")
+        // Featured photo fields: null = clear, undefined = no change, string = set value
+        // Other fields: convert null to undefined for backwards compatibility
         const fileUpdates = {
           ...updates,
           description: updates.description === null ? undefined : updates.description,
           endAt: updates.endAt === null ? undefined : updates.endAt,
           location: updates.location === null ? undefined : updates.location,
-          featuredPhotoId: updates.featuredPhotoId === null ? undefined : updates.featuredPhotoId,
-          featuredPhotoData: updates.featuredPhotoData === null ? undefined : updates.featuredPhotoData,
+          // Featured photo fields keep null to properly clear values
+          featuredPhotoId: updates.featuredPhotoId,
+          featuredPhotoData: updates.featuredPhotoData,
         }
         await updateEventWithFiles(eventId, fileUpdates)
       } else {
@@ -643,9 +645,9 @@ export default function App() {
   }, [viewingPhoto])
 
   // Handle photo viewer delete
-  const handlePhotoDelete = useCallback((item: Item) => {
+  const handlePhotoDelete = useCallback(async (item: Item) => {
     try {
-      deleteItem(item.id)
+      await deleteItemWithFiles(item.id)
       // Navigate to next/prev photo or close if last
       const currentIndex = viewingPhotoItems.findIndex(i => i.id === item.id)
       const remainingItems = viewingPhotoItems.filter(i => i.id !== item.id)
@@ -699,9 +701,9 @@ export default function App() {
   }, [viewingText])
 
   // Handle text viewer delete
-  const handleTextDelete = useCallback((item: Item) => {
+  const handleTextDelete = useCallback(async (item: Item) => {
     try {
-      deleteItem(item.id)
+      await deleteItemWithFiles(item.id)
       const currentIndex = viewingTextItems.findIndex(i => i.id === item.id)
       const remainingItems = viewingTextItems.filter(i => i.id !== item.id)
 
@@ -749,9 +751,9 @@ export default function App() {
   }, [viewingAudio])
 
   // Handle audio viewer delete
-  const handleAudioDelete = useCallback((item: Item) => {
+  const handleAudioDelete = useCallback(async (item: Item) => {
     try {
-      deleteItem(item.id)
+      await deleteItemWithFiles(item.id)
       const currentIndex = viewingAudioItems.findIndex(i => i.id === item.id)
       const remainingItems = viewingAudioItems.filter(i => i.id !== item.id)
 
@@ -799,9 +801,9 @@ export default function App() {
   }, [viewingLink])
 
   // Handle link viewer delete
-  const handleLinkDelete = useCallback((item: Item) => {
+  const handleLinkDelete = useCallback(async (item: Item) => {
     try {
-      deleteItem(item.id)
+      await deleteItemWithFiles(item.id)
       const currentIndex = viewingLinkItems.findIndex(i => i.id === item.id)
       const remainingItems = viewingLinkItems.filter(i => i.id !== item.id)
 

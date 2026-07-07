@@ -119,6 +119,8 @@ export interface CreateEventInput {
   location?: { lat: number; lng: number; label?: string }
   parentId?: string
   tags?: string[]
+  featuredPhotoId?: string | null      // Item ID to use as featured photo
+  featuredPhotoData?: string | null    // Base64 data for custom featured photo
 }
 
 /**
@@ -207,6 +209,35 @@ export async function updateEventWithFiles(
     ? parseEventMarkdown(existingContent)
     : { frontmatter: {} as EventFrontmatter, body: '' }
 
+  // Handle featured photo - convert ID to slug for markdown
+  let featuredPhotoSlug: string | undefined = existing.frontmatter.featuredPhoto
+  let featuredPhotoData: string | undefined = event.featuredPhotoData
+
+  if (updates.featuredPhotoId !== undefined) {
+    if (updates.featuredPhotoId === null) {
+      // Clear featured photo from item selection
+      featuredPhotoSlug = undefined
+    } else {
+      // Look up item to get its slug
+      const photoItem = getItemById(updates.featuredPhotoId)
+      if (photoItem?.slug) {
+        featuredPhotoSlug = photoItem.slug
+      }
+    }
+  }
+
+  // Handle custom photo data
+  if (updates.featuredPhotoData !== undefined) {
+    if (updates.featuredPhotoData === null) {
+      // Clear custom photo
+      featuredPhotoData = undefined
+    } else {
+      // Setting custom photo - clear the slug since they're mutually exclusive
+      featuredPhotoData = updates.featuredPhotoData
+      featuredPhotoSlug = undefined
+    }
+  }
+
   // Merge updates
   const merged: EventFrontmatter = {
     ...existing.frontmatter,
@@ -217,6 +248,7 @@ export async function updateEventWithFiles(
     startAt: updates.startAt || event.startAt,
     endAt: updates.endAt ?? event.endAt,
     location: updates.location ?? event.location,
+    featuredPhoto: featuredPhotoSlug,
     tags: updates.tags ?? event.tags,
     createdAt: event.createdAt,
     updatedAt: now,
@@ -228,10 +260,20 @@ export async function updateEventWithFiles(
   // Write file
   await writeFile(folderPath, '_event.md', markdown)
 
-  // Update database
+  // Update database - include the converted slug and data
+  // Convert null to undefined for Event type compatibility
   const updatedEvent: Event = {
     ...event,
-    ...updates,
+    type: updates.type || event.type,
+    title: updates.title ?? event.title,
+    description: updates.description ?? event.description,
+    startAt: updates.startAt || event.startAt,
+    endAt: updates.endAt ?? event.endAt,
+    location: updates.location ?? event.location,
+    tags: updates.tags ?? event.tags,
+    featuredPhotoId: updates.featuredPhotoId === null ? undefined : (updates.featuredPhotoId ?? event.featuredPhotoId),
+    featuredPhotoSlug,
+    featuredPhotoData,
     updatedAt: now,
   }
   insertEventFromFile(updatedEvent)
