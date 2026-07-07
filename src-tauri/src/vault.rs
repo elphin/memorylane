@@ -5,6 +5,7 @@
 pub mod canvas;
 pub mod frontmatter;
 pub mod scanner;
+pub mod writer;
 
 pub use scanner::scan;
 

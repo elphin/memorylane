@@ -10,8 +10,9 @@ use tauri::{AppHandle, Manager, State};
 
 use crate::index::{self, DensityPoint, EventDetail, YearDetail, YearPhoto, YearSummary};
 use crate::media::{self, cache::Tier};
-use crate::model::{IndexError, VaultModel};
+use crate::model::{CanvasItem, IndexError, VaultModel};
 use crate::vault;
+use crate::vault::writer;
 
 /// Gedeelde applicatiestaat: de index-connectie + het actieve vault-pad.
 pub struct VaultService {
@@ -113,6 +114,22 @@ impl VaultService {
         };
 
         media::thumbs::ensure_thumb(&src, tier, cache_root, &hash).map_err(|e| e.to_string())
+    }
+
+    /// Schrijft de canvas-layout van een event naar `_canvas.json` (file first)
+    /// en werkt de index bij. De folder komt uit de index (vertrouwd, uit de scan).
+    pub fn save_canvas(&self, event_id: &str, items: Vec<CanvasItem>) -> Result<(), String> {
+        let vault = {
+            let guard = self.vault_path.lock().map_err(lock_err)?;
+            guard.clone().ok_or("geen vault ingesteld")?
+        };
+        let conn = self.conn.lock().map_err(lock_err)?;
+        let folder = index::event_folder(&conn, event_id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("event {event_id} niet gevonden"))?;
+        writer::write_canvas(&vault, &folder, &items).map_err(|e| e.to_string())?;
+        index::replace_canvas(&conn, event_id, &items).map_err(|e| e.to_string())?;
+        Ok(())
     }
 }
 
@@ -252,6 +269,45 @@ pub fn get_timeline_density(
     year_id: String,
 ) -> Result<Vec<DensityPoint>, String> {
     state.with_conn(|c| index::get_timeline_density(c, &year_id))
+}
+
+/// Input voor één canvas-item vanuit de UI (camelCase).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CanvasLayoutInput {
+    pub item_ref: String,
+    pub x: f64,
+    pub y: f64,
+    pub scale: f64,
+    pub rotation: f64,
+    pub z_index: i64,
+    pub text_scale: Option<f64>,
+    pub width: Option<f64>,
+    pub height: Option<f64>,
+}
+
+#[tauri::command]
+pub fn save_canvas_layout(
+    state: State<VaultService>,
+    event_id: String,
+    items: Vec<CanvasLayoutInput>,
+) -> Result<(), String> {
+    let canvas_items = items
+        .into_iter()
+        .map(|i| CanvasItem {
+            event_id: event_id.clone(),
+            item_ref: i.item_ref,
+            x: i.x,
+            y: i.y,
+            scale: i.scale,
+            rotation: i.rotation,
+            z_index: i.z_index,
+            text_scale: i.text_scale,
+            width: i.width,
+            height: i.height,
+        })
+        .collect();
+    state.save_canvas(&event_id, canvas_items)
 }
 
 #[tauri::command]

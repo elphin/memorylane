@@ -7,6 +7,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { Backend, YearSummary } from '../lib/backend'
 import { createBackend } from '../lib/backend'
 import { RenderEngine } from '../render/core/engine'
+import { EventScene } from '../render/scenes/event'
 import { LifelineScene } from '../render/scenes/lifeline'
 import type { Scene } from '../render/scenes/scene'
 import { YearScene } from '../render/scenes/year'
@@ -22,7 +23,8 @@ export function AppShell() {
   const backendRef = useRef<Backend | null>(null)
   const sceneRef = useRef<Scene | null>(null)
   const yearsRef = useRef<YearSummary[]>([])
-  const levelRef = useRef<'lifeline' | 'year'>('lifeline')
+  const levelRef = useRef<'lifeline' | 'year' | 'event'>('lifeline')
+  const currentYearRef = useRef<string | null>(null)
   const entryZoomRef = useRef(1)
   const enterSeqRef = useRef(0)
   const enteringRef = useRef(false)
@@ -46,14 +48,42 @@ export function AppShell() {
       const seq = ++enterSeqRef.current
       try {
         const photos = await backendRef.current.getYearPhotos(yearId)
-        // Verouderde/parallelle resolves negeren (tap-race).
         if (disposed || !engine || seq !== enterSeqRef.current) return
         sceneRef.current?.destroy()
-        // Null vóór constructie: als YearScene gooit blijft er geen vernietigde
-        // scene achter waar onFrame op update() zou aanroepen.
         sceneRef.current = null
         sceneRef.current = new YearScene(engine, backendRef.current, photos)
         levelRef.current = 'year'
+        currentYearRef.current = yearId
+        entryZoomRef.current = engine.camera.zoom
+      } catch (e) {
+        if (!disposed) {
+          setMessage(String(e))
+          setPhase('error')
+        }
+      } finally {
+        enteringRef.current = false
+      }
+    }
+
+    const enterEvent = async (eventId: string): Promise<void> => {
+      if (!engine || !backendRef.current || enteringRef.current) return
+      enteringRef.current = true
+      const seq = ++enterSeqRef.current
+      const backend = backendRef.current
+      try {
+        const detail = await backend.getEvent(eventId)
+        if (disposed || !engine || seq !== enterSeqRef.current || !detail) return
+        sceneRef.current?.destroy()
+        sceneRef.current = null
+        sceneRef.current = new EventScene(engine, backend, detail, (items) => {
+          void backend.saveCanvasLayout(eventId, items).catch((e) => {
+            if (!disposed) {
+              setMessage(String(e))
+              setPhase('error')
+            }
+          })
+        })
+        levelRef.current = 'event'
         entryZoomRef.current = engine.camera.zoom
       } catch (e) {
         if (!disposed) {
@@ -90,15 +120,21 @@ export function AppShell() {
 
       engine.onFrame = (ctx) => {
         sceneRef.current?.update(ctx)
-        // Ver uitzoomen in een jaar → terug naar de lifeline.
-        if (levelRef.current === 'year' && ctx.engine.camera.zoom < entryZoomRef.current * 0.45) {
-          setupLifeline()
+        // Ver uitzoomen → één niveau terug.
+        const backThreshold = ctx.engine.camera.zoom < entryZoomRef.current * 0.45
+        if (backThreshold && !enteringRef.current) {
+          if (levelRef.current === 'year') {
+            setupLifeline()
+          } else if (levelRef.current === 'event' && currentYearRef.current) {
+            void enterYear(currentYearRef.current)
+          }
         }
       }
       engine.onTap = (wx, wy) => {
         const hit = sceneRef.current?.hitTest?.(wx, wy)
         if (!hit) return
         if (levelRef.current === 'lifeline') void enterYear(hit)
+        else if (levelRef.current === 'year') void enterEvent(hit)
       }
 
       try {

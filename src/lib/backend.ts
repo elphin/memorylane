@@ -54,6 +54,58 @@ export interface YearPhoto {
   eventId: string
 }
 
+export interface Item {
+  id: string
+  eventId: string
+  itemType: ItemType
+  media?: string
+  url?: string
+  caption?: string
+  bodyText?: string
+  slug?: string
+}
+
+export interface CanvasItem {
+  eventId: string
+  itemRef: string
+  x: number
+  y: number
+  scale: number
+  rotation: number
+  zIndex: number
+  textScale?: number
+  width?: number
+  height?: number
+}
+
+export interface EventInfo {
+  id: string
+  kind: 'event' | 'period'
+  title?: string
+  startAt: string
+  endAt?: string
+  folderPath: string
+}
+
+export interface EventDetail {
+  event: EventInfo
+  items: Item[]
+  canvas: CanvasItem[]
+}
+
+/** Layout-input voor het opslaan van een canvas (naar `save_canvas_layout`). */
+export interface CanvasLayoutInput {
+  itemRef: string
+  x: number
+  y: number
+  scale: number
+  rotation: number
+  zIndex: number
+  textScale?: number
+  width?: number
+  height?: number
+}
+
 export interface IndexSummary {
   yearCount: number
   eventCount: number
@@ -75,6 +127,8 @@ export interface Backend {
   getYear(yearId: string): Promise<YearDetail | null>
   getTimelineDensity(yearId: string): Promise<DensityPoint[]>
   getYearPhotos(yearId: string): Promise<YearPhoto[]>
+  getEvent(eventId: string): Promise<EventDetail | null>
+  saveCanvasLayout(eventId: string, items: CanvasLayoutInput[]): Promise<void>
   thumb(itemId: string, size: 64 | 128 | 256 | 1024 | 2048): ThumbSource
 }
 
@@ -141,6 +195,16 @@ class TauriBackend implements Backend {
   async getYearPhotos(yearId: string): Promise<YearPhoto[]> {
     const invoke = await this.api()
     return await invoke<YearPhoto[]>('get_year_photos', { yearId })
+  }
+
+  async getEvent(eventId: string): Promise<EventDetail | null> {
+    const invoke = await this.api()
+    return await invoke<EventDetail | null>('get_event', { eventId })
+  }
+
+  async saveCanvasLayout(eventId: string, items: CanvasLayoutInput[]): Promise<void> {
+    const invoke = await this.api()
+    await invoke('save_canvas_layout', { eventId, items })
   }
 
   thumb(itemId: string, size: number): ThumbSource {
@@ -221,6 +285,26 @@ class MockBackend implements Backend {
       itemType: 'photo' as const,
       eventId: p.eventId,
     }))
+  }
+  async getEvent(eventId: string): Promise<EventDetail | null> {
+    const n = 6 + (hueFor(eventId) % 7)
+    const items: Item[] = Array.from({ length: n }, (_, i) => ({
+      id: `${eventId}-i${i}`,
+      eventId,
+      itemType: i === 0 ? ('text' as const) : ('photo' as const),
+      media: i === 0 ? undefined : 'foto.jpg',
+      bodyText: i === 0 ? 'Wat een dag was dit — de zon, de zee, en wij.' : undefined,
+      caption: `Foto ${i}`,
+      slug: `${eventId}-i${i}`,
+    }))
+    return {
+      event: { id: eventId, kind: 'event', title: 'Gebeurtenis', startAt: '2024-06-15', folderPath: 'mock' },
+      items,
+      canvas: [],
+    }
+  }
+  async saveCanvasLayout(): Promise<void> {
+    /* mock: geen persistentie */
   }
   thumb(itemId: string): ThumbSource {
     return { hue: hueFor(itemId) }

@@ -113,7 +113,9 @@ v1's formaat blijft leesbaar; v2 breidt uit zodat de vault volledig is:
 - **Gebouwd:** L0-lifeline (jaar-tegels met cover-heuristiek = eerste gedateerde foto + cover-fit/mask), L1-jaarcollage (alle foto's/video's van het jaar, scrapbook-jitter/rotatie, culling + streaming), zoom-gedreven transities (tap→in, uitzoomen→terug), first-run vault-picker (dialog-plugin), lege/fout-staten. Backend-abstractie (Tauri-invoke + browser-mock). Geverifieerd in de mock; Tauri-runtime = handmatige smoke-test.
 - **Bewust uitgesteld naar fase 5b/later (geen polish maar aparte features):** echte `featuredPhotos`-curatie uit `_year.md` + verbindingslijnen (L0), densiteitsbalk + event-clusters (L1), jaar-navigatie (swipe volgend/vorig jaar), transitie-animaties, sprite-pooling/virtualisatie voor jaren met duizenden foto's.
 
-**Fase 6 — L2 event-canvas**
+**Fase 6 — L2 event-canvas** ✅ *afgerond & gecommit (GO; eerste vault-write)*
+- Gebouwd: L2 event-canvas (foto-kaarten + tekstkaarten, posities uit `_canvas.json` of auto-grid), item-drag met camera-pan-onderscheid + zIndex-to-front, **canvas write-through** naar `_canvas.json` (atomair, index bijgewerkt), L1↔L2-transities. Review fixte een dataverlies-bug (persist behoudt nu bestaande scale/rotation/width/height/textScale) + een pinch-tijdens-drag-bug.
+- Uitgesteld: drag-physics/momentum, resize/rotate-UI, jitter op het canvas, swipe naar volgend event.
 - Automatische collage (eerst: grid + jitter), drag met physics, tekstblokjes/trefwoorden, knijp-uit, swipe naar volgend event.
 - **Canvas-layout write-through in déze fase** (`_canvas.json` persisteren).
 

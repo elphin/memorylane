@@ -444,6 +444,46 @@ pub fn list_year_photos(conn: &Connection, year_id: &str) -> rusqlite::Result<Ve
     rows.collect()
 }
 
+/// Vault-relatieve folder van een event (voor het schrijven van `_canvas.json`).
+pub fn event_folder(conn: &Connection, event_id: &str) -> rusqlite::Result<Option<String>> {
+    Ok(conn
+        .query_row(
+            "SELECT folder_path FROM events WHERE id = ?1",
+            params![event_id],
+            |r| r.get::<_, String>(0),
+        )
+        .ok())
+}
+
+/// Vervangt de canvas-items van een event in de index (na een schrijf naar file).
+pub fn replace_canvas(
+    conn: &Connection,
+    event_id: &str,
+    items: &[CanvasItem],
+) -> rusqlite::Result<()> {
+    conn.execute("DELETE FROM canvas_items WHERE event_id = ?1", params![event_id])?;
+    let mut stmt = conn.prepare(
+        "INSERT INTO canvas_items (event_id, item_ref, x, y, scale, rotation, z_index,
+             text_scale, width, height)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+    )?;
+    for c in items {
+        stmt.execute(params![
+            c.event_id,
+            c.item_ref,
+            c.x,
+            c.y,
+            c.scale,
+            c.rotation,
+            c.z_index,
+            c.text_scale,
+            c.width,
+            c.height,
+        ])?;
+    }
+    Ok(())
+}
+
 pub fn get_index_errors(conn: &Connection) -> rusqlite::Result<Vec<IndexError>> {
     let mut stmt =
         conn.prepare("SELECT path, severity, reason FROM index_errors ORDER BY severity, path")?;

@@ -13,6 +13,7 @@ const BORDER = 8
 
 interface Photo {
   itemId: string
+  eventId: string
   worldX: number
   worldY: number
   container: Container
@@ -70,6 +71,7 @@ export class YearScene implements Scene {
       this.root.addChild(container)
       this.photos.push({
         itemId: photo.itemId,
+        eventId: photo.eventId,
         worldX,
         worldY,
         container,
@@ -134,7 +136,8 @@ export class YearScene implements Scene {
         worldY >= p.worldY - PHOTO / 2 &&
         worldY <= p.worldY + PHOTO / 2
       ) {
-        return p.itemId
+        // Tik op een foto → naar het canvas van de gebeurtenis (L2).
+        return p.eventId
       }
     }
     return null

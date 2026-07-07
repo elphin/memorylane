@@ -13,6 +13,12 @@ interface PointerPos {
   y: number
 }
 
+/** Handle om een object te slepen i.p.v. de camera te pannen. */
+export interface DragHandle {
+  moveTo(worldX: number, worldY: number): void
+  end(): void
+}
+
 export class GestureController {
   private pointers = new Map<number, PointerPos>()
   private dragging = false
@@ -25,6 +31,7 @@ export class GestureController {
 
   private downPos: PointerPos = { x: 0, y: 0 }
   private downId = -1
+  private dragTarget: DragHandle | null = null
 
   constructor(
     private canvas: HTMLCanvasElement,
@@ -33,6 +40,9 @@ export class GestureController {
     private onChange: () => void,
     /** Aangeroepen bij een tap (klik zonder noemenswaardige beweging). */
     private onTap?: (sx: number, sy: number) => void,
+    /** Kan een sleepbaar object teruggeven op wereldpunt; dan sleept dat i.p.v.
+     * de camera te pannen. */
+    private beginDrag?: (worldX: number, worldY: number) => DragHandle | null,
   ) {
     canvas.addEventListener('wheel', this.onWheel, { passive: false })
     canvas.addEventListener('pointerdown', this.onPointerDown)
@@ -90,7 +100,17 @@ export class GestureController {
       this.downId = e.pointerId
       this.vx = 0
       this.vy = 0
+      // Object onder de pointer? Dan dat slepen i.p.v. de camera.
+      const w = this.camera.screenToWorld(p.x, p.y, this.getVp())
+      this.dragTarget = this.beginDrag?.(w.x, w.y) ?? null
     } else if (this.pointers.size === 2) {
+      // Een tweede vinger start een pinch: rond een eventuele object-sleep netjes
+      // af (persist bij beweging) i.p.v. de handle te laten hangen — anders
+      // "springt" het object bij terugkeer naar één vinger of blijft het plakken.
+      if (this.dragTarget) {
+        this.dragTarget.end()
+        this.dragTarget = null
+      }
       this.dragging = false
       this.updatePinchRef()
     }
@@ -103,6 +123,12 @@ export class GestureController {
 
     if (this.pointers.size >= 2) {
       this.handlePinch()
+      return
+    }
+    if (this.dragTarget) {
+      const w = this.camera.screenToWorld(p.x, p.y, this.getVp())
+      this.dragTarget.moveTo(w.x, w.y)
+      this.onChange()
       return
     }
     if (this.dragging) {
@@ -123,6 +149,13 @@ export class GestureController {
     this.pointers.delete(e.pointerId)
     if (this.pointers.size < 2) {
       this.pinchDist = 0
+    }
+    // Object-sleep afronden (geen tap, geen inertie).
+    if (this.dragTarget && this.pointers.size === 0) {
+      this.dragTarget.end()
+      this.dragTarget = null
+      this.dragging = false
+      return
     }
     if (this.pointers.size === 0 && this.dragging) {
       this.dragging = false

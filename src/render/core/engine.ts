@@ -4,7 +4,7 @@
 
 import { Application, Container, Ticker, UPDATE_PRIORITY } from 'pixi.js'
 import { Camera, type Viewport } from './camera'
-import { GestureController } from './gestures'
+import { GestureController, type DragHandle } from './gestures'
 import { LodManager } from './lod'
 import { TextureManager } from './textures'
 
@@ -27,6 +27,10 @@ export class RenderEngine {
 
   /** Tap-hook met wereldcoördinaten (voor hit-testing van tegels). */
   onTap?: (worldX: number, worldY: number) => void
+
+  /** Sleep-hook: geeft een handle terug als er een object onder het wereldpunt
+   * ligt (dan sleept dat i.p.v. de camera). */
+  beginDrag?: (worldX: number, worldY: number) => DragHandle | null
 
   private frame = 0
   private initialized = false
@@ -62,6 +66,7 @@ export class RenderEngine {
         const w = this.camera.screenToWorld(sx, sy, this.viewport())
         this.onTap?.(w.x, w.y)
       },
+      (wx, wy) => this.beginDrag?.(wx, wy) ?? null,
     )
 
     this.app.ticker.add(this.tick, undefined, UPDATE_PRIORITY.HIGH)
