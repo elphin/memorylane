@@ -111,6 +111,58 @@ fn transparent_png_composites_on_white_not_black() {
 }
 
 #[test]
+fn video_thumbnail_via_ffmpeg() {
+    use super::decode::ffmpeg_available;
+    if !ffmpeg_available() {
+        eprintln!("ffmpeg niet beschikbaar — video-test overgeslagen");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let video = tmp.path().join("clip.mp4");
+    // Genereer een korte testclip met ffmpeg.
+    let ok = std::process::Command::new("ffmpeg")
+        .args(["-y", "-loglevel", "error", "-f", "lavfi", "-i"])
+        .arg("testsrc=duration=2:size=320x240:rate=10")
+        .arg(&video)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    assert!(ok && video.exists(), "kon testclip niet genereren");
+
+    let cache = tmp.path().join("cache");
+    let hash = hash_file(&video).unwrap();
+    let thumb = ensure_thumb(&video, Tier::Small, &cache, &hash).unwrap();
+    assert!(thumb.exists());
+    let (w, h) = dimensions_of(&std::fs::read(&thumb).unwrap());
+    assert_eq!(w.max(h), 256, "video-thumbnail moet naar tier geschaald zijn");
+}
+
+#[test]
+fn short_video_under_one_second_falls_back_to_first_frame() {
+    use super::decode::ffmpeg_available;
+    if !ffmpeg_available() {
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let video = tmp.path().join("kort.mp4");
+    // Clip van 0.5s: seek naar 1s zou voorbij EOF vallen → fallback naar 0s.
+    let ok = std::process::Command::new("ffmpeg")
+        .args(["-y", "-loglevel", "error", "-f", "lavfi", "-i"])
+        .arg("testsrc=duration=0.5:size=160x120:rate=10")
+        .arg(&video)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    assert!(ok && video.exists(), "kon korte testclip niet genereren");
+
+    let cache = tmp.path().join("cache");
+    let hash = hash_file(&video).unwrap();
+    // Zonder de non-empty-fallback zou dit falen.
+    let thumb = ensure_thumb(&video, Tier::Micro, &cache, &hash).unwrap();
+    assert!(thumb.exists(), "korte clip moet alsnog een thumbnail geven");
+}
+
+#[test]
 fn hash_is_content_addressed() {
     // Zelfde inhoud → zelfde hash; andere inhoud → andere hash.
     assert_eq!(hash_bytes(b"hallo"), hash_bytes(b"hallo"));

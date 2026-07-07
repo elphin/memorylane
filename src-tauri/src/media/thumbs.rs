@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use image::{DynamicImage, ImageDecoder, ImageReader, Rgb, RgbImage};
 
 use super::cache::{self, Tier};
+use super::decode;
 
 /// Bovengrens op brondimensies bij decode (DoS/OOM-bescherming). `image`'s
 /// `Limits` begrenzen standaard alloc tot 512 MiB; hier ook de pixelmaten.
@@ -52,7 +53,21 @@ pub fn ensure_thumb(
     if out.exists() {
         return Ok(out);
     }
-    let bytes = generate_jpeg(src, tier.max_dim())?;
+
+    // HEIC/video kan de image-crate niet lezen → eerst via ffmpeg naar een
+    // tijdelijke PNG decoderen, die daarna de gewone pipeline in gaat. De
+    // TempPng-guard ruimt de temp op bij drop (ook bij een vroege `?`/panic).
+    let ext = src
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or_default();
+    let decoded_tmp = match decode::classify(ext) {
+        Some(kind) => Some(decode::decode_to_png(src, kind, &cache_root.join("tmp"))?),
+        None => None,
+    };
+    let decode_src = decoded_tmp.as_ref().map(|t| t.path()).unwrap_or(src);
+    let bytes = generate_jpeg(decode_src, tier.max_dim())?;
+    drop(decoded_tmp);
     if let Some(parent) = out.parent() {
         fs::create_dir_all(parent)?;
     }

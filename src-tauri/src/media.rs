@@ -5,6 +5,7 @@
 //! map-/bestandshernoemingen geen regeneratie-storm geven.
 
 pub mod cache;
+pub mod decode;
 pub mod hash;
 pub mod thumbs;
 
