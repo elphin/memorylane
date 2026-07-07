@@ -1,6 +1,7 @@
 # MemoryLane v2 — Rebuild Plan
 
-*Status: rev. 6 na adversarial review ronde 5. Datum: 2026-07-07.*
+*Status: rev. 7 — GO na 6 review-rondes. Datum: 2026-07-07.*
+*Update: Jim bevestigt dat er **geen bestaande productie-vault** is (alleen testdata). De one-time migratie, `index.db`-kopieën, read-only probe, snapshot en bijbehorende invarianten/risico's **vervallen daarmee volledig**. De vault-formaat-v2-extensies (§3) blijven — die fixen echte v1-formaatbugs. Testdata wordt gewoon vers geïndexeerd. De migratie-secties hieronder blijven staan als naslagwerk voor het geval er toch ergens een echte v1-vault opduikt.*
 
 ## 1. Product (wat we bouwen)
 
@@ -71,8 +72,9 @@ v1's formaat blijft leesbaar; v2 breidt uit zodat de vault volledig is:
 
 ## 5. Fases (Review-Loop: per fase groen → adversarial review → commit op master)
 
-**Fase 0 — Veiligstellen & skelet**
-- Ongecommit v1-werk committen.
+**Fase 0 — Veiligstellen & skelet** *(veiligstel-stappen vervallen — geen productie-vault; zie status-update bovenaan)*
+- ✅ Ongecommit v1-werk gecommit (`463f75f`) en gepusht.
+- ✅ Hardware-inventarisatie: NVIDIA GTX 1070 Ti (dGPU), 2× 1920×1080 → fase 4-gate draait op deze hardware met 4K-simulatie via geforceerde renderer-resolutie/DPR.
 - **Eerst, vóór v1 nog één keer te openen: `index.db` uit de vault-root kopiëren naar de snapshot-locatie.** (v1 openen kan via de focus-sync een rebuild triggeren die curatiedata uit de DB stript — de kopie is de migratie-input.)
 - **Read-only probe op die kopie** (rusqlite/sqlite3): counts van items met `category`, events met `featured_photo_data`, aanwezigheid `meta.custom_categories`, count `year_featured_photos`. Dit is meteen de inventaris van wat er te migreren valt — én verwachtingsmanagement: eerdere v1-rebuilds kunnen een deel al historisch gewist hebben; dat weten we dan vóór fase 2, niet erna. (Geen force-save: die heeft geen herstelwaarde — v1 laadt bij start toch uit `index.db` — en riskeert juist de strip.)
 - **Vault-snapshot**: de `index.db`-kopie + alle `.md`/`.json`-bestanden + **hash-manifest van media** (geen volledige media-kopie — v2 wijzigt geen bestaande media; alleen tekstbestanden worden herschreven en `_featured.<ext>` toegevoegd). Vrije-schijfruimte-check.
@@ -85,7 +87,7 @@ v1's formaat blijft leesbaar; v2 breidt uit zodat de vault volledig is:
 - Frontmatter: strikt (serde-saphyr) + lenient fallback (volledige v1-parser-semantiek); fouten-rapport als data-structuur.
 - Losse media → synthetische items (stabiel ID = pad-hash; geen vault-writes).
 - Vault-pad-config + picker-command (first-run-flow, §3).
-- Unit-tests met **volledig synthetische fixture-vault** (structuur van de echte vault nagebootst met dummy-afbeeldingen van enkele KB; incl. rot-gevallen: backslash+quote in captions, `[`-prefix titels, ontbrekende frontmatter, UUID-slugs in `_canvas.json`, dangling slugs, HEIC, `_featured.jpg` zonder eigen `.md`). **Jims echte vault alleen als lokale, niet-gecommitte smoke-test.**
+- Unit-tests met **volledig synthetische fixture-vault** (structuur van de echte vault nagebootst met dummy-afbeeldingen van enkele KB; incl. rot-gevallen: backslash+quote in captions, `[`-prefix titels, ontbrekende frontmatter, UUID-slugs in `_canvas.json`, dangling slugs, HEIC, `_featured.jpg` zonder eigen `.md`, duplicate `.md`-paren naar hetzelfde mediabestand — dedupe: het rijkste/oudste record wint, duplicaat gelogd). **Jims echte vault alleen als lokale, niet-gecommitte smoke-test.**
 - Typed commands: `list_years`, `get_year`, `get_event`, `get_timeline_density`, `get_index_errors`.
 
 **Fase 2 — Vault-formaat v2 + one-time migratie**
@@ -141,6 +143,6 @@ v1's formaat blijft leesbaar; v2 breidt uit zodat de vault volledig is:
 
 ## 7. Open punten
 
-- Vault-locatie op Jims machine: bij fase 0 verifiëren (nodig voor snapshot, counts-check en smoke-test).
+- ✅ Vault-locatie: `L:\Jim\MemoryLane` — **testdata** (geen productie; migratie blijft vervallen). Dient als lokaal smoke-test-corpus voor fase 1. Bevat in het wild geverifieerde edge cases: **duplicate `.md`-paren die naar hetzelfde mediabestand wijzen met verschillende IDs** (v1's orphan-media-bug → v2-dedupe-regel + fixture-case), UUID's als `itemSlug` in `_canvas.json`, `null`-velden (`textScale`/`width`/`height`), jaarmap zónder `_year.md` (1969), event-mappen zonder `_canvas.json`, mapnamen met komma's/UUID's, `.jpeg`/`.png`-extensies.
 - Mobiel (Tauri iOS/Android) buiten scope voor v2.0; architectuur blokkeert het niet.
 - Cloud-sync buiten scope; vault + Syncthing/Dropbox dekt de behoefte.

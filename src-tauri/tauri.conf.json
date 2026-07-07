@@ -1,8 +1,8 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "lifeline",
-  "version": "0.1.0",
-  "identifier": "com.tauri.dev",
+  "productName": "MemoryLane",
+  "version": "2.0.0",
+  "identifier": "nl.elphinstone.memorylane",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:5199",
@@ -12,9 +12,9 @@
   "app": {
     "windows": [
       {
-        "title": "Lifeline",
-        "width": 800,
-        "height": 600,
+        "title": "MemoryLane",
+        "width": 1280,
+        "height": 800,
         "resizable": true,
         "fullscreen": false
       }
