@@ -32,3 +32,10 @@ trash = "5"
 
 [dev-dependencies]
 tempfile = "3"
+
+# Optimaliseer dependencies (image-decode, resize, JPEG-encode) óók in het
+# dev-profiel. Zonder dit compileert `npm run tauri dev` de `image`-crate op
+# opt-level 0 en is een 1024px-thumbnail genereren ~20-50x trager (seconden i.p.v.
+# milliseconden). Onze eigen code blijft op opt-level 0 → normaal debugbaar.
+[profile.dev.package."*"]
+opt-level = 3
