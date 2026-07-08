@@ -9,5 +9,7 @@ export interface Scene {
   hitTest?(worldX: number, worldY: number): string | null
   /** Id van het momenteel gefocuste item (alleen L3), voor bijv. verwijderen. */
   currentId?(): string | null
+  /** Muis-hover op een wereldpunt (of null bij verlaten) — voor micro-animaties. */
+  onHover?(worldX: number | null, worldY: number): void
   destroy(): void
 }

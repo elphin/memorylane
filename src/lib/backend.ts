@@ -285,6 +285,7 @@ class MockBackend implements Backend {
   private density = new Map<string, DensityPoint[]>()
   private adds = new Map<string, Item[]>()
   private deleted = new Set<string>()
+  private thumbCache = new Map<string, string>()
 
   constructor() {
     const specs = [1969, 1971, 2022, 2023, 2024, 2025]
@@ -405,6 +406,23 @@ class MockBackend implements Backend {
     return out
   }
   thumb(itemId: string): ThumbSource {
-    return { hue: hueFor(itemId) }
+    // Data-URL i.p.v. hue, zodat het echte <img>-loader-pad (dat ook thumb://
+    // in Tauri gebruikt) in de browser wordt uitgeoefend.
+    let url = this.thumbCache.get(itemId)
+    if (!url) {
+      const hue = hueFor(itemId)
+      const cvs = document.createElement('canvas')
+      cvs.width = 128
+      cvs.height = 128
+      const ctx = cvs.getContext('2d')!
+      const g = ctx.createLinearGradient(0, 0, 128, 128)
+      g.addColorStop(0, `hsl(${hue}, 65%, 55%)`)
+      g.addColorStop(1, `hsl(${(hue + 60) % 360}, 65%, 35%)`)
+      ctx.fillStyle = g
+      ctx.fillRect(0, 0, 128, 128)
+      url = cvs.toDataURL('image/jpeg')
+      this.thumbCache.set(itemId, url)
+    }
+    return { url }
   }
 }

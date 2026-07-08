@@ -97,10 +97,8 @@ export class FocusScene implements Scene {
 
   private fitCamera(): void {
     const vp = this.engine.viewport()
-    this.engine.camera.x = 0
-    this.engine.camera.y = 0
     const zoom = Math.min(vp.width / (FOCUS + 160), vp.height / (FOCUS + 200))
-    this.engine.camera.zoom = Math.max(this.engine.camera.minZoom, Math.min(zoom, 2))
+    this.engine.animateCamera(0, 0, Math.max(this.engine.camera.minZoom, Math.min(zoom, 2)))
   }
 
   private step(delta: number): void {

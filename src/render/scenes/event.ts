@@ -40,6 +40,7 @@ export class EventScene implements Scene {
   private root = new Container()
   private nodes: Node[] = []
   private zTop = 0
+  private hoveredId: string | null = null
 
   constructor(
     private engine: RenderEngine,
@@ -144,10 +145,12 @@ export class EventScene implements Scene {
     const vp = this.engine.viewport()
     const w = cols * CELL
     const h = rows * CELL
-    this.engine.camera.x = 0
-    this.engine.camera.y = h / 2 - CELL / 2
     const zoom = Math.min(vp.width / (w + CELL), vp.height / (h + CELL))
-    this.engine.camera.zoom = Math.max(this.engine.camera.minZoom, Math.min(zoom, 1.2))
+    this.engine.animateCamera(
+      0,
+      h / 2 - CELL / 2,
+      Math.max(this.engine.camera.minZoom, Math.min(zoom, 1.2)),
+    )
   }
 
   private beginDrag(wx: number, wy: number): DragHandle | null {
@@ -202,9 +205,18 @@ export class EventScene implements Scene {
     this.onSave(items)
   }
 
+  onHover(worldX: number | null, worldY: number): void {
+    this.hoveredId = worldX === null ? null : this.hitTest(worldX, worldY)
+  }
+
   update(ctx: FrameContext): void {
     const { engine, frame } = ctx
     for (const n of this.nodes) {
+      // Vloeiende hover-schaal.
+      const target = n.item.id === this.hoveredId ? 1.05 : 1
+      const s = n.container.scale.x + (target - n.container.scale.x) * 0.2
+      n.container.scale.set(s)
+
       if (!n.sprite || n.loaded || !n.item.media) continue
       const tex = engine.textures.get(n.key, frame)
       if (tex) {

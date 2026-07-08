@@ -17,12 +17,15 @@ interface Tile {
   worldX: number
   cover: Sprite
   bg: Graphics
+  container: Container
+  scale: number
   key: string
 }
 
 export class LifelineScene implements Scene {
   private root = new Container()
   private tiles: Tile[] = []
+  private hoveredId: string | null = null
 
   constructor(
     private engine: RenderEngine,
@@ -32,7 +35,9 @@ export class LifelineScene implements Scene {
     years.forEach((year, i) => {
       const worldX = i * (TILE_W + GAP)
       const tile = new Container()
-      tile.position.set(worldX, -TILE_H / 2)
+      // Pivot in het midden zodat hover-schaal netjes vanuit het centrum groeit.
+      tile.pivot.set(TILE_W / 2, TILE_H / 2)
+      tile.position.set(worldX + TILE_W / 2, 0)
 
       const bg = new Graphics()
       bg.roundRect(0, 0, TILE_W, TILE_H, 12).fill(0x1a2030).stroke({ width: 2, color: 0x2c3650 })
@@ -75,7 +80,7 @@ export class LifelineScene implements Scene {
       tile.addChild(sub)
 
       this.root.addChild(tile)
-      this.tiles.push({ year, worldX, cover, bg, key: `cover-${year.id}` })
+      this.tiles.push({ year, worldX, cover, bg, container: tile, scale: 1, key: `cover-${year.id}` })
     })
 
     engine.world.addChild(this.root)
@@ -89,14 +94,21 @@ export class LifelineScene implements Scene {
     const totalW = count * TILE_W + (count - 1) * GAP
     const zoom = Math.min(vp.width / (totalW + GAP * 2), vp.height / (TILE_H * 1.6))
     // Midden van het raster: eerste tegel start op x=0, laatste eindigt op totalW.
-    this.engine.camera.x = totalW / 2
-    this.engine.camera.y = 0
-    this.engine.camera.zoom = Math.max(this.engine.camera.minZoom, zoom)
+    this.engine.animateCamera(totalW / 2, 0, Math.max(this.engine.camera.minZoom, zoom))
+  }
+
+  onHover(worldX: number | null, worldY: number): void {
+    this.hoveredId = worldX === null ? null : this.hitTest(worldX, worldY)
   }
 
   update(ctx: FrameContext): void {
     const { engine, frame } = ctx
     for (const tile of this.tiles) {
+      // Vloeiende hover-schaal (lerp naar doel).
+      const target = tile.year.id === this.hoveredId ? 1.05 : 1
+      tile.scale += (target - tile.scale) * 0.2
+      tile.container.scale.set(tile.scale)
+
       if (!tile.year.coverItemId) continue
       const tex = engine.textures.get(tile.key, frame)
       if (tex) {

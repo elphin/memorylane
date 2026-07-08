@@ -32,9 +32,27 @@ export class RenderEngine {
    * ligt (dan sleept dat i.p.v. de camera). */
   beginDrag?: (worldX: number, worldY: number) => DragHandle | null
 
+  /** Hover-hook: wereldpunt onder de muis (of null bij verlaten). */
+  onHover?: (worldX: number | null, worldY: number) => void
+
   private frame = 0
   private initialized = false
   private destroyed = false
+
+  // Vloeiende camera-animatie tussen niveaus (tweent x/y + exponentieel zoom).
+  private camAnim: {
+    fromX: number
+    fromY: number
+    fromZoom: number
+    toX: number
+    toY: number
+    toZoom: number
+    start: number
+    dur: number
+  } | null = null
+  // Fade-in van nieuwe scene-inhoud.
+  private fadeStart = 0
+  private fadeDur = 0
 
   async init(container: HTMLElement): Promise<void> {
     if (this.destroyed) return
@@ -61,12 +79,23 @@ export class RenderEngine {
       this.app.canvas as HTMLCanvasElement,
       this.camera,
       () => this.viewport(),
-      () => {},
+      // Een gebruikersgebaar onderbreekt een lopende camera-animatie.
+      () => {
+        this.camAnim = null
+      },
       (sx, sy) => {
         const w = this.camera.screenToWorld(sx, sy, this.viewport())
         this.onTap?.(w.x, w.y)
       },
       (wx, wy) => this.beginDrag?.(wx, wy) ?? null,
+      (sx, sy) => {
+        if (sx === null) {
+          this.onHover?.(null, 0)
+          return
+        }
+        const w = this.camera.screenToWorld(sx, sy, this.viewport())
+        this.onHover?.(w.x, w.y)
+      },
     )
 
     this.app.ticker.add(this.tick, undefined, UPDATE_PRIORITY.HIGH)
@@ -82,9 +111,64 @@ export class RenderEngine {
     return this.frame
   }
 
+  /** True zolang een niveau-transitie-animatie loopt. */
+  get isAnimatingCamera(): boolean {
+    return this.camAnim !== null
+  }
+
+  /** Doelzoom van de lopende animatie (of de huidige zoom als er geen loopt). */
+  get pendingZoom(): number {
+    return this.camAnim?.toZoom ?? this.camera.zoom
+  }
+
+  /** Animeert de camera vloeiend naar een doel (voor niveau-transities). */
+  animateCamera(toX: number, toY: number, toZoom: number, dur = 420): void {
+    this.camAnim = {
+      fromX: this.camera.x,
+      fromY: this.camera.y,
+      fromZoom: this.camera.zoom,
+      toX,
+      toY,
+      toZoom,
+      start: performance.now(),
+      dur,
+    }
+  }
+
+  /** Faadt de scene-inhoud in (bij een niveauwissel). */
+  fadeIn(dur = 260): void {
+    this.fadeStart = performance.now()
+    this.fadeDur = dur
+    this.world.alpha = 0
+  }
+
+  private advanceCameraAnim(): void {
+    if (!this.camAnim) return
+    const a = this.camAnim
+    const t = Math.min(1, (performance.now() - a.start) / a.dur)
+    const e = easeInOutCubic(t)
+    this.camera.x = a.fromX + (a.toX - a.fromX) * e
+    this.camera.y = a.fromY + (a.toY - a.fromY) * e
+    // Zoom exponentieel interpoleren → uniform aanvoelende zoombeweging.
+    this.camera.zoom = a.fromZoom * Math.pow(a.toZoom / a.fromZoom, e)
+    if (t >= 1) this.camAnim = null
+  }
+
+  private advanceFade(): void {
+    if (this.fadeDur <= 0) return
+    const t = Math.min(1, (performance.now() - this.fadeStart) / this.fadeDur)
+    this.world.alpha = t
+    if (t >= 1) {
+      this.fadeDur = 0
+      this.world.alpha = 1
+    }
+  }
+
   private tick = (ticker: Ticker): void => {
     this.frame++
+    this.advanceCameraAnim()
     this.gestures.tickInertia()
+    this.advanceFade()
     this.lod.update(this.camera.zoom)
 
     const vp = this.viewport()
@@ -108,4 +192,8 @@ export class RenderEngine {
       this.app.destroy(true, { children: true, texture: false })
     }
   }
+}
+
+function easeInOutCubic(t: number): number {
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2
 }

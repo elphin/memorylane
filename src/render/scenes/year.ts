@@ -89,10 +89,12 @@ export class YearScene implements Scene {
     const vp = this.engine.viewport()
     const w = cols * CELL
     const h = rows * CELL
-    this.engine.camera.x = w / 2 - CELL / 2
-    this.engine.camera.y = h / 2 - CELL / 2
     const zoom = Math.min(vp.width / (w + CELL), vp.height / (h + CELL))
-    this.engine.camera.zoom = Math.max(this.engine.camera.minZoom, Math.min(zoom, 1))
+    this.engine.animateCamera(
+      w / 2 - CELL / 2,
+      h / 2 - CELL / 2,
+      Math.max(this.engine.camera.minZoom, Math.min(zoom, 1)),
+    )
   }
 
   update(ctx: FrameContext): void {

@@ -43,12 +43,15 @@ export class GestureController {
     /** Kan een sleepbaar object teruggeven op wereldpunt; dan sleept dat i.p.v.
      * de camera te pannen. */
     private beginDrag?: (worldX: number, worldY: number) => DragHandle | null,
+    /** Muispositie bij hoveren (sx=null bij verlaten). */
+    private onHover?: (sx: number | null, sy: number) => void,
   ) {
     canvas.addEventListener('wheel', this.onWheel, { passive: false })
     canvas.addEventListener('pointerdown', this.onPointerDown)
     canvas.addEventListener('pointermove', this.onPointerMove)
     canvas.addEventListener('pointerup', this.onPointerUp)
     canvas.addEventListener('pointercancel', this.onPointerUp)
+    canvas.addEventListener('pointerleave', this.onPointerLeave)
     // Voorkom browser-gebaren (page-zoom) op het canvas.
     canvas.style.touchAction = 'none'
   }
@@ -59,6 +62,11 @@ export class GestureController {
     this.canvas.removeEventListener('pointermove', this.onPointerMove)
     this.canvas.removeEventListener('pointerup', this.onPointerUp)
     this.canvas.removeEventListener('pointercancel', this.onPointerUp)
+    this.canvas.removeEventListener('pointerleave', this.onPointerLeave)
+  }
+
+  private onPointerLeave = (): void => {
+    this.onHover?.(null, 0)
   }
 
   private localPos(e: { clientX: number; clientY: number }): PointerPos {
@@ -72,14 +80,12 @@ export class GestureController {
     const p = this.localPos(e)
     this.vx = 0
     this.vy = 0
-    if (e.ctrlKey) {
-      // Trackpad-pinch of ctrl+wheel → zoom naar cursor.
-      const factor = Math.exp(-e.deltaY * 0.01)
-      this.camera.zoomAt(p.x, p.y, factor, vp)
-    } else {
-      // Twee-vinger scroll / muiswiel → pan.
-      this.camera.panScreen(e.deltaX, e.deltaY)
-    }
+    // Wiel = zoomen naar de cursor (wat de meeste mensen verwachten). Delta
+    // geclampt zodat een muiswiel-notch niet te grof springt; trackpad-pinch
+    // (ctrlKey, kleine delta) voelt fijner.
+    const delta = Math.max(-140, Math.min(140, e.deltaY))
+    const factor = Math.exp(-delta * (e.ctrlKey ? 0.01 : 0.0016))
+    this.camera.zoomAt(p.x, p.y, factor, vp)
     this.onChange()
   }
 
@@ -117,7 +123,14 @@ export class GestureController {
   }
 
   private onPointerMove = (e: PointerEvent): void => {
-    if (!this.pointers.has(e.pointerId)) return
+    if (!this.pointers.has(e.pointerId)) {
+      // Geen knop ingedrukt → hover (alleen zinvol voor een muis).
+      if (e.pointerType === 'mouse') {
+        const h = this.localPos(e)
+        this.onHover?.(h.x, h.y)
+      }
+      return
+    }
     const p = this.localPos(e)
     this.pointers.set(e.pointerId, p)
 

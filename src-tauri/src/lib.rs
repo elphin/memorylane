@@ -139,9 +139,11 @@ fn handle_thumb(app: &AppHandle, request: &Request<Vec<u8>>) -> Response<Vec<u8>
         Ok(bytes) => Response::builder()
             .status(200)
             .header("Content-Type", "image/jpeg")
-            // De URL is item-id-gekeyd (muteerbaar bij een foto-vervanging in
-            // fase 8), dus geen `immutable`. Fase 5 zet over op content-hash in
-            // de URL + langdurige cache.
+            // CORS zodat een <img crossOrigin="anonymous"> uploadbaar is naar
+            // WebGL zonder canvas-tainting (thumb:// is cross-origin t.o.v. de app).
+            .header("Access-Control-Allow-Origin", "*")
+            // De URL is item-id-gekeyd (muteerbaar bij een foto-vervanging),
+            // dus geen `immutable`.
             .header("Cache-Control", "no-cache")
             .body(bytes)
             .unwrap_or_else(|_| error_response()),

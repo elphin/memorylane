@@ -56,6 +56,7 @@ export function AppShell() {
       enterSeqRef.current++
       sceneRef.current?.destroy()
       sceneRef.current = new LifelineScene(engine, backendRef.current, yearsRef.current)
+      engine.fadeIn()
       levelRef.current = 'lifeline'
       setUiLevel('lifeline')
     }
@@ -70,10 +71,11 @@ export function AppShell() {
         sceneRef.current?.destroy()
         sceneRef.current = null
         sceneRef.current = new YearScene(engine, backendRef.current, photos)
+        engine.fadeIn()
         levelRef.current = 'year'
         setUiLevel('year')
         currentYearRef.current = yearId
-        entryZoomRef.current = engine.camera.zoom
+        entryZoomRef.current = engine.pendingZoom
       } catch (e) {
         if (!disposed) {
           setMessage(String(e))
@@ -102,11 +104,12 @@ export function AppShell() {
             }
           })
         })
+        engine.fadeIn()
         levelRef.current = 'event'
         setUiLevel('event')
         currentEventRef.current = eventId
         currentItemsRef.current = detail.items
-        entryZoomRef.current = engine.camera.zoom
+        entryZoomRef.current = engine.pendingZoom
       } catch (e) {
         if (!disposed) {
           setMessage(String(e))
@@ -126,13 +129,33 @@ export function AppShell() {
       sceneRef.current?.destroy()
       sceneRef.current = null
       sceneRef.current = new FocusScene(engine, backendRef.current, items, index)
+      engine.fadeIn()
       levelRef.current = 'focus'
       setUiLevel('focus')
-      entryZoomRef.current = engine.camera.zoom
+      entryZoomRef.current = engine.pendingZoom
     }
 
     enterYearRef.current = (id) => void enterYear(id)
     enterEventRef.current = (id) => void enterEvent(id)
+
+    // Eén niveau terug (Esc / uitzoomen).
+    const goBack = (): void => {
+      if (enteringRef.current) return
+      if (levelRef.current === 'year') setupLifeline()
+      else if (levelRef.current === 'event' && currentYearRef.current) void enterYear(currentYearRef.current)
+      else if (levelRef.current === 'focus' && currentEventRef.current) void enterEvent(currentEventRef.current)
+    }
+
+    const onKeyDown = (e: KeyboardEvent): void => {
+      // Laat invoervelden (composer/zoeken) hun eigen toetsen afhandelen.
+      const el = document.activeElement
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) return
+      if (e.key === 'Escape' || e.key === 'Backspace') {
+        e.preventDefault()
+        goBack()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
 
     const loadYears = async (): Promise<void> => {
       if (!backendRef.current) return
@@ -156,20 +179,19 @@ export function AppShell() {
       }
       engineRef.current = engine
       backendRef.current = createBackend()
+      ;(window as unknown as { __engine?: RenderEngine }).__engine = engine
 
       engine.onFrame = (ctx) => {
         sceneRef.current?.update(ctx)
-        // Ver uitzoomen → één niveau terug.
+        // Ver uitzoomen → één niveau terug. Niet tijdens een lopende
+        // transitie-animatie (dan zit de zoom nog onder de drempel).
         const backThreshold = ctx.engine.camera.zoom < entryZoomRef.current * 0.45
-        if (backThreshold && !enteringRef.current) {
-          if (levelRef.current === 'year') {
-            setupLifeline()
-          } else if (levelRef.current === 'event' && currentYearRef.current) {
-            void enterYear(currentYearRef.current)
-          } else if (levelRef.current === 'focus' && currentEventRef.current) {
-            void enterEvent(currentEventRef.current)
-          }
+        if (backThreshold && !enteringRef.current && !ctx.engine.isAnimatingCamera) {
+          goBack()
         }
+      }
+      engine.onHover = (wx, wy) => {
+        sceneRef.current?.onHover?.(wx, wy)
       }
       engine.onTap = (wx, wy) => {
         // FocusScene.hitTest verwerkt links/rechts-tik zelf (sibling-nav) en
@@ -197,6 +219,7 @@ export function AppShell() {
 
     return () => {
       disposed = true
+      window.removeEventListener('keydown', onKeyDown)
       if (searchTimerRef.current) window.clearTimeout(searchTimerRef.current)
       sceneRef.current?.destroy()
       sceneRef.current = null

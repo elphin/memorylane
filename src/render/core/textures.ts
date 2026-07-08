@@ -5,6 +5,9 @@
 import { Texture } from 'pixi.js'
 import type { DecodeRequest, DecodeResult } from './decode.worker'
 
+/** Frames voordat een gefaalde thumbnail opnieuw geprobeerd mag worden (~3s). */
+const RETRY_FRAMES = 180
+
 interface CacheEntry {
   texture: Texture
   lastUsed: number
@@ -23,10 +26,14 @@ export class TextureManager {
   private worker: Worker
   private cache = new Map<string, CacheEntry>()
   private pending = new Set<string>()
-  private failed = new Set<string>()
+  // key → frame waarop de load faalde. Verloopt (RETRY_FRAMES) zodat een
+  // transiënte fout (bijv. een 503 bij een volle wachtrij tijdens snel pannen)
+  // later opnieuw geprobeerd wordt i.p.v. permanent placeholder te blijven.
+  private failed = new Map<string, number>()
+  private frame = 0
   private requestQueue: DecodeRequest[] = []
   private queuedKeys = new Set<string>()
-  private readyQueue: Array<{ key: string; bitmap: ImageBitmap | null }> = []
+  private readyQueue: Array<{ key: string; source: ImageBitmap | HTMLImageElement | null }> = []
   private uploadsPerFrame: number
   private requestsPerFrame: number
   private maxTextures: number
@@ -43,20 +50,36 @@ export class TextureManager {
       // `pending` blijft staan tot de texture echt in de cache zit (pump),
       // anders zou een key die in de readyQueue wacht elke frame opnieuw
       // aangevraagd worden → postMessage-storm.
-      this.readyQueue.push({ key, bitmap: bitmap ?? null })
+      this.readyQueue.push({ key, source: bitmap ?? null })
     }
+  }
+
+  /** Laadt een echte thumbnail-URL via een <img> op de main-thread. Dit werkt —
+   * anders dan `fetch` in een Web Worker — betrouwbaar met Tauri's custom
+   * `thumb://`-protocol in WebView2. `decode()` decodeert off-thread; de
+   * `crossOrigin`-vlag + CORS-header op de respons voorkomen canvas-tainting. */
+  private loadImage(req: DecodeRequest): void {
+    const url = req.url as string
+    const img = new Image()
+    img.crossOrigin = 'anonymous'
+    img.onerror = () => this.readyQueue.push({ key: req.key, source: null })
+    img.src = url
+    img
+      .decode()
+      .then(() => this.readyQueue.push({ key: req.key, source: img }))
+      .catch(() => this.readyQueue.push({ key: req.key, source: null }))
   }
 
   /** Vraagt een texture op (idempotent); wordt begrensd verstuurd in `pump`,
    * zodat een frame met veel zichtbare sprites de worker niet overspoelt. */
   request(req: DecodeRequest): void {
-    if (
-      this.cache.has(req.key) ||
-      this.pending.has(req.key) ||
-      this.failed.has(req.key) ||
-      this.queuedKeys.has(req.key)
-    ) {
+    if (this.cache.has(req.key) || this.pending.has(req.key) || this.queuedKeys.has(req.key)) {
       return
+    }
+    const failedAt = this.failed.get(req.key)
+    if (failedAt !== undefined) {
+      if (this.frame - failedAt < RETRY_FRAMES) return // recent gefaald: nog niet opnieuw
+      this.failed.delete(req.key) // verlopen → opnieuw proberen
     }
     this.queuedKeys.add(req.key)
     this.requestQueue.push(req)
@@ -76,13 +99,19 @@ export class TextureManager {
 
   /** Per frame: verstuur begrensd nieuwe requests, upload klare bitmaps, evict. */
   pump(frame: number): void {
-    // Begrensd requests naar de worker sturen (anti-flood).
+    this.frame = frame
+    // Begrensd nieuwe requests starten (anti-flood). URL → <img>-loader,
+    // procedureel (harness/mock hue) → worker.
     let sent = 0
     while (this.requestQueue.length > 0 && sent < this.requestsPerFrame) {
       const req = this.requestQueue.shift()!
       this.queuedKeys.delete(req.key)
       this.pending.add(req.key)
-      this.worker.postMessage(req)
+      if (req.url) {
+        this.loadImage(req)
+      } else {
+        this.worker.postMessage(req)
+      }
       sent++
     }
 
@@ -90,12 +119,13 @@ export class TextureManager {
     while (this.readyQueue.length > 0 && uploads < this.uploadsPerFrame) {
       const item = this.readyQueue.shift()!
       this.pending.delete(item.key)
-      if (!item.bitmap) {
-        // Decode-fout: markeer als mislukt zodat we niet eeuwig opnieuw proberen.
-        this.failed.add(item.key)
+      if (!item.source || this.cache.has(item.key)) {
+        // Decode-fout → markeer als mislukt (verloopt, zie RETRY_FRAMES);
+        // al gecachet → dubbele levering, negeren.
+        if (!item.source) this.failed.set(item.key, frame)
         continue
       }
-      const texture = Texture.from(item.bitmap)
+      const texture = Texture.from(item.source)
       this.cache.set(item.key, { texture, lastUsed: frame })
       uploads++
     }

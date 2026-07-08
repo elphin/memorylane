@@ -135,7 +135,11 @@ v1's formaat blijft leesbaar; v2 breidt uit zodat de vault volledig is:
 - ⬜ Nog te doen: live file-watcher (notify + echo-suppressie); settings-UI (categorieën, filters, appearance, vault-locatie); indexfouten-paneel.
 - notify-watcher + echo-suppressie + events naar frontend; FTS5-search + SearchModal; settings-UI (leest/schrijft `.memorylane/settings.json`); indexfouten-paneel.
 
-**Fase 10 — Polish**
+**Fase 10 — Polish** 🟡 *gestart n.a.v. gebruikersfeedback*
+- ✅ Vloeiende camera-animaties (eased zoom/pan) + scene-fade bij niveauwissels; hover-micro-animaties (lifeline + event).
+- ✅ Navigatie: **muiswiel = zoomen naar cursor**; **Esc/Backspace = niveau terug**; klik = inzoomen; slepen = pannen.
+- ✅ Thumbnail-fix voor WebView2: laden via `<img crossOrigin>` op de main-thread (i.p.v. worker-fetch, dat met custom protocols faalt) + CORS-header + verlopende retry.
+- ⬜ Rest: overgangen finetunen, keyboard-nav uitbreiden, lege-staten/onboarding, ffmpeg-bundel + installer.
 - Overgangen finetunen, keyboard-nav, onboarding-verfijning, performance-tuning, installer (incl. ffmpeg-bundel + licenties).
 
 ## 6. Risico's & mitigatie
