@@ -17,6 +17,11 @@ export interface FrameContext {
 export class RenderEngine {
   readonly app = new Application()
   readonly world = new Container()
+  // Laag bóven de wereld voor het uitgaande niveau tijdens een transitie: het
+  // blijft in beeld (bevroren op zijn laatste scherm-transform) en animeert in
+  // schermruimte mee (zoomt door + faadt uit) terwijl het nieuwe niveau eronder
+  // eruit groeit → crossfade i.p.v. harde swap.
+  readonly overlay = new Container()
   readonly camera = new Camera()
   readonly textures = new TextureManager()
   readonly lod = new LodManager()
@@ -62,6 +67,19 @@ export class RenderEngine {
     start: number
     dur: number
   } | null = null
+  // Exit-animatie van het uitgaande niveau (leeft in `overlay`, in schermruimte).
+  // `onDone` ruimt de oude scene op zodra de animatie klaar is (of afgebroken).
+  private exitAnim: {
+    onDone: () => void
+    fromScale: number
+    fromX: number
+    fromY: number
+    toScale: number
+    toX: number
+    toY: number
+    start: number
+    dur: number
+  } | null = null
   private lastTapScreen = { x: 0, y: 0 }
 
   async init(container: HTMLElement): Promise<void> {
@@ -84,6 +102,7 @@ export class RenderEngine {
     }
     container.appendChild(this.app.canvas)
     this.app.stage.addChild(this.world)
+    this.app.stage.addChild(this.overlay)
 
     this.gestures = new GestureController(
       this.app.canvas as HTMLCanvasElement,
@@ -95,13 +114,17 @@ export class RenderEngine {
       () => {
         this.camAnim = null
         this.finishReveal()
+        this.finishExit()
       },
       (sx, sy) => {
         this.lastTapScreen = { x: sx, y: sy }
         const w = this.camera.screenToWorld(sx, sy, this.viewport())
         this.onTap?.(w.x, w.y)
       },
-      (wx, wy) => this.beginDrag?.(wx, wy) ?? null,
+      // Geen nieuwe sleep starten tijdens een niveau-transitie: het oude niveau
+      // leeft dan nog ~380ms in de overlay met een actieve beginDrag-hook, maar
+      // is visueel al weg — anders zou je onzichtbare items kunnen grijpen.
+      (wx, wy) => (this.isTransitioning ? null : (this.beginDrag?.(wx, wy) ?? null)),
       (sx, sy) => {
         if (sx === null) {
           this.onHover?.(null, 0)
@@ -133,6 +156,11 @@ export class RenderEngine {
   /** True zolang een scene-reveal loopt. */
   get isRevealing(): boolean {
     return this.reveal !== null
+  }
+
+  /** True zolang er een niveau-transitie loopt (reveal in óf exit uit). */
+  get isTransitioning(): boolean {
+    return this.reveal !== null || this.exitAnim !== null
   }
 
   /** Doelzoom van de lopende animatie (of de huidige zoom als er geen loopt). */
@@ -178,6 +206,71 @@ export class RenderEngine {
     root.position.set(fromX, fromY)
     root.alpha = 0
     this.reveal = { root, fromScale, fromX, fromY, toX: cx, toY: cy, start: performance.now(), dur }
+  }
+
+  /** Laat het uitgaande niveau meebewegen tijdens een transitie: het wordt naar
+   * de `overlay` verplaatst (bevroren op zijn huidige scherm-transform) en zoomt
+   * in schermruimte door + faadt uit. Mode `in` = door het aangeklikte punt naar
+   * voren (alsof je erdoorheen duikt), `out` = terug naar achteren via het
+   * midden. `onDone` vernietigt de oude scene zodra klaar/afgebroken. */
+  exitScene(oldRoot: Container, mode: 'in' | 'out', onDone: () => void, dur = 380): void {
+    // Een lopende exit eerst netjes afronden (snelle dubbele navigatie).
+    if (this.exitAnim) this.finishExit()
+    // Als deze root nog midden in zijn eigen reveal zat, die eerst op identiteit
+    // zetten — anders vechten reveal en exit om dezelfde transform.
+    if (this.reveal?.root === oldRoot) this.finishReveal()
+    if (oldRoot.destroyed) {
+      onDone()
+      return
+    }
+    // Bevries de overlay op de huidige scherm-transform van de wereld, zodat het
+    // oude niveau exact op zijn plek blijft staan op het moment van overzetten.
+    const vp = this.viewport()
+    const z = this.camera.zoom
+    const fromScale = z
+    const fromX = vp.width / 2 - this.camera.x * z
+    const fromY = vp.height / 2 - this.camera.y * z
+    this.overlay.addChild(oldRoot)
+    this.overlay.pivot.set(0, 0)
+    this.overlay.scale.set(fromScale)
+    this.overlay.position.set(fromX, fromY)
+    this.overlay.alpha = 1
+
+    // Zoom-naar-punt in schermruimte: bij `in` groeit het door het klikpunt weg,
+    // bij `out` krimpt het naar het midden.
+    const factor = mode === 'in' ? 2.6 : 0.4
+    const px = mode === 'in' ? this.lastTapScreen.x : vp.width / 2
+    const py = mode === 'in' ? this.lastTapScreen.y : vp.height / 2
+    const toScale = fromScale * factor
+    const toX = px - (px - fromX) * factor
+    const toY = py - (py - fromY) * factor
+    this.exitAnim = { onDone, fromScale, fromX, fromY, toScale, toX, toY, start: performance.now(), dur }
+  }
+
+  private advanceExit(): void {
+    if (!this.exitAnim) return
+    const a = this.exitAnim
+    const t = Math.min(1, (performance.now() - a.start) / a.dur)
+    const e = easeInOutCubic(t)
+    this.overlay.scale.set(a.fromScale + (a.toScale - a.fromScale) * e)
+    this.overlay.position.set(a.fromX + (a.toX - a.fromX) * e, a.fromY + (a.toY - a.fromY) * e)
+    // Iets sneller uitfaden dan de beweging, zodat het nieuwe niveau tijdig
+    // doorschemert.
+    this.overlay.alpha = Math.max(0, 1 - t * 1.3)
+    if (t >= 1) this.finishExit()
+  }
+
+  /** Rondt de exit-animatie af: ruimt de oude scene op en reset de overlay. */
+  private finishExit(): void {
+    if (!this.exitAnim) return
+    const done = this.exitAnim.onDone
+    this.exitAnim = null
+    done()
+    // Overlay leegmaken en terug naar identiteit voor de volgende transitie.
+    this.overlay.removeChildren()
+    this.overlay.scale.set(1)
+    this.overlay.position.set(0, 0)
+    this.overlay.alpha = 1
   }
 
   /** Animeert de camera vloeiend naar een doel (voor niveau-transities). */
@@ -241,6 +334,7 @@ export class RenderEngine {
     this.advanceCameraAnim()
     this.gestures.tickInertia()
     this.advanceReveal()
+    this.advanceExit()
     this.lod.update(this.camera.zoom)
 
     const vp = this.viewport()
@@ -257,6 +351,8 @@ export class RenderEngine {
     // aangeroepen (React StrictMode mount→unmount→remount).
     if (this.destroyed) return
     this.destroyed = true
+    // Ruim een lopende exit-animatie op (vernietigt de bevroren oude scene).
+    this.finishExit()
     this.gestures?.destroy()
     this.textures.destroy()
     if (this.initialized) {

@@ -64,7 +64,10 @@ export function AppShell() {
       if (!engine || !backendRef.current) return
       // Invalideer een eventuele in-flight enterYear.
       enterSeqRef.current++
-      sceneRef.current?.destroy()
+      // Oud niveau laat uitzoomen + uitfaden (crossfade), niet hard weg.
+      const old = sceneRef.current
+      sceneRef.current = null
+      if (old) engine.exitScene(old.root, 'out', () => old.destroy())
       const scene = new LifelineScene(engine, backendRef.current, yearsRef.current)
       sceneRef.current = scene
       engine.revealScene(scene.root, 'out')
@@ -79,8 +82,11 @@ export function AppShell() {
       try {
         const photos = await backendRef.current.getYearPhotos(yearId)
         if (disposed || !engine || seq !== enterSeqRef.current) return
-        sceneRef.current?.destroy()
+        // Oud niveau meebewegen + uitfaden (crossfade). Móet vóór de nieuwe
+        // scene-constructor: die roept jumpCamera en verandert de camera.
+        const old = sceneRef.current
         sceneRef.current = null
+        if (old) engine.exitScene(old.root, dir, () => old.destroy())
         const scene = new YearScene(engine, backendRef.current, photos)
         sceneRef.current = scene
         revealScene(engine, scene, dir)
@@ -106,8 +112,11 @@ export function AppShell() {
       try {
         const detail = await backend.getEvent(eventId)
         if (disposed || !engine || seq !== enterSeqRef.current || !detail) return
-        sceneRef.current?.destroy()
+        // Oud niveau meebewegen + uitfaden (crossfade). Vóór de scene-constructor
+        // (jumpCamera) zodat de overlay op de oude camera bevriest.
+        const old = sceneRef.current
         sceneRef.current = null
+        if (old) engine.exitScene(old.root, dir, () => old.destroy())
         const scene = new EventScene(engine, backend, detail, (items) => {
           void backend.saveCanvasLayout(eventId, items).catch((e) => {
             if (!disposed) {
@@ -139,8 +148,10 @@ export function AppShell() {
       const index = items.findIndex((it) => it.id === itemId)
       if (index < 0) return
       enterSeqRef.current++ // eventuele in-flight enter invalideren
-      sceneRef.current?.destroy()
+      // Oud niveau meebewegen + uitfaden (crossfade), vóór de scene-constructor.
+      const old = sceneRef.current
       sceneRef.current = null
+      if (old) engine.exitScene(old.root, 'in', () => old.destroy())
       const scene = new FocusScene(engine, backendRef.current, items, index)
       sceneRef.current = scene
       revealScene(engine, scene, 'in')
@@ -200,12 +211,7 @@ export function AppShell() {
         // Ver uitzoomen → één niveau terug. Niet tijdens een lopende
         // transitie-animatie (dan zit de zoom nog onder de drempel).
         const backThreshold = ctx.engine.camera.zoom < entryZoomRef.current * 0.45
-        if (
-          backThreshold &&
-          !enteringRef.current &&
-          !ctx.engine.isAnimatingCamera &&
-          !ctx.engine.isRevealing
-        ) {
+        if (backThreshold && !enteringRef.current && !ctx.engine.isTransitioning) {
           goBack()
         }
       }
@@ -216,7 +222,7 @@ export function AppShell() {
         // Negeer taps tijdens de reveal: de root is dan geschaald/verschoven,
         // dus een hitTest tegen de (uiteindelijke) wereldcoördinaten zou het
         // verkeerde object raken en ongewild een niveau dieper navigeren.
-        if (engine?.isRevealing) return
+        if (engine?.isTransitioning) return
         // FocusScene.hitTest verwerkt links/rechts-tik zelf (sibling-nav) en
         // geeft null terug; de andere niveaus navigeren op het geraakte id.
         const hit = sceneRef.current?.hitTest?.(wx, wy)

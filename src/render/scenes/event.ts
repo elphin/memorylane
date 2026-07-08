@@ -41,6 +41,11 @@ export class EventScene implements Scene {
   private nodes: Node[] = []
   private zTop = 0
   private hoveredId: string | null = null
+  // Eigen drag-handler-referentie: nodig om bij destroy alléén de engine-hook te
+  // wissen als die nog van DEZE scene is. Door de crossfade wordt de oude scene
+  // pas ~380ms ná de nieuwe vernietigd; zonder identiteitscheck zou die late
+  // destroy de beginDrag-hook van de nieuwe (event→event) scene wissen.
+  private readonly dragHandler = (wx: number, wy: number): DragHandle | null => this.beginDrag(wx, wy)
 
   constructor(
     private engine: RenderEngine,
@@ -96,7 +101,7 @@ export class EventScene implements Scene {
     this.root.sortableChildren = true
     engine.world.addChild(this.root)
     this.fitCamera(cols, Math.max(1, Math.ceil(detail.items.length / cols)))
-    engine.beginDrag = (wx, wy) => this.beginDrag(wx, wy)
+    engine.beginDrag = this.dragHandler
   }
 
   private buildPhotoCard(container: Container): Sprite {
@@ -243,7 +248,8 @@ export class EventScene implements Scene {
   }
 
   destroy(): void {
-    if (this.engine.beginDrag) this.engine.beginDrag = undefined
+    // Alleen wissen als de hook nog van DEZE scene is (zie dragHandler).
+    if (this.engine.beginDrag === this.dragHandler) this.engine.beginDrag = undefined
     this.root.destroy({ children: true })
   }
 }
