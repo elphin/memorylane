@@ -4,10 +4,9 @@
 // DOM wordt alleen gebruikt voor overlays (loading, first-run, leeg).
 
 import { useEffect, useRef, useState } from 'react'
-import type { Backend, YearSummary } from '../lib/backend'
+import type { Backend, Item, SearchResult, YearSummary } from '../lib/backend'
 import { createBackend } from '../lib/backend'
 import { RenderEngine } from '../render/core/engine'
-import type { Item } from '../lib/backend'
 import { EventScene } from '../render/scenes/event'
 import { FocusScene } from '../render/scenes/focus'
 import { LifelineScene } from '../render/scenes/lifeline'
@@ -24,6 +23,10 @@ export function AppShell() {
   const [modal, setModal] = useState<null | 'note' | 'event'>(null)
   const [draft, setDraft] = useState('')
   const [busy, setBusy] = useState(false)
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([])
+  const searchTimerRef = useRef<number | undefined>(undefined)
 
   const enterEventRef = useRef<(id: string) => void>(() => {})
   const enterYearRef = useRef<(id: string) => void>(() => {})
@@ -194,6 +197,7 @@ export function AppShell() {
 
     return () => {
       disposed = true
+      if (searchTimerRef.current) window.clearTimeout(searchTimerRef.current)
       sceneRef.current?.destroy()
       sceneRef.current = null
       engine?.destroy()
@@ -298,10 +302,50 @@ export function AppShell() {
     }
   }
 
+  const runSearch = (q: string): void => {
+    setSearchQuery(q)
+    if (searchTimerRef.current) window.clearTimeout(searchTimerRef.current)
+    const backend = backendRef.current
+    if (!backend) return
+    searchTimerRef.current = window.setTimeout(() => {
+      void backend
+        .search(q)
+        .then(setSearchResults)
+        .catch(() => setSearchResults([]))
+    }, 220)
+  }
+
+  const closeSearch = (): void => {
+    if (searchTimerRef.current) window.clearTimeout(searchTimerRef.current)
+    setSearchOpen(false)
+    setSearchQuery('')
+    setSearchResults([])
+  }
+
+  const openResult = (r: SearchResult): void => {
+    currentYearRef.current = r.yearId
+    enterEventRef.current(r.eventId)
+    closeSearch()
+  }
+
   return (
     <div style={{ position: 'fixed', inset: 0 }}>
       <div ref={hostRef} style={{ position: 'absolute', inset: 0 }} />
       {phase !== 'ready' && <Overlay phase={phase} message={message} onPick={() => void pickVault()} />}
+      {phase === 'ready' && !modal && !searchOpen && (
+        <button onClick={() => setSearchOpen(true)} style={searchBtn} title="Zoeken">
+          Zoeken…
+        </button>
+      )}
+      {searchOpen && (
+        <SearchPanel
+          query={searchQuery}
+          results={searchResults}
+          onChange={runSearch}
+          onPick={openResult}
+          onClose={closeSearch}
+        />
+      )}
       {phase === 'ready' && !modal && (
         <Fab
           uiLevel={uiLevel}
@@ -419,6 +463,92 @@ function Composer({
       </div>
     </div>
   )
+}
+
+function SearchPanel({
+  query,
+  results,
+  onChange,
+  onPick,
+  onClose,
+}: {
+  query: string
+  results: SearchResult[]
+  onChange: (q: string) => void
+  onPick: (r: SearchResult) => void
+  onClose: () => void
+}) {
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'absolute',
+        inset: 0,
+        background: 'rgba(0,0,0,0.5)',
+        display: 'flex',
+        justifyContent: 'center',
+        paddingTop: 80,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{ width: 560, maxWidth: '92%', background: '#161c28', borderRadius: 12, padding: 16, height: 'fit-content' }}
+      >
+        <input
+          autoFocus
+          value={query}
+          onChange={(e) => onChange(e.target.value)}
+          onKeyDown={(e) => e.key === 'Escape' && onClose()}
+          placeholder="Zoek in je herinneringen…"
+          style={field}
+        />
+        <div style={{ marginTop: 10, maxHeight: 360, overflowY: 'auto' }}>
+          {query.trim() && results.length === 0 && (
+            <div style={{ color: '#8a97b0', font: '13px sans-serif', padding: '10px 4px' }}>
+              Niets gevonden.
+            </div>
+          )}
+          {query.trim() && results.map((r) => (
+            <button
+              key={r.itemId}
+              onClick={() => onPick(r)}
+              style={{
+                display: 'block',
+                width: '100%',
+                textAlign: 'left',
+                padding: '10px 12px',
+                marginTop: 6,
+                borderRadius: 8,
+                border: '1px solid #2c3650',
+                background: '#0e1420',
+                color: '#e6ebf5',
+                cursor: 'pointer',
+                font: '14px sans-serif',
+              }}
+            >
+              <div style={{ color: '#8a97b0', fontSize: 12, marginBottom: 2 }}>
+                {r.eventTitle ?? 'Gebeurtenis'}
+              </div>
+              {r.snippet}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+const searchBtn: React.CSSProperties = {
+  position: 'absolute',
+  top: 16,
+  left: 16,
+  padding: '8px 16px',
+  borderRadius: 20,
+  border: '1px solid #2c3650',
+  background: 'rgba(22,28,40,0.85)',
+  color: '#cfd6e4',
+  font: '13px sans-serif',
+  cursor: 'pointer',
 }
 
 const fabBtn: React.CSSProperties = {

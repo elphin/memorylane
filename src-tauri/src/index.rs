@@ -215,6 +215,17 @@ pub struct YearPhoto {
     pub event_id: String,
 }
 
+/// Een zoekresultaat (full-text) met genoeg context om naartoe te navigeren.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchResult {
+    pub item_id: String,
+    pub event_id: String,
+    pub year_id: String,
+    pub event_title: Option<String>,
+    pub snippet: String,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DensityPoint {
@@ -534,6 +545,54 @@ pub fn replace_canvas(
     Ok(())
 }
 
+/// Bouwt een veilige FTS5-prefix-query uit vrije gebruikersinvoer (alleen
+/// alfanumerieke tokens + `*`, impliciete AND) — voorkomt FTS-syntaxfouten.
+fn fts_query(input: &str) -> Option<String> {
+    let tokens: Vec<String> = input
+        .split_whitespace()
+        .map(|t| t.chars().filter(|c| c.is_alphanumeric()).collect::<String>())
+        .filter(|t| !t.is_empty())
+        .map(|t| format!("{t}*"))
+        .collect();
+    if tokens.is_empty() {
+        None
+    } else {
+        Some(tokens.join(" "))
+    }
+}
+
+/// Full-text zoeken op caption + body. Geeft resultaten met navigatie-context.
+pub fn search(conn: &Connection, input: &str) -> rusqlite::Result<Vec<SearchResult>> {
+    let Some(query) = fts_query(input) else {
+        return Ok(Vec::new());
+    };
+    let mut stmt = conn.prepare(
+        "SELECT f.item_id, i.event_id, e.year_id, e.title, i.caption, i.body_text
+         FROM items_fts f
+         JOIN items i ON i.id = f.item_id
+         JOIN events e ON i.event_id = e.id
+         WHERE items_fts MATCH ?1
+         LIMIT 50",
+    )?;
+    let rows = stmt.query_map(params![query], |r| {
+        let caption: Option<String> = r.get(4)?;
+        let body: Option<String> = r.get(5)?;
+        let snippet = caption
+            .clone()
+            .or(body)
+            .map(|s| s.chars().take(140).collect::<String>())
+            .unwrap_or_default();
+        Ok(SearchResult {
+            item_id: r.get(0)?,
+            event_id: r.get(1)?,
+            year_id: r.get(2)?,
+            event_title: r.get(3)?,
+            snippet,
+        })
+    })?;
+    rows.collect()
+}
+
 pub fn get_index_errors(conn: &Connection) -> rusqlite::Result<Vec<IndexError>> {
     let mut stmt =
         conn.prepare("SELECT path, severity, reason FROM index_errors ORDER BY severity, path")?;
@@ -791,6 +850,24 @@ mod tests {
         let photos = list_year_photos(&conn, "y2024").unwrap();
         assert_eq!(photos.len(), 2);
         assert!(photos.iter().any(|p| p.item_id == "it2"));
+    }
+
+    #[test]
+    fn search_finds_by_caption_with_context() {
+        let mut conn = open_in_memory().unwrap();
+        load(&mut conn, &sample_model()).unwrap();
+        let results = search(&conn, "zonsondergang").unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].item_id, "it1");
+        assert_eq!(results[0].event_id, "ev1");
+        assert_eq!(results[0].year_id, "y2024");
+        assert!(results[0].snippet.contains("zonsondergang"));
+        // Prefix-match werkt ook.
+        assert_eq!(search(&conn, "zonson").unwrap().len(), 1);
+        // Lege/whitespace-query geeft niets (geen FTS-fout).
+        assert!(search(&conn, "   ").unwrap().is_empty());
+        // Speciale tekens breken de FTS-parser niet.
+        assert!(search(&conn, "\"'(*)").unwrap().is_empty());
     }
 
     #[test]

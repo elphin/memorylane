@@ -107,6 +107,7 @@ pub fn run() {
             commands::create_text_item,
             commands::create_event,
             commands::delete_item,
+            commands::search,
             commands::get_index_errors,
         ])
         .run(tauri::generate_context!())

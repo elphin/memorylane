@@ -113,6 +113,14 @@ export interface IndexSummary {
   errorCount: number
 }
 
+export interface SearchResult {
+  itemId: string
+  eventId: string
+  yearId: string
+  eventTitle?: string
+  snippet: string
+}
+
 /** Een thumbnail-bron voor de texture-pipeline: een echte URL of een hue. */
 export interface ThumbSource {
   url?: string
@@ -132,6 +140,7 @@ export interface Backend {
   createTextItem(eventId: string, caption: string | null, body: string): Promise<string>
   createEvent(yearId: string, title: string, startAt: string): Promise<string>
   deleteItem(itemId: string): Promise<void>
+  search(query: string): Promise<SearchResult[]>
   thumb(itemId: string, size: 64 | 128 | 256 | 1024 | 2048): ThumbSource
 }
 
@@ -223,6 +232,11 @@ class TauriBackend implements Backend {
   async deleteItem(itemId: string): Promise<void> {
     const invoke = await this.api()
     await invoke('delete_item', { itemId })
+  }
+
+  async search(query: string): Promise<SearchResult[]> {
+    const invoke = await this.api()
+    return await invoke<SearchResult[]>('search', { query })
   }
 
   thumb(itemId: string, size: number): ThumbSource {
@@ -339,6 +353,26 @@ class MockBackend implements Backend {
   }
   async deleteItem(itemId: string): Promise<void> {
     this.deleted.add(itemId)
+  }
+  async search(query: string): Promise<SearchResult[]> {
+    const q = query.toLowerCase().trim()
+    if (!q) return []
+    const out: SearchResult[] = []
+    for (const [eventId, items] of this.adds) {
+      for (const it of items) {
+        if (this.deleted.has(it.id)) continue
+        const text = (it.bodyText || it.caption || '').toLowerCase()
+        if (text.includes(q)) {
+          out.push({
+            itemId: it.id,
+            eventId,
+            yearId: eventId.split('-')[0],
+            snippet: it.bodyText || it.caption || '',
+          })
+        }
+      }
+    }
+    return out
   }
   thumb(itemId: string): ThumbSource {
     return { hue: hueFor(itemId) }

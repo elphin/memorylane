@@ -8,7 +8,9 @@ use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
 
-use crate::index::{self, DensityPoint, EventDetail, YearDetail, YearPhoto, YearSummary};
+use crate::index::{
+    self, DensityPoint, EventDetail, SearchResult, YearDetail, YearPhoto, YearSummary,
+};
 use crate::media::{self, cache::Tier};
 use crate::model::{CanvasItem, IndexError, VaultModel};
 use crate::vault;
@@ -425,6 +427,11 @@ pub fn get_year_photos(
     year_id: String,
 ) -> Result<Vec<YearPhoto>, String> {
     state.with_conn(|c| index::list_year_photos(c, &year_id))
+}
+
+#[tauri::command]
+pub fn search(state: State<VaultService>, query: String) -> Result<Vec<SearchResult>, String> {
+    state.with_conn(|c| index::search(c, &query))
 }
 
 #[tauri::command]

@@ -130,7 +130,9 @@ v1's formaat blijft leesbaar; v2 breidt uit zodat de vault volledig is:
 - QuickAdd, event-properties, featured-foto-keuze, edit; delete → **prullenbak**.
 - Schrijfpad: eerst bestand, dan index (volgorde van v1; semantiek níet): **unieke slugs verplicht** (v1 had collision-overschrijving, `writer.ts:345`), rename behoudt ID-suffix in medianamen.
 
-**Fase 9 — Live sync, search, settings**
+**Fase 9 — Live sync, search, settings** 🟡 *search afgerond & gecommit (GO); watcher + settings nog te doen*
+- ✅ **Search**: FTS5-zoeken (veilige prefix-query uit vrije invoer, unicode-tokenizer), resultaten met navigatie-context (item→event→jaar), debounced zoekpaneel. Review fixte een stale-results/timer-leak-bug.
+- ⬜ Nog te doen: live file-watcher (notify + echo-suppressie); settings-UI (categorieën, filters, appearance, vault-locatie); indexfouten-paneel.
 - notify-watcher + echo-suppressie + events naar frontend; FTS5-search + SearchModal; settings-UI (leest/schrijft `.memorylane/settings.json`); indexfouten-paneel.
 
 **Fase 10 — Polish**
