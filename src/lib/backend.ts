@@ -93,6 +93,14 @@ export interface EventDetail {
   canvas: CanvasItem[]
 }
 
+export interface ItemMetadata {
+  caption: string
+  date: string
+  place: string
+  people: string[]
+  tags: string[]
+}
+
 /** Layout-input voor het opslaan van een canvas (naar `save_canvas_layout`). */
 export interface CanvasLayoutInput {
   itemRef: string
@@ -148,6 +156,17 @@ export interface Backend {
   /** Werkt caption en/of body van een item bij. `null` = veld ongemoeid laten;
    * lege caption-string verwijdert de caption. */
   updateItem(itemId: string, caption: string | null, body: string | null): Promise<void>
+  /** Leest de bewerkbare sidecar-metadata van een item (voor het bewerk-paneel). */
+  getItemMetadata(itemId: string): Promise<ItemMetadata>
+  /** Schrijft de bewerkbare metadata naar de sidecar (lege waarden = wissen). */
+  updateItemMetadata(
+    itemId: string,
+    caption: string,
+    date: string,
+    place: string,
+    people: string[],
+    tags: string[],
+  ): Promise<void>
   search(query: string): Promise<SearchResult[]>
   thumb(itemId: string, size: 64 | 128 | 256 | 1024 | 2048): ThumbSource
 }
@@ -280,6 +299,23 @@ class TauriBackend implements Backend {
     await invoke('update_item', { itemId, caption, body })
   }
 
+  async getItemMetadata(itemId: string): Promise<ItemMetadata> {
+    const invoke = await this.api()
+    return await invoke<ItemMetadata>('get_item_metadata', { itemId })
+  }
+
+  async updateItemMetadata(
+    itemId: string,
+    caption: string,
+    date: string,
+    place: string,
+    people: string[],
+    tags: string[],
+  ): Promise<void> {
+    const invoke = await this.api()
+    await invoke('update_item_metadata', { itemId, caption, date, place, people, tags })
+  }
+
   async search(query: string): Promise<SearchResult[]> {
     const invoke = await this.api()
     return await invoke<SearchResult[]>('search', { query })
@@ -312,6 +348,7 @@ class MockBackend implements Backend {
   private adds = new Map<string, Item[]>()
   private deleted = new Set<string>()
   private edits = new Map<string, { caption: string | null; body: string | null }>()
+  private meta = new Map<string, ItemMetadata>()
   private newEventSeq = 0
   private thumbCache = new Map<string, string>()
 
@@ -492,6 +529,24 @@ class MockBackend implements Backend {
       caption: caption !== null ? caption : prev.caption,
       body: body !== null ? body : prev.body,
     })
+  }
+  async getItemMetadata(itemId: string): Promise<ItemMetadata> {
+    const m = this.meta.get(itemId)
+    if (m) return m
+    return { caption: this.edits.get(itemId)?.caption ?? '', date: '', place: '', people: [], tags: [] }
+  }
+  async updateItemMetadata(
+    itemId: string,
+    caption: string,
+    date: string,
+    place: string,
+    people: string[],
+    tags: string[],
+  ): Promise<void> {
+    this.meta.set(itemId, { caption, date, place, people, tags })
+    // Caption ook in de gedeelde edits zodat de L3-caption/kaart ververst.
+    const prev = this.edits.get(itemId) ?? { caption: null, body: null }
+    this.edits.set(itemId, { caption, body: prev.body })
   }
   async search(query: string): Promise<SearchResult[]> {
     const q = query.toLowerCase().trim()

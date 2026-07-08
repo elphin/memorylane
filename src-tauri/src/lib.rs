@@ -109,6 +109,8 @@ pub fn run() {
             commands::update_event,
             commands::delete_item,
             commands::update_item,
+            commands::get_item_metadata,
+            commands::update_item_metadata,
             commands::import_photos,
             commands::search,
             commands::get_index_errors,

@@ -177,6 +177,53 @@ impl VaultService {
         Ok(())
     }
 
+    /// Leest de bewerkbare sidecar-metadata van een item (voor de bewerk-UI).
+    pub fn get_item_metadata(&self, item_id: &str) -> Result<ItemMetadata, String> {
+        let vault = self.current_vault()?;
+        let (_event_id, folder, slug, _media) = {
+            let conn = self.conn.lock().map_err(lock_err)?;
+            index::item_files(&conn, item_id)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("item {item_id} niet gevonden"))?
+        };
+        let slug = slug.ok_or_else(|| "dit item heeft geen bewerkbaar bestand".to_string())?;
+        let path = vault.join(&folder).join(format!("{slug}.md"));
+        let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        let p = vault::frontmatter::parse(&content);
+        Ok(ItemMetadata {
+            caption: p.get_str("caption").unwrap_or_default(),
+            date: p.get_str("date").unwrap_or_default(),
+            place: p.get_str("place").unwrap_or_default(),
+            people: p.get("people").map(|v| v.as_string_list()).unwrap_or_default(),
+            tags: p.get("tags").map(|v| v.as_string_list()).unwrap_or_default(),
+        })
+    }
+
+    /// Werkt de bewerkbare sidecar-metadata van een item bij (file first, rescan).
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_item_metadata(
+        &self,
+        item_id: &str,
+        caption: &str,
+        date: &str,
+        place: &str,
+        people: &[String],
+        tags: &[String],
+    ) -> Result<(), String> {
+        let vault = self.current_vault()?;
+        let (_event_id, folder, slug, _media) = {
+            let conn = self.conn.lock().map_err(lock_err)?;
+            index::item_files(&conn, item_id)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("item {item_id} niet gevonden"))?
+        };
+        let slug = slug.ok_or_else(|| "dit item heeft geen bewerkbaar bestand".to_string())?;
+        writer::update_item_meta(&vault, &folder, &slug, caption, date, place, people, tags)
+            .map_err(|e| e.to_string())?;
+        self.rescan()?;
+        Ok(())
+    }
+
     /// Importeert foto's (bronpaden van de bestandskiezer) in een event.
     pub fn import_photos(&self, event_id: &str, sources: &[String]) -> Result<usize, String> {
         let vault = self.current_vault()?;
@@ -307,6 +354,17 @@ fn mtime_ms(meta: &std::fs::Metadata) -> i64 {
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+/// Bewerkbare sidecar-metadata van een item, voor de bewerk-UI.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ItemMetadata {
+    pub caption: String,
+    pub date: String,
+    pub place: String,
+    pub people: Vec<String>,
+    pub tags: Vec<String>,
 }
 
 /// Samenvatting van een indexeer-run, terug naar de UI.
@@ -522,6 +580,27 @@ pub fn update_item(
     body: Option<String>,
 ) -> Result<(), String> {
     state.update_item(&item_id, caption.as_deref(), body.as_deref())
+}
+
+#[tauri::command]
+pub fn get_item_metadata(
+    state: State<VaultService>,
+    item_id: String,
+) -> Result<ItemMetadata, String> {
+    state.get_item_metadata(&item_id)
+}
+
+#[tauri::command]
+pub fn update_item_metadata(
+    state: State<VaultService>,
+    item_id: String,
+    caption: String,
+    date: String,
+    place: String,
+    people: Vec<String>,
+    tags: Vec<String>,
+) -> Result<(), String> {
+    state.update_item_metadata(&item_id, &caption, &date, &place, &people, &tags)
 }
 
 #[tauri::command]

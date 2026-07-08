@@ -311,11 +311,21 @@ fn split_flow(inner: &str) -> Vec<String> {
     let mut buf = String::new();
     let mut depth = 0i32;
     let mut in_quote: Option<char> = None;
+    let mut escaped = false;
     for c in inner.chars() {
         match in_quote {
             Some(q) => {
                 buf.push(c);
-                if c == q {
+                // Binnen een dubbel-gequote token beschermt `\` het volgende
+                // teken (spiegelt `unescape_double`), zodat een geëscapete `\"`
+                // het token NIET vroeg afsluit — anders zou een naam met een
+                // quote de komma-splitsing corrumperen (dataverlies bij
+                // round-trip van `flow_seq`).
+                if escaped {
+                    escaped = false;
+                } else if q == '"' && c == '\\' {
+                    escaped = true;
+                } else if c == q {
                     in_quote = None;
                 }
             }
@@ -446,6 +456,19 @@ mod tests {
         assert_eq!(first.get("event").unwrap().as_str().unwrap(), "abc");
         assert_eq!(first.get("x").unwrap().as_f64().unwrap(), 10.0);
         assert_eq!(first.get("y").unwrap().as_f64().unwrap(), -5.0);
+    }
+
+    #[test]
+    fn flow_seq_with_quote_comma_colon_roundtrips() {
+        // Namen/tags met een quote, komma of dubbele punt moeten door de
+        // altijd-gequote `flow_seq` heen round-trippen (split_flow respecteert
+        // de `\"`-escape, anders zou de komma-splitsing corrumperen).
+        let content = "---\npeople: [\"c\\\"d\", \"e:f\", \"a,b\"]\n---\n";
+        let p = parse(content);
+        assert_eq!(
+            p.get("people").unwrap().as_string_list(),
+            vec!["c\"d".to_string(), "e:f".to_string(), "a,b".to_string()]
+        );
     }
 
     #[test]

@@ -23,6 +23,16 @@ interface EventForm {
   endAt: string
 }
 
+/** Foto-metadata in het bewerk-paneel; mensen/trefwoorden als komma-strings. */
+interface MetaForm {
+  id: string
+  caption: string
+  date: string
+  place: string
+  people: string
+  tags: string
+}
+
 /** Lokale datum als `YYYY-MM-DD` (niet UTC — voorkomt dag-/jaarverschuiving). */
 function todayISO(): string {
   const d = new Date()
@@ -47,6 +57,7 @@ export function AppShell() {
   const [modal, setModal] = useState<null | 'note'>(null)
   const [editing, setEditing] = useState<null | { id: string; kind: 'text' | 'photo'; value: string }>(null)
   const [eventForm, setEventForm] = useState<null | EventForm>(null)
+  const [metaForm, setMetaForm] = useState<null | MetaForm>(null)
   const [draft, setDraft] = useState('')
   const [busy, setBusy] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
@@ -466,39 +477,81 @@ export function AppShell() {
   }
 
   // Bewerk het huidige item (L3): tekst-notitie → body, foto → caption.
+  // Ververs het event en herbouw het focus-item in-place (na een bewerking).
+  const refreshFocus = async (): Promise<void> => {
+    const backend = backendRef.current
+    const eventId = currentEventRef.current
+    if (!backend || !eventId) return
+    const detail = await backend.getEvent(eventId)
+    if (detail) {
+      currentItemsRef.current = detail.items
+      sceneRef.current?.refresh?.(detail.items)
+    }
+  }
+
   const startEdit = (): void => {
     const id = sceneRef.current?.currentId?.()
     if (!id) return
     const item = currentItemsRef.current.find((it) => it.id === id)
     if (!item) return
     const isText = item.itemType === 'text' || item.itemType === 'link'
-    setEditing({
-      id,
-      kind: isText ? 'text' : 'photo',
-      value: isText ? (item.bodyText ?? '') : (item.caption ?? ''),
-    })
+    if (isText) {
+      // Tekst-notitie → body bewerken.
+      setEditing({ id, kind: 'text', value: item.bodyText ?? '' })
+      return
+    }
+    // Foto → metadata-paneel (laad de huidige sidecar-waarden).
+    const backend = backendRef.current
+    if (!backend) return
+    void backend
+      .getItemMetadata(id)
+      .then((m) => {
+        setMetaForm({
+          id,
+          caption: m.caption,
+          date: m.date,
+          place: m.place,
+          people: m.people.join(', '),
+          tags: m.tags.join(', '),
+        })
+      })
+      .catch((e) => {
+        setMessage(String(e))
+        setPhase('error')
+      })
   }
 
   const submitEdit = async (): Promise<void> => {
     const backend = backendRef.current
-    const eventId = currentEventRef.current
     const ed = editing
     if (!backend || !ed || mutatingRef.current) return
     mutatingRef.current = true
     setBusy(true)
     try {
-      // Tekst → body bijwerken; foto → caption bijwerken (het andere veld null).
-      if (ed.kind === 'text') await backend.updateItem(ed.id, null, ed.value)
-      else await backend.updateItem(ed.id, ed.value, null)
-      // Ververs het event en herbouw het focus-item in-place (geen transitie).
-      if (eventId) {
-        const detail = await backend.getEvent(eventId)
-        if (detail) {
-          currentItemsRef.current = detail.items
-          sceneRef.current?.refresh?.(detail.items)
-        }
-      }
+      // Tekst → body bijwerken (caption null = ongemoeid).
+      await backend.updateItem(ed.id, null, ed.value)
+      await refreshFocus()
       setEditing(null)
+    } catch (e) {
+      setMessage(String(e))
+      setPhase('error')
+    } finally {
+      mutatingRef.current = false
+      setBusy(false)
+    }
+  }
+
+  const submitMeta = async (): Promise<void> => {
+    const backend = backendRef.current
+    const f = metaForm
+    if (!backend || !f || mutatingRef.current) return
+    const toList = (s: string): string[] => s.split(',').map((x) => x.trim()).filter(Boolean)
+    mutatingRef.current = true
+    setBusy(true)
+    try {
+      await backend.updateItemMetadata(f.id, f.caption, f.date, f.place, toList(f.people), toList(f.tags))
+      await refreshFocus()
+      setMetaForm(null)
     } catch (e) {
       setMessage(String(e))
       setPhase('error')
@@ -538,7 +591,7 @@ export function AppShell() {
     <div style={{ position: 'fixed', inset: 0 }}>
       <div ref={hostRef} style={{ position: 'absolute', inset: 0 }} />
       {phase !== 'ready' && <Overlay phase={phase} message={message} onPick={() => void pickVault()} />}
-      {phase === 'ready' && !modal && !editing && !eventForm && !searchOpen && (
+      {phase === 'ready' && !modal && !editing && !eventForm && !metaForm && !searchOpen && (
         <button onClick={() => setSearchOpen(true)} style={searchBtn} title="Zoeken">
           Zoeken…
         </button>
@@ -552,7 +605,7 @@ export function AppShell() {
           onClose={closeSearch}
         />
       )}
-      {phase === 'ready' && !modal && !editing && !eventForm && (
+      {phase === 'ready' && !modal && !editing && !eventForm && !metaForm && (
         <Fab
           uiLevel={uiLevel}
           onAddEvent={openNewEvent}
@@ -594,6 +647,100 @@ export function AppShell() {
           onCancel={() => setEventForm(null)}
         />
       )}
+      {metaForm && (
+        <MetaPanel
+          form={metaForm}
+          busy={busy}
+          onChange={(patch) => setMetaForm({ ...metaForm, ...patch })}
+          onSubmit={() => void submitMeta()}
+          onCancel={() => setMetaForm(null)}
+        />
+      )}
+    </div>
+  )
+}
+
+function MetaPanel({
+  form,
+  busy,
+  onChange,
+  onSubmit,
+  onCancel,
+}: {
+  form: MetaForm
+  busy: boolean
+  onChange: (patch: Partial<MetaForm>) => void
+  onSubmit: () => void
+  onCancel: () => void
+}) {
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        inset: 0,
+        background: 'rgba(0,0,0,0.55)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+      }}
+    >
+      <div style={{ width: 520, maxWidth: '92%', background: '#161c28', borderRadius: 12, padding: 20 }}>
+        <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 12 }}>Foto-gegevens</div>
+        <label style={metaLabel}>
+          Bijschrift
+          <input
+            autoFocus
+            value={form.caption}
+            onChange={(e) => onChange({ caption: e.target.value })}
+            placeholder="Bijschrift bij de foto"
+            style={{ ...field, marginTop: 4 }}
+          />
+        </label>
+        <div style={{ display: 'flex', gap: 12, marginTop: 12 }}>
+          <label style={{ ...metaLabel, flex: 1 }}>
+            Datum
+            <input
+              type="date"
+              value={form.date}
+              onChange={(e) => onChange({ date: e.target.value })}
+              style={{ ...field, marginTop: 4 }}
+            />
+          </label>
+          <label style={{ ...metaLabel, flex: 1 }}>
+            Plaats
+            <input
+              value={form.place}
+              onChange={(e) => onChange({ place: e.target.value })}
+              placeholder="bijv. Amsterdam"
+              style={{ ...field, marginTop: 4 }}
+            />
+          </label>
+        </div>
+        <label style={{ ...metaLabel, marginTop: 12 }}>
+          Mensen (komma-gescheiden)
+          <input
+            value={form.people}
+            onChange={(e) => onChange({ people: e.target.value })}
+            placeholder="Jim, Wout, oma"
+            style={{ ...field, marginTop: 4 }}
+          />
+        </label>
+        <label style={{ ...metaLabel, marginTop: 12 }}>
+          Trefwoorden (komma-gescheiden)
+          <input
+            value={form.tags}
+            onChange={(e) => onChange({ tags: e.target.value })}
+            placeholder="strand, zomer, vakantie"
+            style={{ ...field, marginTop: 4 }}
+          />
+        </label>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 16 }}>
+          <button onClick={onCancel} style={ghostBtn}>Annuleren</button>
+          <button onClick={onSubmit} disabled={busy} style={primaryBtn}>
+            {busy ? 'Bezig…' : 'Opslaan'}
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
@@ -929,6 +1076,13 @@ const field: React.CSSProperties = {
 
 const dateLabel: React.CSSProperties = {
   flex: 1,
+  display: 'flex',
+  flexDirection: 'column',
+  fontSize: 13,
+  color: '#8a97b0',
+}
+
+const metaLabel: React.CSSProperties = {
   display: 'flex',
   flexDirection: 'column',
   fontSize: 13,

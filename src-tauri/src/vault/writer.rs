@@ -400,6 +400,128 @@ fn apply_item_edits(content: &str, caption: Option<&str>, body: Option<&str>) ->
     out
 }
 
+/// Zet of verwijdert een top-level frontmatter-veld INCLUSIEF een eventueel
+/// bijbehorend geïndenteerd blok (geneste map/seq). Zo wordt bij het overschrijven
+/// van bijv. een `place:`-map met een scalar het hele oude blok verwijderd i.p.v.
+/// alleen de sleutelregel (anders blijven geïndenteerde regels verweesd achter).
+/// True als de eerstvolgende niet-lege regel geïndenteerd is (spatie/tab). Zo
+/// horen lege regels binnen een geneste blok bij dat blok i.p.v. de drain te
+/// laten stoppen.
+fn next_nonblank_is_indented(rest: &[String]) -> bool {
+    rest.iter()
+        .find(|l| !l.trim().is_empty())
+        .map(|l| l.starts_with([' ', '\t']))
+        .unwrap_or(false)
+}
+
+fn set_fm_block(fm: &mut Vec<String>, key: &str, line_value: Option<String>) {
+    let prefix = format!("{key}:");
+    if let Some(i) = fm.iter().position(|l| l.starts_with(&prefix)) {
+        // Drain de sleutelregel plus het bijbehorende geïndenteerde blok. Een
+        // top-level veld begint op kolom 0, dus indented regels horen bij dít
+        // blok. Lege regels binnen de frontmatter (die onze eigen writer niet
+        // produceert, maar handmatig/v1-bewerkte bestanden wél) horen óók bij
+        // het blok zolang er daarna nog een indented regel volgt — anders zou de
+        // drain te vroeg stoppen en verweesde geneste regels achterlaten die de
+        // reconstructie zouden breken. We nemen een lege regel dus alleen mee als
+        // er verderop nog indented inhoud van hetzelfde blok komt.
+        let mut end = i + 1;
+        while end < fm.len() {
+            if fm[end].starts_with([' ', '\t']) {
+                end += 1;
+            } else if fm[end].trim().is_empty()
+                && next_nonblank_is_indented(&fm[end + 1..])
+            {
+                // Lege regel gevolgd door nog meer indented inhoud → onderdeel
+                // van dít blok (anders bleven geneste regels verweesd achter).
+                end += 1;
+            } else {
+                break;
+            }
+        }
+        fm.drain(i..end);
+        if let Some(v) = line_value {
+            fm.insert(i, format!("{key}: {v}"));
+        }
+    } else if let Some(v) = line_value {
+        fm.push(format!("{key}: {v}"));
+    }
+}
+
+/// Inline flow-seq (`["a", "b"]`) met altijd-gequote items (round-trip-veilig via
+/// de eigen parser); `None` als de lijst na trimmen leeg is.
+fn flow_seq(items: &[String]) -> Option<String> {
+    let cleaned: Vec<String> = items
+        .iter()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|s| format!("\"{}\"", s.replace('"', "\\\"")))
+        .collect();
+    if cleaned.is_empty() {
+        None
+    } else {
+        Some(format!("[{}]", cleaned.join(", ")))
+    }
+}
+
+/// Werkt de bewerkbare metadata van een item bij: caption, datum, plaats, mensen
+/// en trefwoorden — geschreven in de sidecar-frontmatter (non-destructief:
+/// overige velden + body blijven behouden). Lege waarden verwijderen het veld.
+#[allow(clippy::too_many_arguments)]
+pub fn update_item_meta(
+    vault_root: &Path,
+    folder_path: &str,
+    slug: &str,
+    caption: &str,
+    date: &str,
+    place: &str,
+    people: &[String],
+    tags: &[String],
+) -> std::io::Result<()> {
+    let path = vault_root.join(folder_path).join(format!("{slug}.md"));
+    let original = std::fs::read_to_string(&path)?;
+    let normalized = original.replace("\r\n", "\n");
+    let lines: Vec<&str> = normalized.split('\n').collect();
+    let open = lines.iter().position(|l| l.trim() == "---");
+    let close = open.and_then(|o| {
+        lines
+            .iter()
+            .enumerate()
+            .skip(o + 1)
+            .find(|(_, l)| l.trim() == "---")
+            .map(|(i, _)| i)
+    });
+    let (Some(open), Some(close)) = (open, close) else {
+        return write_atomic(&path, &normalized);
+    };
+    let mut fm: Vec<String> = lines[open + 1..close].iter().map(|s| s.to_string()).collect();
+    let scalar = |v: &str| {
+        let t = v.trim();
+        if t.is_empty() {
+            None
+        } else {
+            Some(yaml_str(t))
+        }
+    };
+    set_fm_block(&mut fm, "caption", scalar(caption));
+    set_fm_block(&mut fm, "date", scalar(date));
+    set_fm_block(&mut fm, "place", scalar(place));
+    set_fm_block(&mut fm, "people", flow_seq(people));
+    set_fm_block(&mut fm, "tags", flow_seq(tags));
+    set_fm_block(&mut fm, "updatedAt", Some(yaml_str(&now_iso())));
+
+    let body = lines[close + 1..].join("\n").trim().to_string();
+    let mut out = String::from("---\n");
+    out.push_str(&fm.join("\n"));
+    out.push_str("\n---\n");
+    if !body.is_empty() {
+        out.push('\n');
+        out.push_str(&body);
+        out.push('\n');
+    }
+    write_atomic(&path, &out)
+}
+
 /// Maakt een event in een jaarmap. Geeft (id, folder_path) terug.
 ///
 /// De mapnaam wordt uniek gemaakt: twee events met dezelfde titel én datum
@@ -694,6 +816,129 @@ mod tests {
         assert_eq!(p.body, "Nieuwe, langere tekst.");
         assert!(p.get_str("caption").is_none(), "caption moet verwijderd zijn");
         assert_eq!(p.get_str("type").unwrap(), "text");
+    }
+
+    #[test]
+    fn update_item_meta_writes_fields_and_replaces_nested_place() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("2024/ev")).unwrap();
+        // Item met een GENESTE place-map + een te behouden veld (media).
+        std::fs::write(
+            root.join("2024/ev/foto.md"),
+            "---\nid: p1\ntype: photo\nmedia: foto.jpg\nplace:\n  lat: 52.37\n  lng: 4.89\n  label: Amsterdam\n---\n",
+        )
+        .unwrap();
+
+        update_item_meta(
+            root,
+            "2024/ev",
+            "foto",
+            "Op het strand",
+            "2024-08-15",
+            "Scheveningen",
+            &["Jim".into(), "Wout".into()],
+            &["strand".into(), "zomer".into()],
+        )
+        .unwrap();
+
+        let content = std::fs::read_to_string(root.join("2024/ev/foto.md")).unwrap();
+        let p = crate::vault::frontmatter::parse(&content);
+        // Behouden veld.
+        assert_eq!(p.get_str("media").unwrap(), "foto.jpg");
+        assert_eq!(p.get_str("id").unwrap(), "p1");
+        // Nieuwe scalars.
+        assert_eq!(p.get_str("caption").unwrap(), "Op het strand");
+        assert_eq!(p.get_str("date").unwrap(), "2024-08-15");
+        // De geneste place-map is VERVANGEN door een scalar (geen orphaned lat/lng).
+        assert_eq!(p.get_str("place").unwrap(), "Scheveningen");
+        assert!(!content.contains("lat:"), "oude geneste place-regels moeten weg zijn");
+        // Lijsten round-trippen.
+        assert_eq!(p.get("people").unwrap().as_string_list(), vec!["Jim", "Wout"]);
+        assert_eq!(p.get("tags").unwrap().as_string_list(), vec!["strand", "zomer"]);
+
+        // Leegmaken verwijdert de velden weer.
+        update_item_meta(root, "2024/ev", "foto", "", "", "", &[], &[]).unwrap();
+        let p2 = crate::vault::frontmatter::parse(
+            &std::fs::read_to_string(root.join("2024/ev/foto.md")).unwrap(),
+        );
+        assert!(p2.get_str("place").is_none());
+        assert!(p2.get("people").is_none());
+        assert!(p2.get_str("caption").is_none());
+        assert_eq!(p2.get_str("media").unwrap(), "foto.jpg");
+    }
+
+    #[test]
+    fn update_item_meta_roundtrips_special_chars_in_people_tags() {
+        // Namen/tags met een quote, komma of dubbele punt moeten via de
+        // eigen writer→parser round-trippen zonder corruptie.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("2024/ev")).unwrap();
+        std::fs::write(
+            root.join("2024/ev/foto.md"),
+            "---\nid: p1\ntype: photo\nmedia: foto.jpg\n---\n",
+        )
+        .unwrap();
+
+        let people = vec!["O'Brien".to_string(), "van \"Loon\"".to_string(), "a,b".to_string()];
+        let tags = vec!["tijd: 12:00".to_string(), "zee, strand".to_string()];
+        update_item_meta(root, "2024/ev", "foto", "", "", "", &people, &tags).unwrap();
+
+        let content = std::fs::read_to_string(root.join("2024/ev/foto.md")).unwrap();
+        let p = crate::vault::frontmatter::parse(&content);
+        assert_eq!(p.get("people").unwrap().as_string_list(), people);
+        assert_eq!(p.get("tags").unwrap().as_string_list(), tags);
+    }
+
+    #[test]
+    fn update_item_meta_drains_nested_block_with_blank_line() {
+        // Regressie: een handmatig/v1-bewerkt bestand kan een LEGE regel midden in
+        // een geneste `place:`-map hebben. `set_fm_block` mocht de drain daar niet
+        // te vroeg stoppen — anders bleef `label: Amsterdam` verweesd achter en
+        // brak de reconstructie (of ging stil verloren bij herparsen).
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("2024/ev")).unwrap();
+        std::fs::write(
+            root.join("2024/ev/foto.md"),
+            "---\nid: p1\ntype: photo\nmedia: foto.jpg\nplace:\n  lat: 52.37\n\n  label: Amsterdam\ncategory: reizen\n---\n",
+        )
+        .unwrap();
+
+        update_item_meta(root, "2024/ev", "foto", "", "", "Scheveningen", &[], &[]).unwrap();
+        let content = std::fs::read_to_string(root.join("2024/ev/foto.md")).unwrap();
+        // De oude geneste regels (incl. die na de lege regel) moeten volledig weg.
+        assert!(!content.contains("lat:"), "oude geneste regel moet weg: {content}");
+        assert!(!content.contains("label:"), "verweesde regel na lege regel moet weg: {content}");
+        let p = crate::vault::frontmatter::parse(&content);
+        assert_eq!(p.get_str("place").unwrap(), "Scheveningen");
+        // Velden vóór en ná het blok blijven behouden.
+        assert_eq!(p.get_str("media").unwrap(), "foto.jpg");
+        assert_eq!(p.get_str("category").unwrap(), "reizen");
+    }
+
+    #[test]
+    fn update_item_meta_drains_nested_block_as_last_field() {
+        // Het geneste blok is het LAATSTE veld in de frontmatter (drain tot einde).
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("2024/ev")).unwrap();
+        std::fs::write(
+            root.join("2024/ev/foto.md"),
+            "---\nid: p1\ntype: photo\nmedia: foto.jpg\nplace:\n  lat: 52.37\n  label: Amsterdam\n---\nEen bewaarde beschrijving.\n",
+        )
+        .unwrap();
+
+        update_item_meta(root, "2024/ev", "foto", "Bijschrift", "", "Scheveningen", &[], &[]).unwrap();
+        let content = std::fs::read_to_string(root.join("2024/ev/foto.md")).unwrap();
+        assert!(!content.contains("lat:"), "oude geneste regels moeten weg: {content}");
+        let p = crate::vault::frontmatter::parse(&content);
+        assert_eq!(p.get_str("place").unwrap(), "Scheveningen");
+        assert_eq!(p.get_str("caption").unwrap(), "Bijschrift");
+        assert_eq!(p.get_str("media").unwrap(), "foto.jpg");
+        // Body blijft behouden.
+        assert_eq!(p.body, "Een bewaarde beschrijving.");
     }
 
     #[test]
