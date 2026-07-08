@@ -209,8 +209,11 @@ export function AppShell() {
       engine.onFrame = (ctx) => {
         sceneRef.current?.update(ctx)
         // Ver uitzoomen → één niveau terug. Niet tijdens een lopende
-        // transitie-animatie (dan zit de zoom nog onder de drempel).
-        const backThreshold = ctx.engine.camera.zoom < entryZoomRef.current * 0.45
+        // transitie-animatie (dan zit de zoom nog onder de drempel). In L3 volgt
+        // de referentie de scene (sibling-nav herfit de camera), zodat stappen
+        // naar een grotere notitie niet meteen als "terug" telt.
+        const refZoom = sceneRef.current?.baseZoom ?? entryZoomRef.current
+        const backThreshold = ctx.engine.camera.zoom < refZoom * 0.45
         if (backThreshold && !enteringRef.current && !ctx.engine.isTransitioning) {
           goBack()
         }

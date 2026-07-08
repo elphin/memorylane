@@ -14,6 +14,9 @@ export interface Scene {
   hitTest?(worldX: number, worldY: number): string | null
   /** Ga naar de vorige/volgende sibling (alleen L3-focus). */
   step?(delta: number): void
+  /** Laatst gefitte zoom (alleen L3): referentie voor de terug-uitzoom-drempel,
+   * zodat sibling-nav naar grotere inhoud (lange notitie) niet meteen uitzoomt. */
+  readonly baseZoom?: number
   /** Id van het momenteel gefocuste item (alleen L3), voor bijv. verwijderen. */
   currentId?(): string | null
   /** Muis-hover op een wereldpunt (of null bij verlaten) — voor micro-animaties. */

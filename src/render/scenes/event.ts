@@ -142,8 +142,15 @@ export class EventScene implements Scene {
       },
     })
     text.resolution = 2
-    text.anchor.set(0.5)
+    // Boven-uitgelijnd + geklipt op het kader: lange tekst loopt niet meer buiten
+    // de kaart (de volledige tekst lees je op L3, waar de kaart meegroeit).
+    text.anchor.set(0.5, 0)
+    text.position.set(0, -TEXT_H / 2 + 14)
     container.addChild(text)
+    const clip = new Graphics()
+    clip.roundRect(-TEXT_W / 2, -TEXT_H / 2, TEXT_W, TEXT_H, 10).fill(0xffffff)
+    container.addChild(clip)
+    text.mask = clip
   }
 
   private fitCamera(cols: number, rows: number): void {

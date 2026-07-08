@@ -357,7 +357,10 @@ class MockBackend implements Backend {
       eventId,
       itemType: i === 0 ? ('text' as const) : ('photo' as const),
       media: i === 0 ? undefined : 'foto.jpg',
-      bodyText: i === 0 ? 'Wat een dag was dit — de zon, de zee, en wij.' : undefined,
+      bodyText:
+        i === 0
+          ? 'Dit is een periode waarin ik ben geboren en waar ik helemaal niks meer van weet. Ik ben in ieder geval geboren in Amsterdam.\n\nEr zijn een paar foto’s ergens van, en daarna gaat het al vrij snel naar de feestdagen: Sinterklaas en kerst.\n\nDe foto’s die je ziet zijn onder andere van mijn vader, mijn moeder, mijn broer Wout, en natuurlijk mijn oma’s, tante Aaf en oma van Loon. Verder weet ik het even niet.'
+          : undefined,
       caption: `Foto ${i}`,
       slug: `${eventId}-i${i}`,
     }))

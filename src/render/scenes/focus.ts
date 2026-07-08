@@ -19,6 +19,14 @@ export class FocusScene implements Scene {
   private sprite: Sprite | null = null
   private currentKey = ''
   private loaded = false
+  // Werkelijke afmeting van de huidige inhoud (tekstkaart groeit mee met de
+  // tekst) — bepaalt de camera-fit én de hit-test.
+  private contentW = FOCUS
+  private contentH = FOCUS
+  // Laatst gefitte (geklemde) zoom; de app-shell gebruikt dit als referentie voor
+  // de "ver uitzoomen = terug"-drempel, zodat stappen naar een grotere sibling
+  // (lange notitie) niet meteen als uitzoomen wordt gelezen.
+  baseZoom = 1
 
   constructor(
     private engine: RenderEngine,
@@ -30,7 +38,6 @@ export class FocusScene implements Scene {
     this.root.addChild(this.display)
     engine.world.addChild(this.root)
     this.build()
-    this.fitCamera()
     window.addEventListener('keydown', this.onKey)
   }
 
@@ -47,12 +54,9 @@ export class FocusScene implements Scene {
 
     const isText = item.itemType === 'text' || item.itemType === 'link'
     if (isText) {
-      const bg = new Graphics()
-      bg.roundRect(-CARD_W / 2, -CARD_H / 2, CARD_W, CARD_H, 16).fill(0xfffdf5).stroke({
-        width: 1,
-        color: 0xe0dccb,
-      })
-      this.display.addChild(bg)
+      // Tekst eerst opbouwen en meten; de kaart groeit mee met de inhoud (met
+      // een ondergrens), zodat lange notities volledig in het kader passen.
+      const pad = 48
       const text = new Text({
         text: item.bodyText || item.caption || '…',
         style: {
@@ -68,7 +72,16 @@ export class FocusScene implements Scene {
       })
       text.resolution = 2
       text.anchor.set(0.5)
+      const cardH = Math.max(CARD_H, Math.ceil(text.height) + pad * 2)
+      const bg = new Graphics()
+      bg.roundRect(-CARD_W / 2, -cardH / 2, CARD_W, cardH, 16).fill(0xfffdf5).stroke({
+        width: 1,
+        color: 0xe0dccb,
+      })
+      this.display.addChild(bg)
       this.display.addChild(text)
+      this.contentW = CARD_W
+      this.contentH = cardH
     } else {
       const bg = new Graphics()
       bg.roundRect(-FOCUS / 2 - 6, -FOCUS / 2 - 6, FOCUS + 12, FOCUS + 12, 6).fill(0x000000)
@@ -80,25 +93,30 @@ export class FocusScene implements Scene {
       this.display.addChild(sprite)
       this.sprite = sprite
       this.currentKey = `focus-${item.id}`
+      this.contentW = FOCUS
+      this.contentH = FOCUS
     }
 
-    // Caption onder het item.
-    if (item.caption) {
+    // Caption onder het item (alleen bij foto's; bij tekst ís de kaart de tekst).
+    if (item.caption && !isText) {
       const cap = new Text({
         text: item.caption,
         style: { fill: 0xcfd6e4, fontSize: 18, fontFamily: 'Segoe UI, sans-serif' },
       })
       cap.resolution = 2
       cap.anchor.set(0.5, 0)
-      cap.position.set(0, FOCUS / 2 + 20)
+      cap.position.set(0, this.contentH / 2 + 20)
       this.display.addChild(cap)
     }
+
+    this.fitCamera()
   }
 
   private fitCamera(): void {
     const vp = this.engine.viewport()
-    const zoom = Math.min(vp.width / (FOCUS + 160), vp.height / (FOCUS + 200))
-    this.engine.jumpCamera(0, 0, Math.max(this.engine.camera.minZoom, Math.min(zoom, 2)))
+    const zoom = Math.min(vp.width / (this.contentW + 160), vp.height / (this.contentH + 200))
+    this.baseZoom = Math.max(this.engine.camera.minZoom, Math.min(zoom, 2))
+    this.engine.jumpCamera(0, 0, this.baseZoom)
   }
 
   step(delta: number): void {
@@ -136,10 +154,9 @@ export class FocusScene implements Scene {
   hitTest(worldX: number, worldY: number): string | null {
     const item = this.current
     if (!item) return null
-    const isText = item.itemType === 'text' || item.itemType === 'link'
-    const halfW = isText ? CARD_W / 2 : FOCUS / 2
-    const halfH = isText ? CARD_H / 2 : FOCUS / 2
-    return Math.abs(worldX) <= halfW && Math.abs(worldY) <= halfH ? item.id : null
+    return Math.abs(worldX) <= this.contentW / 2 && Math.abs(worldY) <= this.contentH / 2
+      ? item.id
+      : null
   }
 
   currentId(): string | null {
