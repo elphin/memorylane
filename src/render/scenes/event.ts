@@ -37,7 +37,7 @@ interface Node {
 }
 
 export class EventScene implements Scene {
-  private root = new Container()
+  readonly root = new Container()
   private nodes: Node[] = []
   private zTop = 0
   private hoveredId: string | null = null
@@ -146,7 +146,7 @@ export class EventScene implements Scene {
     const w = cols * CELL
     const h = rows * CELL
     const zoom = Math.min(vp.width / (w + CELL), vp.height / (h + CELL))
-    this.engine.animateCamera(
+    this.engine.jumpCamera(
       0,
       h / 2 - CELL / 2,
       Math.max(this.engine.camera.minZoom, Math.min(zoom, 1.2)),

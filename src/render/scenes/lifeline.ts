@@ -23,7 +23,7 @@ interface Tile {
 }
 
 export class LifelineScene implements Scene {
-  private root = new Container()
+  readonly root = new Container()
   private tiles: Tile[] = []
   private hoveredId: string | null = null
 
@@ -94,7 +94,7 @@ export class LifelineScene implements Scene {
     const totalW = count * TILE_W + (count - 1) * GAP
     const zoom = Math.min(vp.width / (totalW + GAP * 2), vp.height / (TILE_H * 1.6))
     // Midden van het raster: eerste tegel start op x=0, laatste eindigt op totalW.
-    this.engine.animateCamera(totalW / 2, 0, Math.max(this.engine.camera.minZoom, zoom))
+    this.engine.jumpCamera(totalW / 2, 0, Math.max(this.engine.camera.minZoom, zoom))
   }
 
   onHover(worldX: number | null, worldY: number): void {

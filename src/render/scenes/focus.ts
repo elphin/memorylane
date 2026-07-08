@@ -13,7 +13,7 @@ const CARD_W = 640
 const CARD_H = 440
 
 export class FocusScene implements Scene {
-  private root = new Container()
+  readonly root = new Container()
   private display = new Container()
   private index: number
   private sprite: Sprite | null = null
@@ -98,7 +98,7 @@ export class FocusScene implements Scene {
   private fitCamera(): void {
     const vp = this.engine.viewport()
     const zoom = Math.min(vp.width / (FOCUS + 160), vp.height / (FOCUS + 200))
-    this.engine.animateCamera(0, 0, Math.max(this.engine.camera.minZoom, Math.min(zoom, 2)))
+    this.engine.jumpCamera(0, 0, Math.max(this.engine.camera.minZoom, Math.min(zoom, 2)))
   }
 
   private step(delta: number): void {

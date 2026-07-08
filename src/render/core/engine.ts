@@ -50,9 +50,19 @@ export class RenderEngine {
     start: number
     dur: number
   } | null = null
-  // Fade-in van nieuwe scene-inhoud.
-  private fadeStart = 0
-  private fadeDur = 0
+  // Reveal-animatie van nieuwe scene-inhoud: inzoomen = groeien uit het
+  // aangeklikte punt, uitzoomen = krimpen naar het midden.
+  private reveal: {
+    root: Container
+    fromScale: number
+    fromX: number
+    fromY: number
+    toX: number
+    toY: number
+    start: number
+    dur: number
+  } | null = null
+  private lastTapScreen = { x: 0, y: 0 }
 
   async init(container: HTMLElement): Promise<void> {
     if (this.destroyed) return
@@ -79,11 +89,15 @@ export class RenderEngine {
       this.app.canvas as HTMLCanvasElement,
       this.camera,
       () => this.viewport(),
-      // Een gebruikersgebaar onderbreekt een lopende camera-animatie.
+      // Een gebruikersgebaar onderbreekt een lopende camera-animatie én rondt
+      // een lopende reveal direct af (naar identiteit), zodat pan/zoom tijdens
+      // de reveal een schone overdracht geeft i.p.v. een doorlopende transform.
       () => {
         this.camAnim = null
+        this.finishReveal()
       },
       (sx, sy) => {
+        this.lastTapScreen = { x: sx, y: sy }
         const w = this.camera.screenToWorld(sx, sy, this.viewport())
         this.onTap?.(w.x, w.y)
       },
@@ -116,9 +130,54 @@ export class RenderEngine {
     return this.camAnim !== null
   }
 
+  /** True zolang een scene-reveal loopt. */
+  get isRevealing(): boolean {
+    return this.reveal !== null
+  }
+
   /** Doelzoom van de lopende animatie (of de huidige zoom als er geen loopt). */
   get pendingZoom(): number {
     return this.camAnim?.toZoom ?? this.camera.zoom
+  }
+
+  /** Laatste tap-positie (schermcoördinaten) — reveal-focus bij inzoomen. */
+  get tapScreen(): { x: number; y: number } {
+    return this.lastTapScreen
+  }
+
+  /** Zet de camera direct op een doel (de reveal verzorgt de beweging). */
+  jumpCamera(x: number, y: number, zoom: number): void {
+    this.camAnim = null
+    this.camera.x = x
+    this.camera.y = y
+    this.camera.zoom = zoom
+  }
+
+  /** Onthult een nieuwe scene: mode `in` = groeien uit `(sx,sy)`, mode `out` =
+   * krimpen vanuit het schermmidden. Transformeert de scene-root los van de
+   * camera, zodat de transitie altijd vanuit het logische punt komt. */
+  revealScene(root: Container, mode: 'in' | 'out', sx?: number, sy?: number, dur = 380): void {
+    const cx = this.camera.x
+    const cy = this.camera.y
+    root.pivot.set(cx, cy)
+    let fromScale: number
+    let fromX: number
+    let fromY: number
+    if (mode === 'in') {
+      const vp = this.viewport()
+      const fw = this.camera.screenToWorld(sx ?? vp.width / 2, sy ?? vp.height / 2, vp)
+      fromScale = 0.12
+      fromX = fw.x
+      fromY = fw.y
+    } else {
+      fromScale = 1.7
+      fromX = cx
+      fromY = cy
+    }
+    root.scale.set(fromScale)
+    root.position.set(fromX, fromY)
+    root.alpha = 0
+    this.reveal = { root, fromScale, fromX, fromY, toX: cx, toY: cy, start: performance.now(), dur }
   }
 
   /** Animeert de camera vloeiend naar een doel (voor niveau-transities). */
@@ -135,13 +194,6 @@ export class RenderEngine {
     }
   }
 
-  /** Faadt de scene-inhoud in (bij een niveauwissel). */
-  fadeIn(dur = 260): void {
-    this.fadeStart = performance.now()
-    this.fadeDur = dur
-    this.world.alpha = 0
-  }
-
   private advanceCameraAnim(): void {
     if (!this.camAnim) return
     const a = this.camAnim
@@ -154,21 +206,41 @@ export class RenderEngine {
     if (t >= 1) this.camAnim = null
   }
 
-  private advanceFade(): void {
-    if (this.fadeDur <= 0) return
-    const t = Math.min(1, (performance.now() - this.fadeStart) / this.fadeDur)
-    this.world.alpha = t
-    if (t >= 1) {
-      this.fadeDur = 0
-      this.world.alpha = 1
+  /** Rondt een lopende reveal af: zet de root terug naar identiteit en stopt. */
+  private finishReveal(): void {
+    if (!this.reveal) return
+    const root = this.reveal.root
+    this.reveal = null
+    if (root.destroyed) return
+    root.scale.set(1)
+    root.pivot.set(0, 0)
+    root.position.set(0, 0)
+    root.alpha = 1
+  }
+
+  private advanceReveal(): void {
+    if (!this.reveal) return
+    const r = this.reveal
+    // Vangnet: als de scene tussentijds gedestroyed is (snelle dubbele navigatie
+    // of vault-wissel) wijst de reveal naar een dode container — dan stoppen we
+    // zonder de (genulde) transform-props aan te raken.
+    if (r.root.destroyed) {
+      this.reveal = null
+      return
     }
+    const t = Math.min(1, (performance.now() - r.start) / r.dur)
+    const e = easeOutCubic(t)
+    r.root.scale.set(r.fromScale + (1 - r.fromScale) * e)
+    r.root.position.set(r.fromX + (r.toX - r.fromX) * e, r.fromY + (r.toY - r.fromY) * e)
+    r.root.alpha = Math.min(1, t * 1.6)
+    if (t >= 1) this.finishReveal()
   }
 
   private tick = (ticker: Ticker): void => {
     this.frame++
     this.advanceCameraAnim()
     this.gestures.tickInertia()
-    this.advanceFade()
+    this.advanceReveal()
     this.lod.update(this.camera.zoom)
 
     const vp = this.viewport()
@@ -196,4 +268,8 @@ export class RenderEngine {
 
 function easeInOutCubic(t: number): number {
   return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2
+}
+
+function easeOutCubic(t: number): number {
+  return 1 - Math.pow(1 - t, 3)
 }

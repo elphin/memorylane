@@ -30,7 +30,7 @@ function hash01(s: string, salt: number): number {
 }
 
 export class YearScene implements Scene {
-  private root = new Container()
+  readonly root = new Container()
   private photos: Photo[] = []
 
   constructor(
@@ -90,7 +90,7 @@ export class YearScene implements Scene {
     const w = cols * CELL
     const h = rows * CELL
     const zoom = Math.min(vp.width / (w + CELL), vp.height / (h + CELL))
-    this.engine.animateCamera(
+    this.engine.jumpCamera(
       w / 2 - CELL / 2,
       h / 2 - CELL / 2,
       Math.max(this.engine.camera.minZoom, Math.min(zoom, 1)),

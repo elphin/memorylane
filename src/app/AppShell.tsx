@@ -15,6 +15,16 @@ import { YearScene } from '../render/scenes/year'
 
 type Phase = 'loading' | 'first-run' | 'empty' | 'ready' | 'error'
 
+/** Reveal een nieuwe scene: inzoomen (`in`) groeit uit het aangeklikte punt,
+ * uitzoomen (`out`) krimpt vanuit het midden. */
+function revealScene(engine: RenderEngine, scene: Scene, dir: 'in' | 'out'): void {
+  if (dir === 'in') {
+    engine.revealScene(scene.root, 'in', engine.tapScreen.x, engine.tapScreen.y)
+  } else {
+    engine.revealScene(scene.root, 'out')
+  }
+}
+
 export function AppShell() {
   const hostRef = useRef<HTMLDivElement>(null)
   const [phase, setPhase] = useState<Phase>('loading')
@@ -55,13 +65,14 @@ export function AppShell() {
       // Invalideer een eventuele in-flight enterYear.
       enterSeqRef.current++
       sceneRef.current?.destroy()
-      sceneRef.current = new LifelineScene(engine, backendRef.current, yearsRef.current)
-      engine.fadeIn()
+      const scene = new LifelineScene(engine, backendRef.current, yearsRef.current)
+      sceneRef.current = scene
+      engine.revealScene(scene.root, 'out')
       levelRef.current = 'lifeline'
       setUiLevel('lifeline')
     }
 
-    const enterYear = async (yearId: string): Promise<void> => {
+    const enterYear = async (yearId: string, dir: 'in' | 'out' = 'in'): Promise<void> => {
       if (!engine || !backendRef.current || enteringRef.current) return
       enteringRef.current = true
       const seq = ++enterSeqRef.current
@@ -70,8 +81,9 @@ export function AppShell() {
         if (disposed || !engine || seq !== enterSeqRef.current) return
         sceneRef.current?.destroy()
         sceneRef.current = null
-        sceneRef.current = new YearScene(engine, backendRef.current, photos)
-        engine.fadeIn()
+        const scene = new YearScene(engine, backendRef.current, photos)
+        sceneRef.current = scene
+        revealScene(engine, scene, dir)
         levelRef.current = 'year'
         setUiLevel('year')
         currentYearRef.current = yearId
@@ -86,7 +98,7 @@ export function AppShell() {
       }
     }
 
-    const enterEvent = async (eventId: string): Promise<void> => {
+    const enterEvent = async (eventId: string, dir: 'in' | 'out' = 'in'): Promise<void> => {
       if (!engine || !backendRef.current || enteringRef.current) return
       enteringRef.current = true
       const seq = ++enterSeqRef.current
@@ -96,7 +108,7 @@ export function AppShell() {
         if (disposed || !engine || seq !== enterSeqRef.current || !detail) return
         sceneRef.current?.destroy()
         sceneRef.current = null
-        sceneRef.current = new EventScene(engine, backend, detail, (items) => {
+        const scene = new EventScene(engine, backend, detail, (items) => {
           void backend.saveCanvasLayout(eventId, items).catch((e) => {
             if (!disposed) {
               setMessage(String(e))
@@ -104,7 +116,8 @@ export function AppShell() {
             }
           })
         })
-        engine.fadeIn()
+        sceneRef.current = scene
+        revealScene(engine, scene, dir)
         levelRef.current = 'event'
         setUiLevel('event')
         currentEventRef.current = eventId
@@ -128,8 +141,9 @@ export function AppShell() {
       enterSeqRef.current++ // eventuele in-flight enter invalideren
       sceneRef.current?.destroy()
       sceneRef.current = null
-      sceneRef.current = new FocusScene(engine, backendRef.current, items, index)
-      engine.fadeIn()
+      const scene = new FocusScene(engine, backendRef.current, items, index)
+      sceneRef.current = scene
+      revealScene(engine, scene, 'in')
       levelRef.current = 'focus'
       setUiLevel('focus')
       entryZoomRef.current = engine.pendingZoom
@@ -142,8 +156,8 @@ export function AppShell() {
     const goBack = (): void => {
       if (enteringRef.current) return
       if (levelRef.current === 'year') setupLifeline()
-      else if (levelRef.current === 'event' && currentYearRef.current) void enterYear(currentYearRef.current)
-      else if (levelRef.current === 'focus' && currentEventRef.current) void enterEvent(currentEventRef.current)
+      else if (levelRef.current === 'event' && currentYearRef.current) void enterYear(currentYearRef.current, 'out')
+      else if (levelRef.current === 'focus' && currentEventRef.current) void enterEvent(currentEventRef.current, 'out')
     }
 
     const onKeyDown = (e: KeyboardEvent): void => {
@@ -186,7 +200,12 @@ export function AppShell() {
         // Ver uitzoomen → één niveau terug. Niet tijdens een lopende
         // transitie-animatie (dan zit de zoom nog onder de drempel).
         const backThreshold = ctx.engine.camera.zoom < entryZoomRef.current * 0.45
-        if (backThreshold && !enteringRef.current && !ctx.engine.isAnimatingCamera) {
+        if (
+          backThreshold &&
+          !enteringRef.current &&
+          !ctx.engine.isAnimatingCamera &&
+          !ctx.engine.isRevealing
+        ) {
           goBack()
         }
       }
@@ -194,6 +213,10 @@ export function AppShell() {
         sceneRef.current?.onHover?.(wx, wy)
       }
       engine.onTap = (wx, wy) => {
+        // Negeer taps tijdens de reveal: de root is dan geschaald/verschoven,
+        // dus een hitTest tegen de (uiteindelijke) wereldcoördinaten zou het
+        // verkeerde object raken en ongewild een niveau dieper navigeren.
+        if (engine?.isRevealing) return
         // FocusScene.hitTest verwerkt links/rechts-tik zelf (sibling-nav) en
         // geeft null terug; de andere niveaus navigeren op het geraakte id.
         const hit = sceneRef.current?.hitTest?.(wx, wy)
