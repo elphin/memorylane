@@ -80,14 +80,14 @@ export function AppShell() {
       enteringRef.current = true
       const seq = ++enterSeqRef.current
       try {
-        const photos = await backendRef.current.getYearPhotos(yearId)
-        if (disposed || !engine || seq !== enterSeqRef.current) return
+        const detail = await backendRef.current.getYear(yearId)
+        if (disposed || !engine || seq !== enterSeqRef.current || !detail) return
         // Oud niveau meebewegen + uitfaden (crossfade). Móet vóór de nieuwe
         // scene-constructor: die roept jumpCamera en verandert de camera.
         const old = sceneRef.current
         sceneRef.current = null
         if (old) engine.exitScene(old.root, dir, () => old.destroy())
-        const scene = new YearScene(engine, backendRef.current, photos)
+        const scene = new YearScene(engine, backendRef.current, detail)
         sceneRef.current = scene
         revealScene(engine, scene, dir)
         levelRef.current = 'year'

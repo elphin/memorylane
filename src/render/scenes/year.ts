@@ -1,145 +1,285 @@
-// L1 — Jaar: de foto's van één jaar als "levend plakboek"-collage. Grid met
-// lichte, deterministische jitter en rotatie voor de scrapbook-look. Streamt
-// thumbnails via de texture-pipeline; cullt buiten beeld.
+// L1 — Jaar: een horizontale maand-tijdlijn (Jan–Dec) met per event een
+// thumbnail op zijn datum. Bij drukte stapelen thumbnails boven én onder de as,
+// elk met een leader-lijntje naar de datumplek. Klik op een event → L2-canvas.
+// Zo zijn de niveaus consistent: L1 = jaar-tijdlijn van events, L2 = foto's van
+// één event, L3 = één foto.
 
-import { Container, Graphics, Sprite, Texture } from 'pixi.js'
-import type { Backend, YearPhoto } from '../../lib/backend'
+import { Container, Graphics, Sprite, Text, Texture } from 'pixi.js'
+import type { Backend, EventSummary, YearDetail } from '../../lib/backend'
 import type { FrameContext, RenderEngine } from '../core/engine'
 import type { Scene } from './scene'
 
-const CELL = 230
-const PHOTO = 190
+const AXIS_W = 2400 // wereldbreedte van de jaar-as (Jan..Dec)
+const THUMB_W = 168
+const THUMB_H = 126
 const BORDER = 8
+const AXIS_GAP = 104 // afstand as → midden van de eerste lane-kaart
+const LANE_GAP = 22 // verticale ruimte tussen lanes
+const CARD_GAP = 26 // min. horizontale ruimte tussen kaarten in dezelfde lane
+const DOT_R = 9 // marker voor events zonder cover
 
-interface Photo {
-  itemId: string
+const MONTHS = ['jan', 'feb', 'mrt', 'apr', 'mei', 'jun', 'jul', 'aug', 'sep', 'okt', 'nov', 'dec']
+
+interface Node {
   eventId: string
-  worldX: number
-  worldY: number
+  anchorX: number // x op de as (de datum van het event)
+  cardX: number
+  cardY: number // 0 voor stip-events (op de as)
+  hasCover: boolean
+  coverItemId?: string
   container: Container
-  sprite: Sprite
+  sprite: Sprite | null
+  halfW: number
+  halfH: number
   key: string
   loaded: boolean
+  scale: number
 }
 
-/** Deterministische pseudo-random uit een string (voor stabiele jitter). */
-function hash01(s: string, salt: number): number {
-  let h = salt
-  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) & 0x7fffffff
-  return (h % 1000) / 1000
+/** Parse een `YYYY-MM-DD`-datum LOKAAL (niet als UTC — dat verschuift op
+ * jaargrenzen een dag en zou een event buiten het jaar duwen). */
+function parseLocalDate(iso: string): number {
+  const [y, m, d] = iso.split('-').map(Number)
+  return new Date(y || 1970, (m || 1) - 1, d || 1).getTime()
 }
 
 export class YearScene implements Scene {
   readonly root = new Container()
-  private photos: Photo[] = []
+  private nodes: Node[] = []
+  private hoveredId: string | null = null
 
   constructor(
     private engine: RenderEngine,
     private backend: Backend,
-    photos: YearPhoto[],
+    detail: YearDetail,
   ) {
-    const cols = Math.max(1, Math.ceil(Math.sqrt(photos.length)))
+    const year = detail.year.year
+    const yearStart = new Date(year, 0, 1).getTime()
+    const yearEnd = new Date(year, 11, 31, 23, 59, 59).getTime()
+    const span = Math.max(1, yearEnd - yearStart)
+    const dateToX = (ms: number): number => {
+      const p = Math.min(1, Math.max(0, (ms - yearStart) / span))
+      return -AXIS_W / 2 + p * AXIS_W
+    }
 
-    photos.forEach((photo, i) => {
-      const col = i % cols
-      const row = Math.floor(i / cols)
-      const jitterX = (hash01(photo.itemId, 7) - 0.5) * 40
-      const jitterY = (hash01(photo.itemId, 13) - 0.5) * 40
-      const worldX = col * CELL + jitterX
-      const worldY = row * CELL + jitterY
-
-      const container = new Container()
-      container.position.set(worldX, worldY)
-      container.rotation = (hash01(photo.itemId, 3) - 0.5) * 0.14 // ±0.07 rad
-
-      const frame = new Graphics()
-      frame
-        .roundRect(-PHOTO / 2 - BORDER, -PHOTO / 2 - BORDER, PHOTO + BORDER * 2, PHOTO + BORDER * 2, 4)
-        .fill(0xf5f5f0)
-      container.addChild(frame)
-
-      const mask = new Graphics()
-      mask.rect(-PHOTO / 2, -PHOTO / 2, PHOTO, PHOTO).fill(0xffffff)
-      const sprite = new Sprite(Texture.WHITE)
-      sprite.anchor.set(0.5)
-      sprite.setSize(PHOTO, PHOTO)
-      sprite.tint = 0x2a3345
-      container.addChild(sprite)
-      container.addChild(mask)
-      sprite.mask = mask
-
-      this.root.addChild(container)
-      this.photos.push({
-        itemId: photo.itemId,
-        eventId: photo.eventId,
-        worldX,
-        worldY,
-        container,
-        sprite,
-        key: `item-${photo.itemId}`,
-        loaded: false,
+    // ---- Achtergrond: as-lijn, maand-separators en -labels -----------------
+    const axis = new Graphics()
+    axis.moveTo(-AXIS_W / 2, 0).lineTo(AXIS_W / 2, 0).stroke({ width: 2, color: 0x3a4256 })
+    for (let m = 0; m < 12; m++) {
+      const mx = dateToX(new Date(year, m, 1).getTime())
+      if (m > 0) axis.moveTo(mx, -16).lineTo(mx, 16).stroke({ width: 1, color: 0x2a3142 })
+      const label = new Text({
+        text: MONTHS[m],
+        style: { fill: 0x8a97b0, fontSize: 15, fontFamily: 'Segoe UI, sans-serif' },
       })
+      label.resolution = 2
+      label.anchor.set(0.5, 0)
+      const mNext = dateToX(new Date(year, m + 1, 1).getTime())
+      label.position.set((mx + mNext) / 2, 12)
+      axis.addChild(label)
+    }
+    this.root.addChild(axis)
+
+    // ---- Callout-plaatsing (lanes boven/onder) -----------------------------
+    // Leader-lijnen in een eigen laag áchter de kaarten, zodat kaarten ze
+    // netjes afdekken en het niet rommelig wordt bij stapeling.
+    const leaders = new Graphics()
+    this.root.addChild(leaders)
+
+    const withCover = detail.events.filter((e) => e.coverItemId)
+    const withoutCover = detail.events.filter((e) => !e.coverItemId)
+    // Sorteer op datum zodat de lane-toewijzing links→rechts loopt.
+    withCover.sort((a, b) => parseLocalDate(a.startAt) - parseLocalDate(b.startAt))
+
+    const laneRight: Record<string, number> = {}
+    let maxAbsY = 0
+
+    withCover.forEach((ev, j) => {
+      const anchorX = dateToX(parseLocalDate(ev.startAt))
+      // Wissel de voorkeurszijde per event → gebalanceerd boven/onder.
+      const prefer = j % 2 === 0 ? -1 : 1 // -1 = boven (neg. y), 1 = onder
+      let side = prefer
+      let level = 0
+      for (let lvl = 0; lvl < 64; lvl++) {
+        const kPref = `${prefer}:${lvl}`
+        const kOther = `${-prefer}:${lvl}`
+        if (anchorX - THUMB_W / 2 > (laneRight[kPref] ?? -1e9) + CARD_GAP) {
+          side = prefer
+          level = lvl
+          break
+        }
+        if (anchorX - THUMB_W / 2 > (laneRight[kOther] ?? -1e9) + CARD_GAP) {
+          side = -prefer
+          level = lvl
+          break
+        }
+      }
+      laneRight[`${side}:${level}`] = anchorX + THUMB_W / 2
+      const cardY = side * (AXIS_GAP + level * (THUMB_H + LANE_GAP))
+      maxAbsY = Math.max(maxAbsY, Math.abs(cardY) + THUMB_H / 2)
+
+      // Leader: van de datumplek op de as naar de binnenrand van de kaart.
+      const innerY = cardY - side * (THUMB_H / 2)
+      leaders.moveTo(anchorX, 0).lineTo(anchorX, innerY).stroke({ width: 1.5, color: 0x3a4256, alpha: 0.7 })
+
+      this.nodes.push(this.buildCard(ev, anchorX, cardY))
     })
 
-    engine.world.addChild(this.root)
-    this.fitCamera(cols, Math.max(1, Math.ceil(photos.length / cols)))
+    // Events zonder cover: een stip + titel op de as.
+    withoutCover.forEach((ev) => {
+      const anchorX = dateToX(parseLocalDate(ev.startAt))
+      this.nodes.push(this.buildDot(ev, anchorX))
+    })
+
+    // Lege jaren: een hint in het midden.
+    if (detail.events.length === 0) {
+      const hint = new Text({
+        text: 'Geen gebeurtenissen in dit jaar',
+        style: { fill: 0x6a7690, fontSize: 20, fontFamily: 'Segoe UI, sans-serif' },
+      })
+      hint.resolution = 2
+      hint.anchor.set(0.5)
+      hint.position.set(0, -60)
+      this.root.addChild(hint)
+    }
+
+    this.engine.world.addChild(this.root)
+    this.fitCamera(maxAbsY)
   }
 
-  private fitCamera(cols: number, rows: number): void {
+  private buildCard(ev: EventSummary, anchorX: number, cardY: number): Node {
+    const container = new Container()
+    container.position.set(anchorX, cardY)
+
+    const frame = new Graphics()
+    frame
+      .roundRect(-THUMB_W / 2 - BORDER, -THUMB_H / 2 - BORDER, THUMB_W + BORDER * 2, THUMB_H + BORDER * 2, 5)
+      .fill(0xf5f5f0)
+    container.addChild(frame)
+
+    const mask = new Graphics()
+    mask.rect(-THUMB_W / 2, -THUMB_H / 2, THUMB_W, THUMB_H).fill(0xffffff)
+    const sprite = new Sprite(Texture.WHITE)
+    sprite.anchor.set(0.5)
+    sprite.setSize(THUMB_W, THUMB_H)
+    sprite.tint = 0x2a3345
+    container.addChild(sprite)
+    container.addChild(mask)
+    sprite.mask = mask
+
+    this.root.addChild(container)
+    return {
+      eventId: ev.id,
+      anchorX,
+      cardX: anchorX,
+      cardY,
+      hasCover: true,
+      coverItemId: ev.coverItemId,
+      container,
+      sprite,
+      halfW: THUMB_W / 2 + BORDER,
+      halfH: THUMB_H / 2 + BORDER,
+      key: `cover-${ev.coverItemId}`,
+      loaded: false,
+      scale: 1,
+    }
+  }
+
+  private buildDot(ev: EventSummary, anchorX: number): Node {
+    const container = new Container()
+    container.position.set(anchorX, 0)
+
+    const dot = new Graphics()
+    dot.circle(0, 0, DOT_R).fill(0x8a97b0).stroke({ width: 2, color: 0x1a2030 })
+    container.addChild(dot)
+
+    const label = new Text({
+      text: ev.title ?? 'Gebeurtenis',
+      style: {
+        fill: 0xcfd6e4,
+        fontSize: 13,
+        fontFamily: 'Segoe UI, sans-serif',
+        wordWrap: true,
+        wordWrapWidth: 140,
+        align: 'center',
+      },
+    })
+    label.resolution = 2
+    label.anchor.set(0.5, 1)
+    label.position.set(0, -DOT_R - 6)
+    container.addChild(label)
+
+    this.root.addChild(container)
+    return {
+      eventId: ev.id,
+      anchorX,
+      cardX: anchorX,
+      cardY: 0,
+      hasCover: false,
+      container,
+      sprite: null,
+      halfW: Math.max(DOT_R, 70),
+      halfH: DOT_R + 26,
+      key: '',
+      loaded: false,
+      scale: 1,
+    }
+  }
+
+  private fitCamera(maxAbsY: number): void {
     const vp = this.engine.viewport()
-    const w = cols * CELL
-    const h = rows * CELL
-    const zoom = Math.min(vp.width / (w + CELL), vp.height / (h + CELL))
-    this.engine.jumpCamera(
-      w / 2 - CELL / 2,
-      h / 2 - CELL / 2,
-      Math.max(this.engine.camera.minZoom, Math.min(zoom, 1)),
-    )
+    const contentW = AXIS_W + THUMB_W + 120
+    const contentH = Math.max(2 * maxAbsY, 320) + 120
+    const zoom = Math.min(vp.width / contentW, vp.height / contentH)
+    this.engine.jumpCamera(0, 0, Math.max(this.engine.camera.minZoom, Math.min(zoom, 1)))
+  }
+
+  onHover(worldX: number | null, worldY: number): void {
+    this.hoveredId = worldX === null ? null : this.hitTest(worldX, worldY)
   }
 
   update(ctx: FrameContext): void {
     const { engine, frame } = ctx
-    const vp = engine.viewport()
-    const b = engine.camera.worldBounds(vp)
-    const margin = CELL
+    const b = engine.camera.worldBounds(engine.viewport())
+    const marginX = THUMB_W
+    const marginY = THUMB_H
 
-    for (const p of this.photos) {
+    for (const n of this.nodes) {
       const visible =
-        p.worldX > b.minX - margin &&
-        p.worldX < b.maxX + margin &&
-        p.worldY > b.minY - margin &&
-        p.worldY < b.maxY + margin
-      p.container.visible = visible
+        n.cardX + n.halfW > b.minX - marginX &&
+        n.cardX - n.halfW < b.maxX + marginX &&
+        n.cardY + n.halfH > b.minY - marginY &&
+        n.cardY - n.halfH < b.maxY + marginY
+      n.container.visible = visible
       if (!visible) continue
 
-      const tex = engine.textures.get(p.key, frame)
+      // Micro-animatie: vloeiende hover-schaal.
+      const target = n.eventId === this.hoveredId ? 1.05 : 1
+      n.scale += (target - n.scale) * 0.2
+      n.container.scale.set(n.scale)
+
+      if (!n.sprite || n.loaded || !n.coverItemId) continue
+      const tex = engine.textures.get(n.key, frame)
       if (tex) {
-        if (!p.loaded) {
-          p.sprite.texture = tex
-          p.sprite.tint = 0xffffff
-          const s = Math.max(PHOTO / tex.width, PHOTO / tex.height)
-          p.sprite.setSize(tex.width * s, tex.height * s)
-          p.loaded = true
-        }
+        n.sprite.texture = tex
+        n.sprite.tint = 0xffffff
+        // Cover-fit: vul de kaart met behoud van aspect.
+        const s = Math.max(THUMB_W / tex.width, THUMB_H / tex.height)
+        n.sprite.setSize(tex.width * s, tex.height * s)
+        n.loaded = true
       } else {
-        const src = this.backend.thumb(p.itemId, 256)
-        engine.textures.request({ key: p.key, url: src.url, hue: src.hue, size: 256 })
+        const src = this.backend.thumb(n.coverItemId, 256)
+        engine.textures.request({ key: n.key, url: src.url, hue: src.hue, size: 256 })
       }
     }
   }
 
   hitTest(worldX: number, worldY: number): string | null {
-    // Van voor naar achter (laatste getekend = bovenop).
-    for (let i = this.photos.length - 1; i >= 0; i--) {
-      const p = this.photos[i]
-      if (
-        worldX >= p.worldX - PHOTO / 2 &&
-        worldX <= p.worldX + PHOTO / 2 &&
-        worldY >= p.worldY - PHOTO / 2 &&
-        worldY <= p.worldY + PHOTO / 2
-      ) {
-        // Tik op een foto → naar het canvas van de gebeurtenis (L2).
-        return p.eventId
+    // Van voor naar achter (laatste toegevoegd = bovenop).
+    for (let i = this.nodes.length - 1; i >= 0; i--) {
+      const n = this.nodes[i]
+      if (Math.abs(worldX - n.cardX) <= n.halfW && Math.abs(worldY - n.cardY) <= n.halfH) {
+        return n.eventId
       }
     }
     return null
