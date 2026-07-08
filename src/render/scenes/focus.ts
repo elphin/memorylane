@@ -134,6 +134,10 @@ export class FocusScene implements Scene {
   }
 
   private onKey = (e: KeyboardEvent): void => {
+    // Niet navigeren terwijl de gebruiker in een invoerveld typt (bewerk-overlay):
+    // dan zijn de pijltjes voor de tekstcursor, niet voor vorige/volgende item.
+    const el = document.activeElement
+    if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) return
     if (e.key === 'ArrowLeft') this.step(-1)
     else if (e.key === 'ArrowRight') this.step(1)
   }
