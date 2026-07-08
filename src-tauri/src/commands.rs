@@ -154,6 +154,39 @@ impl VaultService {
         Ok(id)
     }
 
+    /// Importeert foto's (bronpaden van de bestandskiezer) in een event.
+    pub fn import_photos(&self, event_id: &str, sources: &[String]) -> Result<usize, String> {
+        let vault = self.current_vault()?;
+        let folder = {
+            let conn = self.conn.lock().map_err(lock_err)?;
+            index::event_folder(&conn, event_id)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("event {event_id} niet gevonden"))?
+        };
+        // Batch-import is resilient: één onleesbaar bestand mag de rest niet
+        // wegvegen. We importeren per bestand, herindexeren zodra er íéts is
+        // gekopieerd (zodat de geslaagde foto's zichtbaar worden, ook bij een
+        // gedeeltelijke fout), en falen alleen hard als álles mislukt.
+        let mut count = 0usize;
+        let mut errors: Vec<String> = Vec::new();
+        for src in sources {
+            match writer::import_photo(&vault, &folder, std::path::Path::new(src)) {
+                Ok(_) => count += 1,
+                Err(e) => {
+                    log::warn!("foto-import overgeslagen ({src}): {e}");
+                    errors.push(e);
+                }
+            }
+        }
+        if count > 0 {
+            self.rescan()?;
+        }
+        if count == 0 && !errors.is_empty() {
+            return Err(format!("import mislukt: {}", errors.join("; ")));
+        }
+        Ok(count)
+    }
+
     /// Maakt een nieuw event in een jaar (file first, dan herindexeren).
     pub fn create_event(
         &self,
@@ -419,6 +452,15 @@ pub fn create_event(
 #[tauri::command]
 pub fn delete_item(state: State<VaultService>, item_id: String) -> Result<(), String> {
     state.delete_item(&item_id)
+}
+
+#[tauri::command]
+pub fn import_photos(
+    state: State<VaultService>,
+    event_id: String,
+    sources: Vec<String>,
+) -> Result<usize, String> {
+    state.import_photos(&event_id, &sources)
 }
 
 #[tauri::command]

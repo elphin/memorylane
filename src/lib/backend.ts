@@ -139,6 +139,8 @@ export interface Backend {
   saveCanvasLayout(eventId: string, items: CanvasLayoutInput[]): Promise<void>
   createTextItem(eventId: string, caption: string | null, body: string): Promise<string>
   createEvent(yearId: string, title: string, startAt: string): Promise<string>
+  /** Opent een bestandskiezer en importeert de gekozen foto's; geeft het aantal. */
+  importPhotos(eventId: string): Promise<number>
   deleteItem(itemId: string): Promise<void>
   search(query: string): Promise<SearchResult[]>
   thumb(itemId: string, size: 64 | 128 | 256 | 1024 | 2048): ThumbSource
@@ -227,6 +229,24 @@ class TauriBackend implements Backend {
   async createEvent(yearId: string, title: string, startAt: string): Promise<string> {
     const invoke = await this.api()
     return await invoke<string>('create_event', { yearId, title, startAt })
+  }
+
+  async importPhotos(eventId: string): Promise<number> {
+    const dialog = await import('@tauri-apps/plugin-dialog')
+    const picked = await dialog.open({
+      multiple: true,
+      directory: false,
+      filters: [
+        {
+          name: 'Media',
+          extensions: ['jpg', 'jpeg', 'png', 'heic', 'heif', 'gif', 'webp', 'mp4', 'mov'],
+        },
+      ],
+    })
+    const paths = Array.isArray(picked) ? picked : picked ? [picked] : []
+    if (paths.length === 0) return 0
+    const invoke = await this.api()
+    return await invoke<number>('import_photos', { eventId, sources: paths })
   }
 
   async deleteItem(itemId: string): Promise<void> {
@@ -350,6 +370,16 @@ class MockBackend implements Backend {
   }
   async createEvent(yearId: string, _title: string, _startAt: string): Promise<string> {
     return `${yearId}-newevent`
+  }
+  async importPhotos(eventId: string): Promise<number> {
+    const list = this.adds.get(eventId) ?? []
+    const start = list.length
+    for (let i = 0; i < 3; i++) {
+      const id = `${eventId}-photo${start + i}`
+      list.push({ id, eventId, itemType: 'photo', media: 'foto.jpg', caption: `Nieuwe foto ${start + i}`, slug: id })
+    }
+    this.adds.set(eventId, list)
+    return 3
   }
   async deleteItem(itemId: string): Promise<void> {
     this.deleted.add(itemId)

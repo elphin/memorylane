@@ -282,6 +282,24 @@ export function AppShell() {
     }
   }
 
+  const addPhotos = async (): Promise<void> => {
+    const eventId = currentEventRef.current
+    const backend = backendRef.current
+    if (!eventId || !backend || mutatingRef.current) return
+    mutatingRef.current = true
+    setBusy(true)
+    try {
+      const n = await backend.importPhotos(eventId)
+      if (n > 0) enterEventRef.current(eventId)
+    } catch (e) {
+      setMessage(String(e))
+      setPhase('error')
+    } finally {
+      mutatingRef.current = false
+      setBusy(false)
+    }
+  }
+
   const deleteCurrent = async (): Promise<void> => {
     const backend = backendRef.current
     const id = sceneRef.current?.currentId?.()
@@ -351,6 +369,7 @@ export function AppShell() {
           uiLevel={uiLevel}
           onAddEvent={() => setModal('event')}
           onAddNote={() => setModal('note')}
+          onAddPhotos={() => void addPhotos()}
           onDelete={() => void deleteCurrent()}
         />
       )}
@@ -375,11 +394,13 @@ function Fab({
   uiLevel,
   onAddEvent,
   onAddNote,
+  onAddPhotos,
   onDelete,
 }: {
   uiLevel: 'lifeline' | 'year' | 'event' | 'focus'
   onAddEvent: () => void
   onAddNote: () => void
+  onAddPhotos: () => void
   onDelete: () => void
 }) {
   const wrap: React.CSSProperties = { position: 'absolute', right: 20, bottom: 20, display: 'flex', gap: 10 }
@@ -393,6 +414,7 @@ function Fab({
   if (uiLevel === 'event') {
     return (
       <div style={wrap}>
+        <button onClick={onAddPhotos} style={fabBtn}>+ Foto&apos;s</button>
         <button onClick={onAddNote} style={fabBtn}>+ Notitie</button>
       </div>
     )

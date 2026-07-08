@@ -113,6 +113,19 @@ pub fn text_item_markdown(id: &str, caption: Option<&str>, body: &str, category:
     }
 }
 
+/// Markdown voor een foto-item (`<slug>.md`) dat naar een mediabestand wijst.
+pub fn photo_item_markdown(id: &str, media: &str, caption: Option<&str>) -> String {
+    let now = now_iso();
+    let mut fm = format!("---\nid: {id}\ntype: photo\nmedia: {}\n", yaml_str(media));
+    if let Some(c) = caption {
+        fm.push_str(&format!("caption: {}\n", yaml_str(c)));
+    }
+    fm.push_str(&format!("createdAt: {}\n", yaml_str(&now)));
+    fm.push_str(&format!("updatedAt: {}\n", yaml_str(&now)));
+    fm.push_str("---\n");
+    fm
+}
+
 /// Markdown voor een event (`_event.md`).
 pub fn event_markdown(id: &str, title: &str, start_at: &str) -> String {
     let now = now_iso();
@@ -182,6 +195,45 @@ fn unique_event_folder(vault_root: &Path, year_folder: &str, base_name: &str, id
     }
     let short: String = id.chars().filter(|c| *c != '-').take(8).collect();
     format!("{year_folder}/{base_name} {short}")
+}
+
+/// Importeert een foto: kopieert het bronbestand de eventmap in met een unieke
+/// naam en schrijft een bijbehorend item-`.md`. Geeft het nieuwe item-id terug.
+pub fn import_photo(
+    vault_root: &Path,
+    folder_path: &str,
+    source: &Path,
+) -> Result<String, String> {
+    let ext = source
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_else(|| "jpg".to_string());
+    let stem = source
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("foto");
+    let id = uuid::Uuid::new_v4().to_string();
+    let base = generate_slug(stem, 40);
+    let short: String = id.chars().filter(|c| *c != '-').take(8).collect();
+    let media = format!("{base}_{short}.{ext}");
+    let slug = format!("{base}_{short}");
+
+    let dir = vault_root.join(folder_path);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    // Kopieer (nooit verplaatsen) de bron de eventmap in. Faalt de kopie
+    // halverwege (onleesbare bron, schijf vol), dan kan op sommige platforms een
+    // half-geschreven doelbestand achterblijven; dat zou de scanner als "losse
+    // media" oppikken en een kapotte thumbnail tonen. Ruim het daarom op.
+    let dest = dir.join(&media);
+    if let Err(e) = std::fs::copy(source, &dest) {
+        let _ = std::fs::remove_file(&dest);
+        return Err(format!("kopiëren mislukt: {e}"));
+    }
+
+    let md = photo_item_markdown(&id, &media, Some(stem));
+    write_atomic(&dir.join(format!("{slug}.md")), &md).map_err(|e| e.to_string())?;
+    Ok(id)
 }
 
 /// Verplaatst een bestand naar de OS-prullenbak (omkeerbaar).
@@ -374,6 +426,54 @@ mod tests {
         let parsed = crate::vault::frontmatter::parse(&content);
         assert_eq!(parsed.get_str("id").unwrap(), id);
         assert_eq!(parsed.get_str("title").unwrap(), "Vakantie: Spanje");
+    }
+
+    #[test]
+    fn import_photo_copies_and_writes_item() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("2024/ev")).unwrap();
+        // Nep-bronbestand buiten de vault.
+        let src = tmp.path().join("Vakantie Foto.JPG");
+        std::fs::write(&src, b"\xFF\xD8\xFF\xD9").unwrap();
+
+        let id = import_photo(root, "2024/ev", &src).unwrap();
+
+        // Precies één media + één .md in de eventmap.
+        let entries: Vec<_> = std::fs::read_dir(root.join("2024/ev")).unwrap().collect();
+        assert_eq!(entries.len(), 2);
+        // Het .md verwijst naar het gekopieerde mediabestand en herleest correct.
+        let md = std::fs::read_dir(root.join("2024/ev"))
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .find(|e| e.path().extension().and_then(|x| x.to_str()) == Some("md"))
+            .unwrap();
+        let content = std::fs::read_to_string(md.path()).unwrap();
+        let parsed = crate::vault::frontmatter::parse(&content);
+        assert_eq!(parsed.get_str("id").unwrap(), id);
+        assert_eq!(parsed.get_str("type").unwrap(), "photo");
+        let media = parsed.get_str("media").unwrap();
+        assert!(media.ends_with(".jpg"));
+        assert!(root.join("2024/ev").join(&media).exists());
+    }
+
+    #[test]
+    fn import_photo_cleans_up_on_copy_failure() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("2024/ev")).unwrap();
+        // Bron bestaat niet → kopie faalt; er mag geen half media-bestand blijven.
+        let src = tmp.path().join("bestaat-niet.jpg");
+        let res = import_photo(root, "2024/ev", &src);
+        assert!(res.is_err(), "ontbrekende bron moet een fout geven");
+        let leftovers: Vec<_> = std::fs::read_dir(root.join("2024/ev"))
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "geen achtergebleven media/.md na een mislukte kopie, vond: {leftovers:?}"
+        );
     }
 
     #[test]
