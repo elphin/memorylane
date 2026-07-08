@@ -80,6 +80,23 @@ export class YearScene implements Scene {
     }
     this.root.addChild(axis)
 
+    // Meerdaagse events (period): een balkje op de as over de hele periode.
+    const spans = new Graphics()
+    this.root.addChild(spans)
+    // Datumplek van een event op de as: bij een meerdaags event het midden van
+    // de periode (en teken meteen het balkje), anders exact de startdatum.
+    const anchorFor = (ev: EventSummary): number => {
+      const startX = dateToX(parseLocalDate(ev.startAt))
+      if (ev.endAt) {
+        const endX = dateToX(parseLocalDate(ev.endAt))
+        if (endX - startX > 4) {
+          spans.roundRect(startX, -7, endX - startX, 14, 7).fill({ color: 0x4a5570, alpha: 0.9 })
+          return (startX + endX) / 2
+        }
+      }
+      return startX
+    }
+
     // ---- Callout-plaatsing (lanes boven/onder) -----------------------------
     // Leader-lijnen in een eigen laag áchter de kaarten, zodat kaarten ze
     // netjes afdekken en het niet rommelig wordt bij stapeling.
@@ -95,7 +112,7 @@ export class YearScene implements Scene {
     let maxAbsY = 0
 
     withCover.forEach((ev, j) => {
-      const anchorX = dateToX(parseLocalDate(ev.startAt))
+      const anchorX = anchorFor(ev)
       // Wissel de voorkeurszijde per event → gebalanceerd boven/onder.
       const prefer = j % 2 === 0 ? -1 : 1 // -1 = boven (neg. y), 1 = onder
       let side = prefer
@@ -127,7 +144,7 @@ export class YearScene implements Scene {
 
     // Events zonder cover: een stip + titel op de as.
     withoutCover.forEach((ev) => {
-      const anchorX = dateToX(parseLocalDate(ev.startAt))
+      const anchorX = anchorFor(ev)
       this.nodes.push(this.buildDot(ev, anchorX))
     })
 

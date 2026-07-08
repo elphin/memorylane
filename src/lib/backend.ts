@@ -293,18 +293,22 @@ class MockBackend implements Backend {
       const id = `y${y}`
       const eventCount = 9 + (i % 5) // 9..13 events, verspreid over het jaar
       const itemCount = 6 + i * 9
-      const events: EventSummary[] = Array.from({ length: eventCount }, (_, e) => {
+      const events: EventSummary[] = Array.from({ length: eventCount }, (_, e): EventSummary => {
         // Datums over alle 12 maanden; door meer events dan maanden ontstaat er
         // bewust clustering (naburige events in dezelfde maand) → test callouts.
         const month = 1 + Math.floor((e * 12) / eventCount)
         const day = 3 + ((e * 7) % 25)
         const mm = String(month).padStart(2, '0')
         const dd = String(day).padStart(2, '0')
+        // Elk 4e event is meerdaags (period) → test het span-balkje op de as.
+        const multi = e % 4 === 1
+        const endDd = String(Math.min(28, day + 9)).padStart(2, '0')
         return {
           id: `${id}-e${e}`,
-          kind: 'event' as const,
+          kind: multi ? 'period' : 'event',
           title: `Gebeurtenis ${e + 1}`,
           startAt: `${y}-${mm}-${dd}`,
+          endAt: multi ? `${y}-${mm}-${endDd}` : undefined,
           itemCount: Math.max(1, Math.floor(itemCount / eventCount)),
           // Af en toe een event zonder cover → test het stip-pad in de tijdlijn.
           coverItemId: e % 7 === 6 ? undefined : `${id}-e${e}-i0`,
