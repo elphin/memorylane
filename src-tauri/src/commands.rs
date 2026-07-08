@@ -216,6 +216,7 @@ impl VaultService {
         year_id: &str,
         title: &str,
         start_at: &str,
+        end_at: Option<&str>,
     ) -> Result<String, String> {
         let vault = self.current_vault()?;
         let year_folder = {
@@ -224,10 +225,34 @@ impl VaultService {
                 .map_err(|e| e.to_string())?
                 .ok_or_else(|| format!("jaar {year_id} niet gevonden"))?
         };
-        let (id, _folder) =
-            writer::create_event(&vault, &year_folder, title, start_at).map_err(|e| e.to_string())?;
+        let (id, _folder) = writer::create_event(&vault, &year_folder, title, start_at, end_at)
+            .map_err(|e| e.to_string())?;
         self.rescan()?;
         Ok(id)
+    }
+
+    /// Werkt titel/begin-/einddatum van een bestaand event bij (file first, dan
+    /// herindexeren). `end_at = None` verwijdert de einddatum.
+    pub fn update_event(
+        &self,
+        event_id: &str,
+        title: &str,
+        start_at: &str,
+        end_at: Option<&str>,
+    ) -> Result<(), String> {
+        let vault = self.current_vault()?;
+        let folder = {
+            let conn = self.conn.lock().map_err(lock_err)?;
+            index::event_folder(&conn, event_id)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("event {event_id} niet gevonden"))?
+        };
+        // `update_event` kan de event-map naar een ander jaar verhuizen als de
+        // startdatum van jaar verandert; het nieuwe pad interesseert ons niet
+        // (de rescan herontdekt het), maar de fout wel.
+        writer::update_event(&vault, &folder, title, start_at, end_at).map_err(|e| e.to_string())?;
+        self.rescan()?;
+        Ok(())
     }
 
     /// Verwijdert een item naar de prullenbak (`.md` + media), dan herindexeren.
@@ -468,8 +493,20 @@ pub fn create_event(
     year_id: String,
     title: String,
     start_at: String,
+    end_at: Option<String>,
 ) -> Result<String, String> {
-    state.create_event(&year_id, &title, &start_at)
+    state.create_event(&year_id, &title, &start_at, end_at.as_deref())
+}
+
+#[tauri::command]
+pub fn update_event(
+    state: State<VaultService>,
+    event_id: String,
+    title: String,
+    start_at: String,
+    end_at: Option<String>,
+) -> Result<(), String> {
+    state.update_event(&event_id, &title, &start_at, end_at.as_deref())
 }
 
 #[tauri::command]

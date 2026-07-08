@@ -4,7 +4,7 @@
 // DOM wordt alleen gebruikt voor overlays (loading, first-run, leeg).
 
 import { useEffect, useRef, useState } from 'react'
-import type { Backend, Item, SearchResult, YearSummary } from '../lib/backend'
+import type { Backend, EventInfo, Item, SearchResult, YearSummary } from '../lib/backend'
 import { createBackend } from '../lib/backend'
 import { RenderEngine } from '../render/core/engine'
 import { EventScene } from '../render/scenes/event'
@@ -14,6 +14,20 @@ import type { Scene } from '../render/scenes/scene'
 import { YearScene } from '../render/scenes/year'
 
 type Phase = 'loading' | 'first-run' | 'empty' | 'ready' | 'error'
+
+interface EventForm {
+  mode: 'create' | 'edit'
+  eventId?: string
+  title: string
+  startAt: string
+  endAt: string
+}
+
+/** Lokale datum als `YYYY-MM-DD` (niet UTC — voorkomt dag-/jaarverschuiving). */
+function todayISO(): string {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
 
 /** Reveal een nieuwe scene: inzoomen (`in`) groeit uit het aangeklikte punt,
  * uitzoomen (`out`) krimpt vanuit het midden. */
@@ -30,8 +44,9 @@ export function AppShell() {
   const [phase, setPhase] = useState<Phase>('loading')
   const [message, setMessage] = useState('')
   const [uiLevel, setUiLevel] = useState<'lifeline' | 'year' | 'event' | 'focus'>('lifeline')
-  const [modal, setModal] = useState<null | 'note' | 'event'>(null)
+  const [modal, setModal] = useState<null | 'note'>(null)
   const [editing, setEditing] = useState<null | { id: string; kind: 'text' | 'photo'; value: string }>(null)
+  const [eventForm, setEventForm] = useState<null | EventForm>(null)
   const [draft, setDraft] = useState('')
   const [busy, setBusy] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
@@ -52,6 +67,7 @@ export function AppShell() {
   const levelRef = useRef<'lifeline' | 'year' | 'event' | 'focus'>('lifeline')
   const currentYearRef = useRef<string | null>(null)
   const currentEventRef = useRef<string | null>(null)
+  const currentEventInfoRef = useRef<EventInfo | null>(null)
   const currentItemsRef = useRef<Item[]>([])
   const entryZoomRef = useRef(1)
   const enterSeqRef = useRef(0)
@@ -131,6 +147,7 @@ export function AppShell() {
         levelRef.current = 'event'
         setUiLevel('event')
         currentEventRef.current = eventId
+        currentEventInfoRef.current = detail.event
         currentItemsRef.current = detail.items
         entryZoomRef.current = engine.pendingZoom
       } catch (e) {
@@ -324,30 +341,55 @@ export function AppShell() {
     }
   }
 
-  const submitEvent = async (): Promise<void> => {
-    const yearId = currentYearRef.current
+  // Nieuw event: default-startdatum = het jaar waarin we zitten (of vandaag).
+  const openNewEvent = (): void => {
+    const yearNum = yearsRef.current.find((y) => y.id === currentYearRef.current)?.year
+    const startAt = yearNum ? `${yearNum}-01-01` : todayISO()
+    setEventForm({ mode: 'create', title: '', startAt, endAt: '' })
+  }
+
+  const openEditEvent = (): void => {
+    const info = currentEventInfoRef.current
+    if (!info) return
+    setEventForm({
+      mode: 'edit',
+      eventId: info.id,
+      title: info.title ?? '',
+      startAt: info.startAt,
+      endAt: info.endAt ?? '',
+    })
+  }
+
+  const submitEventForm = async (): Promise<void> => {
     const backend = backendRef.current
-    if (!yearId || !backend || !draft.trim()) {
-      setModal(null)
-      return
-    }
+    const f = eventForm
+    if (!backend || !f || !f.title.trim() || !f.startAt || mutatingRef.current) return
+    const end = f.endAt.trim() ? f.endAt : null
+    mutatingRef.current = true
     setBusy(true)
     try {
-      // Lokale datum (niet toISOString/UTC): rond middernacht zou UTC de
-      // vorige dag — en op 1 jan zelfs het vorige jaar — kunnen opleveren,
-      // wat het event op de verkeerde dag/in het verkeerde jaar zou zetten.
-      const now = new Date()
-      const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(
-        now.getDate(),
-      ).padStart(2, '0')}`
-      await backend.createEvent(yearId, draft.trim(), today)
-      enterYearRef.current(yearId)
-      setModal(null)
-      setDraft('')
+      if (f.mode === 'create') {
+        const yearId = currentYearRef.current
+        if (yearId) {
+          await backend.createEvent(yearId, f.title.trim(), f.startAt, end)
+          enterYearRef.current(yearId) // ververs de jaar-tijdlijn
+        }
+      } else if (f.eventId) {
+        await backend.updateEvent(f.eventId, f.title.trim(), f.startAt, end)
+        // Een datum-edit kan het event naar een ander jaar verplaatsen. Houd
+        // `currentYearRef` in de pas met de nieuwe startdatum, anders landt
+        // uitzoomen (goBack) op het oude — nu lege — jaar.
+        const newYear = Number(f.startAt.slice(0, 4))
+        const matched = yearsRef.current.find((y) => y.year === newYear)
+        if (matched) currentYearRef.current = matched.id
+        enterEventRef.current(f.eventId) // ververs event-info
+      }
+      setEventForm(null)
     } catch (e) {
       setMessage(String(e))
       setPhase('error')
     } finally {
+      mutatingRef.current = false
       setBusy(false)
     }
   }
@@ -463,7 +505,7 @@ export function AppShell() {
     <div style={{ position: 'fixed', inset: 0 }}>
       <div ref={hostRef} style={{ position: 'absolute', inset: 0 }} />
       {phase !== 'ready' && <Overlay phase={phase} message={message} onPick={() => void pickVault()} />}
-      {phase === 'ready' && !modal && !editing && !searchOpen && (
+      {phase === 'ready' && !modal && !editing && !eventForm && !searchOpen && (
         <button onClick={() => setSearchOpen(true)} style={searchBtn} title="Zoeken">
           Zoeken…
         </button>
@@ -477,23 +519,23 @@ export function AppShell() {
           onClose={closeSearch}
         />
       )}
-      {phase === 'ready' && !modal && !editing && (
+      {phase === 'ready' && !modal && !editing && !eventForm && (
         <Fab
           uiLevel={uiLevel}
-          onAddEvent={() => setModal('event')}
+          onAddEvent={openNewEvent}
           onAddNote={() => setModal('note')}
           onAddPhotos={() => void addPhotos()}
+          onEditEvent={openEditEvent}
           onEdit={startEdit}
           onDelete={() => void deleteCurrent()}
         />
       )}
       {modal && (
         <Composer
-          kind={modal}
           value={draft}
           busy={busy}
           onChange={setDraft}
-          onSubmit={() => void (modal === 'note' ? submitNote() : submitEvent())}
+          onSubmit={() => void submitNote()}
           onCancel={() => {
             setModal(null)
             setDraft('')
@@ -510,6 +552,15 @@ export function AppShell() {
           onCancel={() => setEditing(null)}
         />
       )}
+      {eventForm && (
+        <EventDialog
+          form={eventForm}
+          busy={busy}
+          onChange={(patch) => setEventForm({ ...eventForm, ...patch })}
+          onSubmit={() => void submitEventForm()}
+          onCancel={() => setEventForm(null)}
+        />
+      )}
     </div>
   )
 }
@@ -519,6 +570,7 @@ function Fab({
   onAddEvent,
   onAddNote,
   onAddPhotos,
+  onEditEvent,
   onEdit,
   onDelete,
 }: {
@@ -526,6 +578,7 @@ function Fab({
   onAddEvent: () => void
   onAddNote: () => void
   onAddPhotos: () => void
+  onEditEvent: () => void
   onEdit: () => void
   onDelete: () => void
 }) {
@@ -542,6 +595,7 @@ function Fab({
       <div style={wrap}>
         <button onClick={onAddPhotos} style={fabBtn}>+ Foto&apos;s</button>
         <button onClick={onAddNote} style={fabBtn}>+ Notitie</button>
+        <button onClick={onEditEvent} style={fabBtn}>Bewerk event</button>
       </div>
     )
   }
@@ -614,15 +668,87 @@ function EditPanel({
   )
 }
 
+function EventDialog({
+  form,
+  busy,
+  onChange,
+  onSubmit,
+  onCancel,
+}: {
+  form: EventForm
+  busy: boolean
+  onChange: (patch: Partial<EventForm>) => void
+  onSubmit: () => void
+  onCancel: () => void
+}) {
+  const endBeforeStart = form.endAt !== '' && form.endAt < form.startAt
+  const invalid = !form.title.trim() || !form.startAt || endBeforeStart
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        inset: 0,
+        background: 'rgba(0,0,0,0.55)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+      }}
+    >
+      <div style={{ width: 480, maxWidth: '90%', background: '#161c28', borderRadius: 12, padding: 20 }}>
+        <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 12 }}>
+          {form.mode === 'create' ? 'Nieuw event' : 'Event bewerken'}
+        </div>
+        <input
+          autoFocus
+          value={form.title}
+          onChange={(e) => onChange({ title: e.target.value })}
+          placeholder="Titel van het event"
+          style={field}
+        />
+        <div style={{ display: 'flex', gap: 12, marginTop: 12 }}>
+          <label style={dateLabel}>
+            Begindatum
+            <input
+              type="date"
+              value={form.startAt}
+              onChange={(e) => onChange({ startAt: e.target.value })}
+              style={{ ...field, marginTop: 4 }}
+            />
+          </label>
+          <label style={dateLabel}>
+            Einddatum (optioneel)
+            <input
+              type="date"
+              value={form.endAt}
+              min={form.startAt || undefined}
+              onChange={(e) => onChange({ endAt: e.target.value })}
+              style={{ ...field, marginTop: 4 }}
+            />
+          </label>
+        </div>
+        {endBeforeStart && (
+          <div style={{ color: '#f0a0a0', fontSize: 13, marginTop: 8 }}>
+            De einddatum ligt vóór de begindatum.
+          </div>
+        )}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 14 }}>
+          <button onClick={onCancel} style={ghostBtn}>Annuleren</button>
+          <button onClick={onSubmit} disabled={busy || invalid} style={primaryBtn}>
+            {busy ? 'Bezig…' : 'Opslaan'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function Composer({
-  kind,
   value,
   busy,
   onChange,
   onSubmit,
   onCancel,
 }: {
-  kind: 'note' | 'event'
   value: string
   busy: boolean
   onChange: (v: string) => void
@@ -641,26 +767,14 @@ function Composer({
       }}
     >
       <div style={{ width: 480, maxWidth: '90%', background: '#161c28', borderRadius: 12, padding: 20 }}>
-        <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 12 }}>
-          {kind === 'note' ? 'Nieuwe notitie' : 'Nieuw event'}
-        </div>
-        {kind === 'note' ? (
-          <textarea
-            autoFocus
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
-            placeholder="Schrijf een herinnering…"
-            style={{ ...field, height: 140, resize: 'vertical' }}
-          />
-        ) : (
-          <input
-            autoFocus
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
-            placeholder="Titel van het event"
-            style={field}
-          />
-        )}
+        <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 12 }}>Nieuwe notitie</div>
+        <textarea
+          autoFocus
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="Schrijf een herinnering…"
+          style={{ ...field, height: 140, resize: 'vertical' }}
+        />
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 14 }}>
           <button onClick={onCancel} style={ghostBtn}>Annuleren</button>
           <button onClick={onSubmit} disabled={busy || !value.trim()} style={primaryBtn}>
@@ -778,6 +892,14 @@ const field: React.CSSProperties = {
   background: '#0e1420',
   color: '#fff',
   font: '15px sans-serif',
+}
+
+const dateLabel: React.CSSProperties = {
+  flex: 1,
+  display: 'flex',
+  flexDirection: 'column',
+  fontSize: 13,
+  color: '#8a97b0',
 }
 
 const ghostBtn: React.CSSProperties = {

@@ -106,6 +106,7 @@ pub fn run() {
             commands::save_canvas_layout,
             commands::create_text_item,
             commands::create_event,
+            commands::update_event,
             commands::delete_item,
             commands::update_item,
             commands::import_photos,

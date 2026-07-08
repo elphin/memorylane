@@ -138,7 +138,10 @@ export interface Backend {
   getEvent(eventId: string): Promise<EventDetail | null>
   saveCanvasLayout(eventId: string, items: CanvasLayoutInput[]): Promise<void>
   createTextItem(eventId: string, caption: string | null, body: string): Promise<string>
-  createEvent(yearId: string, title: string, startAt: string): Promise<string>
+  createEvent(yearId: string, title: string, startAt: string, endAt: string | null): Promise<string>
+  /** Werkt titel/begin-/einddatum van een event bij. `endAt = null` verwijdert
+   * de einddatum. */
+  updateEvent(eventId: string, title: string, startAt: string, endAt: string | null): Promise<void>
   /** Opent een bestandskiezer en importeert de gekozen foto's; geeft het aantal. */
   importPhotos(eventId: string): Promise<number>
   deleteItem(itemId: string): Promise<void>
@@ -229,9 +232,24 @@ class TauriBackend implements Backend {
     return await invoke<string>('create_text_item', { eventId, caption, body })
   }
 
-  async createEvent(yearId: string, title: string, startAt: string): Promise<string> {
+  async createEvent(
+    yearId: string,
+    title: string,
+    startAt: string,
+    endAt: string | null,
+  ): Promise<string> {
     const invoke = await this.api()
-    return await invoke<string>('create_event', { yearId, title, startAt })
+    return await invoke<string>('create_event', { yearId, title, startAt, endAt })
+  }
+
+  async updateEvent(
+    eventId: string,
+    title: string,
+    startAt: string,
+    endAt: string | null,
+  ): Promise<void> {
+    const invoke = await this.api()
+    await invoke('update_event', { eventId, title, startAt, endAt })
   }
 
   async importPhotos(eventId: string): Promise<number> {
@@ -294,6 +312,7 @@ class MockBackend implements Backend {
   private adds = new Map<string, Item[]>()
   private deleted = new Set<string>()
   private edits = new Map<string, { caption: string | null; body: string | null }>()
+  private newEventSeq = 0
   private thumbCache = new Map<string, string>()
 
   constructor() {
@@ -364,6 +383,7 @@ class MockBackend implements Backend {
     }))
   }
   async getEvent(eventId: string): Promise<EventDetail | null> {
+    const summary = this.findEvent(eventId)
     const n = 6 + (hueFor(eventId) % 7)
     const base: Item[] = Array.from({ length: n }, (_, i) => ({
       id: `${eventId}-i${i}`,
@@ -389,7 +409,14 @@ class MockBackend implements Backend {
         }
       })
     return {
-      event: { id: eventId, kind: 'event', title: 'Gebeurtenis', startAt: '2024-06-15', folderPath: 'mock' },
+      event: {
+        id: eventId,
+        kind: summary?.kind ?? 'event',
+        title: summary?.title ?? 'Gebeurtenis',
+        startAt: summary?.startAt ?? '2024-06-15',
+        endAt: summary?.endAt,
+        folderPath: 'mock',
+      },
       items,
       canvas: [],
     }
@@ -404,8 +431,47 @@ class MockBackend implements Backend {
     this.adds.set(eventId, list)
     return id
   }
-  async createEvent(yearId: string, _title: string, _startAt: string): Promise<string> {
-    return `${yearId}-newevent`
+  private findEvent(eventId: string): EventSummary | undefined {
+    for (const d of this.details.values()) {
+      const ev = d.events.find((e) => e.id === eventId)
+      if (ev) return ev
+    }
+    return undefined
+  }
+  async createEvent(
+    yearId: string,
+    title: string,
+    startAt: string,
+    endAt: string | null,
+  ): Promise<string> {
+    const id = `${yearId}-new${this.newEventSeq++}`
+    const detail = this.details.get(yearId)
+    if (detail) {
+      detail.events.push({
+        id,
+        kind: endAt ? 'period' : 'event',
+        title,
+        startAt,
+        endAt: endAt ?? undefined,
+        itemCount: 0,
+        coverItemId: undefined,
+      })
+    }
+    return id
+  }
+  async updateEvent(
+    eventId: string,
+    title: string,
+    startAt: string,
+    endAt: string | null,
+  ): Promise<void> {
+    const ev = this.findEvent(eventId)
+    if (ev) {
+      ev.title = title
+      ev.startAt = startAt
+      ev.endAt = endAt ?? undefined
+      ev.kind = endAt ? 'period' : 'event'
+    }
   }
   async importPhotos(eventId: string): Promise<number> {
     const list = this.adds.get(eventId) ?? []

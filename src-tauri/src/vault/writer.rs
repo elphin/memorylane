@@ -126,16 +126,160 @@ pub fn photo_item_markdown(id: &str, media: &str, caption: Option<&str>) -> Stri
     fm
 }
 
-/// Markdown voor een event (`_event.md`).
-pub fn event_markdown(id: &str, title: &str, start_at: &str) -> String {
+/// Markdown voor een event (`_event.md`). `end_at` optioneel (period).
+pub fn event_markdown(id: &str, title: &str, start_at: &str, end_at: Option<&str>) -> String {
     let now = now_iso();
-    format!(
-        "---\nid: {id}\ntype: event\ntitle: {}\nstartAt: {}\ncreatedAt: {}\nupdatedAt: {}\n---\n",
+    let mut fm = format!(
+        "---\nid: {id}\ntype: event\ntitle: {}\nstartAt: {}\n",
         yaml_str(title),
         yaml_str(start_at),
+    );
+    if let Some(e) = end_at {
+        if !e.is_empty() {
+            fm.push_str(&format!("endAt: {}\n", yaml_str(e)));
+        }
+    }
+    fm.push_str(&format!(
+        "createdAt: {}\nupdatedAt: {}\n---\n",
         yaml_str(&now),
         yaml_str(&now),
-    )
+    ));
+    fm
+}
+
+/// Zet (of verwijdert bij `None`) een top-level frontmatter-veld in-place.
+/// Vervangt de bestaande regel of voegt 'm toe; laat geneste velden met rust.
+fn set_fm_field(fm: &mut Vec<String>, key: &str, value: Option<&str>) {
+    let prefix = format!("{key}:");
+    let idx = fm.iter().position(|l| l.starts_with(&prefix));
+    match value {
+        None => {
+            if let Some(i) = idx {
+                fm.remove(i);
+            }
+        }
+        Some(v) => {
+            let line = format!("{key}: {}", yaml_str(v));
+            match idx {
+                Some(i) => fm[i] = line,
+                None => fm.push(line),
+            }
+        }
+    }
+}
+
+/// Het jaar (`YYYY`) uit een startAt (`YYYY-MM-DD` of ISO). `None` als de eerste
+/// vier tekens geen jaar zijn.
+fn year_of(start_at: &str) -> Option<String> {
+    let head: String = start_at.chars().take(4).collect();
+    if head.len() == 4 && head.chars().all(|c| c.is_ascii_digit()) {
+        Some(head)
+    } else {
+        None
+    }
+}
+
+/// De jaarmap-component (eerste padsegment) van een event-folder-pad.
+fn year_component(folder_path: &str) -> &str {
+    folder_path.split('/').next().unwrap_or(folder_path)
+}
+
+/// Werkt titel/begin-/einddatum van een bestaand event-`_event.md` bij op
+/// regel-niveau (overige velden blijven behouden). `end_at = None` verwijdert de
+/// einddatum.
+///
+/// **Jaar-consistentie:** het jaar waarin een event getoond wordt, wordt door de
+/// scanner afgeleid uit de JAARMAP waar de event-map fysiek in ligt — niet uit de
+/// frontmatter-`startAt`. Wijzigt een datum-edit het jaar, dan zou het event stil
+/// in het verkeerde jaar blijven hangen (en op de rand van de as geklemd worden).
+/// Daarom verplaatsen we de event-map naar de jaarmap die bij de nieuwe `startAt`
+/// hoort zodra het jaar verandert. Binnen hetzelfde jaar wordt de map bewust NIET
+/// hernoemd (identiteit zit in de frontmatter; een stale naam is onschadelijk).
+///
+/// Geeft het (mogelijk nieuwe) folder-pad terug.
+pub fn update_event(
+    vault_root: &Path,
+    folder_path: &str,
+    title: &str,
+    start_at: &str,
+    end_at: Option<&str>,
+) -> std::io::Result<String> {
+    // Bepaal of de event-map naar een ander jaar moet verhuizen.
+    let effective_folder = relocate_year_if_needed(vault_root, folder_path, start_at)?;
+    let path = vault_root.join(&effective_folder).join("_event.md");
+    let original = std::fs::read_to_string(&path)?;
+    let normalized = original.replace("\r\n", "\n");
+    let lines: Vec<&str> = normalized.split('\n').collect();
+    let open = lines.iter().position(|l| l.trim() == "---");
+    let close = open.and_then(|o| {
+        lines
+            .iter()
+            .enumerate()
+            .skip(o + 1)
+            .find(|(_, l)| l.trim() == "---")
+            .map(|(i, _)| i)
+    });
+    let (Some(open), Some(close)) = (open, close) else {
+        write_atomic(&path, &normalized)?;
+        return Ok(effective_folder);
+    };
+    let mut fm: Vec<String> = lines[open + 1..close].iter().map(|s| s.to_string()).collect();
+    set_fm_field(&mut fm, "title", Some(title));
+    set_fm_field(&mut fm, "startAt", Some(start_at));
+    // Lege einddatum telt als "geen einddatum" → verwijderen.
+    let end = end_at.filter(|e| !e.is_empty());
+    set_fm_field(&mut fm, "endAt", end);
+    set_fm_field(&mut fm, "updatedAt", Some(&now_iso()));
+
+    let body = lines[close + 1..].join("\n").trim().to_string();
+    let mut out = String::from("---\n");
+    out.push_str(&fm.join("\n"));
+    out.push_str("\n---\n");
+    if !body.is_empty() {
+        out.push('\n');
+        out.push_str(&body);
+        out.push('\n');
+    }
+    write_atomic(&path, &out)?;
+    Ok(effective_folder)
+}
+
+/// Verplaatst de event-map naar de jaarmap die bij `start_at` hoort als het jaar
+/// afwijkt van het huidige (eerste padsegment). Geeft het effectieve folder-pad
+/// terug (ongewijzigd als er geen verhuizing nodig of mogelijk is).
+///
+/// Verplaatst nooit als: het jaar niet uit `start_at` te lezen is, het jaar al
+/// klopt, of het doel al bestaat (dan blijft het event staan — de scanner
+/// klemt 'm op de rand; beter dan twee events samenvoegen of een bestaande map
+/// overschrijven).
+fn relocate_year_if_needed(
+    vault_root: &Path,
+    folder_path: &str,
+    start_at: &str,
+) -> std::io::Result<String> {
+    let Some(new_year) = year_of(start_at) else {
+        return Ok(folder_path.to_string());
+    };
+    let current_year = year_component(folder_path);
+    if current_year == new_year {
+        return Ok(folder_path.to_string());
+    }
+    // Behoud de mapnaam zelf; alleen het jaar-segment verandert.
+    let base_name = folder_path
+        .split_once('/')
+        .map(|(_, rest)| rest)
+        .unwrap_or(folder_path);
+    let target = format!("{new_year}/{base_name}");
+    let target_abs = vault_root.join(&target);
+    // Doel bestaat al → niet verhuizen (voorkomt overschrijven/samenvoegen).
+    if target_abs.exists() {
+        return Ok(folder_path.to_string());
+    }
+    if let Some(parent) = target_abs.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::rename(vault_root.join(folder_path), &target_abs)?;
+    Ok(target)
 }
 
 // ---- Schrijf-operaties ---------------------------------------------------
@@ -267,11 +411,17 @@ pub fn create_event(
     year_folder: &str,
     title: &str,
     start_at: &str,
+    end_at: Option<&str>,
 ) -> std::io::Result<(String, String)> {
     let id = uuid::Uuid::new_v4().to_string();
+    // De event-map moet onder de jaarmap liggen die bij `start_at` hoort — de
+    // scanner leidt het jaar uit de MAP af, niet uit de frontmatter. Kiest de
+    // gebruiker een datum in een ander jaar dan het bekeken jaar, dan plaatsen we
+    // 'm alsnog in het juiste jaar (map wordt zo nodig aangemaakt).
+    let target_year = year_of(start_at).unwrap_or_else(|| year_folder.to_string());
     let base_name = format!("{start_at} {}", sanitize_folder(title));
-    let folder_path = unique_event_folder(vault_root, year_folder, &base_name, &id);
-    let md = event_markdown(&id, title, start_at);
+    let folder_path = unique_event_folder(vault_root, &target_year, &base_name, &id);
+    let md = event_markdown(&id, title, start_at, end_at);
     let path = vault_root.join(&folder_path).join("_event.md");
     write_atomic(&path, &md)?;
     Ok((id, folder_path))
@@ -549,21 +699,131 @@ mod tests {
     #[test]
     fn bracket_title_roundtrips_via_frontmatter() {
         // `[done]` zou zonder quotes als flow-seq gelezen worden → titel weg.
-        let md = event_markdown("id1", "[done]", "2024-07-01");
+        let md = event_markdown("id1", "[done]", "2024-07-01", None);
         let parsed = crate::vault::frontmatter::parse(&md);
         assert_eq!(parsed.get_str("title").unwrap(), "[done]");
         // Ook letterlijke quotes in een titel moeten overleven.
-        let md2 = event_markdown("id2", "\"Zomer\"", "2024-07-01");
+        let md2 = event_markdown("id2", "\"Zomer\"", "2024-07-01", None);
         let parsed2 = crate::vault::frontmatter::parse(&md2);
         assert_eq!(parsed2.get_str("title").unwrap(), "\"Zomer\"");
+    }
+
+    #[test]
+    fn update_event_sets_title_dates_and_can_clear_end() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let (_id, folder) =
+            create_event(root, "2024", "Reis", "2024-07-01", Some("2024-07-10")).unwrap();
+        // Bevestig dat de einddatum geschreven is.
+        let c0 = std::fs::read_to_string(root.join(&folder).join("_event.md")).unwrap();
+        assert_eq!(crate::vault::frontmatter::parse(&c0).get_str("endAt").unwrap(), "2024-07-10");
+
+        // Titel + startdatum wijzigen, einddatum wissen (None).
+        update_event(root, &folder, "Reis naar Spanje", "2024-07-02", None).unwrap();
+        let c1 = std::fs::read_to_string(root.join(&folder).join("_event.md")).unwrap();
+        let p = crate::vault::frontmatter::parse(&c1);
+        assert_eq!(p.get_str("title").unwrap(), "Reis naar Spanje");
+        assert_eq!(p.get_str("startAt").unwrap(), "2024-07-02");
+        assert!(p.get_str("endAt").is_none(), "einddatum moet gewist zijn");
+        assert_eq!(p.get_str("type").unwrap(), "event");
+
+        // Einddatum weer zetten.
+        update_event(root, &folder, "Reis naar Spanje", "2024-07-02", Some("2024-07-12")).unwrap();
+        let c2 = std::fs::read_to_string(root.join(&folder).join("_event.md")).unwrap();
+        assert_eq!(crate::vault::frontmatter::parse(&c2).get_str("endAt").unwrap(), "2024-07-12");
+    }
+
+    #[test]
+    fn update_event_preserves_unknown_fields() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("2024/ev")).unwrap();
+        // _event.md met velden die de UI niet kent maar die behouden moeten blijven.
+        std::fs::write(
+            root.join("2024/ev/_event.md"),
+            "---\nid: ev1\ntype: event\ntitle: Oud\nstartAt: 2024-07-01\ncategory: reizen\ncoverPhoto: strand.jpg\nfeaturedPhoto: strand.jpg\ncreatedAt: 2020-01-01T00:00:00.000Z\n---\nEen bewaarde beschrijving.\n",
+        )
+        .unwrap();
+
+        update_event(root, "2024/ev", "Nieuw", "2024-07-05", None).unwrap();
+        let c = std::fs::read_to_string(root.join("2024/ev/_event.md")).unwrap();
+        let p = crate::vault::frontmatter::parse(&c);
+        assert_eq!(p.get_str("title").unwrap(), "Nieuw");
+        assert_eq!(p.get_str("startAt").unwrap(), "2024-07-05");
+        // Onbekende/behouden velden overleven de edit.
+        assert_eq!(p.get_str("category").unwrap(), "reizen");
+        assert_eq!(p.get_str("coverPhoto").unwrap(), "strand.jpg");
+        assert_eq!(p.get_str("featuredPhoto").unwrap(), "strand.jpg");
+        assert_eq!(p.get_str("createdAt").unwrap(), "2020-01-01T00:00:00.000Z");
+        // Body blijft behouden.
+        assert_eq!(p.body, "Een bewaarde beschrijving.");
+    }
+
+    #[test]
+    fn update_event_relocates_to_matching_year_on_year_change() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let (id, folder) =
+            create_event(root, "2024", "Reis", "2024-07-01", None).unwrap();
+        assert!(folder.starts_with("2024/"));
+
+        // Startdatum naar 2025 → de event-map moet naar de 2025-jaarmap verhuizen.
+        let new_folder = update_event(root, &folder, "Reis", "2025-03-01", None).unwrap();
+        assert!(new_folder.starts_with("2025/"), "map moet in 2025 liggen, was: {new_folder}");
+        assert!(!root.join(&folder).exists(), "oude map mag niet meer bestaan");
+        let c = std::fs::read_to_string(root.join(&new_folder).join("_event.md")).unwrap();
+        let p = crate::vault::frontmatter::parse(&c);
+        assert_eq!(p.get_str("id").unwrap(), id);
+        assert_eq!(p.get_str("startAt").unwrap(), "2025-03-01");
+
+        // Een volledige scan wijst het event nu aan het JAAR 2025 toe.
+        let model = crate::vault::scan(root);
+        let ev = model.events.iter().find(|e| e.id == id).unwrap();
+        let year = model.years.iter().find(|y| y.id == ev.year_id).unwrap();
+        assert_eq!(year.year, 2025, "event moet in jaar 2025 vallen na de datum-edit");
+    }
+
+    #[test]
+    fn update_event_within_same_year_keeps_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let (_id, folder) =
+            create_event(root, "2024", "Reis", "2024-07-01", None).unwrap();
+        // Datum binnen hetzelfde jaar → map blijft (identiteit in frontmatter).
+        let same = update_event(root, &folder, "Reis", "2024-09-09", None).unwrap();
+        assert_eq!(same, folder, "binnen hetzelfde jaar blijft de mapnaam gelijk");
+    }
+
+    #[test]
+    fn update_event_does_not_relocate_when_target_exists() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let (_id, folder) = create_event(root, "2024", "Reis", "2024-07-01", None).unwrap();
+        // Zet een botsende map klaar in 2025 met exact dezelfde basisnaam.
+        let base = folder.split_once('/').unwrap().1;
+        std::fs::create_dir_all(root.join(format!("2025/{base}"))).unwrap();
+        // Verhuizing zou botsen → event blijft staan, geen overschrijving.
+        let result = update_event(root, &folder, "Reis", "2025-01-01", None).unwrap();
+        assert_eq!(result, folder, "bij een botsend doel blijft het event op zijn plek");
+        assert!(root.join(&folder).join("_event.md").exists());
+    }
+
+    #[test]
+    fn create_event_uses_year_from_start_at() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        // Bekeken jaar = 2024, maar de gekozen startdatum ligt in 2023.
+        let (_id, folder) = create_event(root, "2024", "Terugblik", "2023-12-30", None).unwrap();
+        assert!(folder.starts_with("2023/"), "event hoort in 2023, was: {folder}");
+        assert!(root.join(&folder).join("_event.md").exists());
     }
 
     #[test]
     fn create_event_does_not_overwrite_existing_event() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
-        let (id1, folder1) = create_event(root, "2024", "Verjaardag", "2024-07-01").unwrap();
-        let (id2, folder2) = create_event(root, "2024", "Verjaardag", "2024-07-01").unwrap();
+        let (id1, folder1) = create_event(root, "2024", "Verjaardag", "2024-07-01", None).unwrap();
+        let (id2, folder2) = create_event(root, "2024", "Verjaardag", "2024-07-01", None).unwrap();
         assert_ne!(folder1, folder2, "tweede event mag niet dezelfde map delen");
         // Beide _event.md's bestaan nog met hun eigen identiteit.
         let c1 = std::fs::read_to_string(root.join(&folder1).join("_event.md")).unwrap();
@@ -591,7 +851,7 @@ mod tests {
     fn create_event_makes_folder_and_md() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
-        let (id, folder) = create_event(root, "2024", "Vakantie: Spanje", "2024-07-01").unwrap();
+        let (id, folder) = create_event(root, "2024", "Vakantie: Spanje", "2024-07-01", None).unwrap();
         assert_eq!(folder, "2024/2024-07-01 Vakantie_ Spanje");
         let content = std::fs::read_to_string(root.join(&folder).join("_event.md")).unwrap();
         let parsed = crate::vault::frontmatter::parse(&content);
