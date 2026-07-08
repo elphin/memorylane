@@ -93,12 +93,19 @@ export interface EventDetail {
   canvas: CanvasItem[]
 }
 
+export interface ExifEntry {
+  label: string
+  value: string
+}
+
 export interface ItemMetadata {
   caption: string
   date: string
   place: string
   people: string[]
   tags: string[]
+  /** Read-only ingebedde EXIF-velden (label + waarde). */
+  exif: ExifEntry[]
 }
 
 /** Layout-input voor het opslaan van een canvas (naar `save_canvas_layout`). */
@@ -531,9 +538,18 @@ class MockBackend implements Backend {
     })
   }
   async getItemMetadata(itemId: string): Promise<ItemMetadata> {
+    // Nep-EXIF zodat de read-only weergave in de mock te zien is.
+    const exif: ExifEntry[] = [
+      { label: 'Genomen op', value: '2024-08-15 14:32:07' },
+      { label: 'Camera', value: 'Canon EOS R6' },
+      { label: 'Diafragma', value: 'f/2.8' },
+      { label: 'Sluitertijd', value: '1/250 s' },
+      { label: 'ISO', value: '200' },
+      { label: 'Afmeting', value: '6000 × 4000' },
+    ]
     const m = this.meta.get(itemId)
-    if (m) return m
-    return { caption: this.edits.get(itemId)?.caption ?? '', date: '', place: '', people: [], tags: [] }
+    if (m) return { ...m, exif }
+    return { caption: this.edits.get(itemId)?.caption ?? '', date: '', place: '', people: [], tags: [], exif }
   }
   async updateItemMetadata(
     itemId: string,
@@ -543,7 +559,7 @@ class MockBackend implements Backend {
     people: string[],
     tags: string[],
   ): Promise<void> {
-    this.meta.set(itemId, { caption, date, place, people, tags })
+    this.meta.set(itemId, { caption, date, place, people, tags, exif: [] })
     // Caption ook in de gedeelde edits zodat de L3-caption/kaart ververst.
     const prev = this.edits.get(itemId) ?? { caption: null, body: null }
     this.edits.set(itemId, { caption, body: prev.body })

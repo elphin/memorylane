@@ -177,10 +177,11 @@ impl VaultService {
         Ok(())
     }
 
-    /// Leest de bewerkbare sidecar-metadata van een item (voor de bewerk-UI).
+    /// Leest de bewerkbare sidecar-metadata van een item + read-only ingebedde
+    /// EXIF (voor de bewerk-UI). EXIF wordt tolerant gelezen (leeg bij geen data).
     pub fn get_item_metadata(&self, item_id: &str) -> Result<ItemMetadata, String> {
         let vault = self.current_vault()?;
-        let (_event_id, folder, slug, _media) = {
+        let (_event_id, folder, slug, media) = {
             let conn = self.conn.lock().map_err(lock_err)?;
             index::item_files(&conn, item_id)
                 .map_err(|e| e.to_string())?
@@ -190,12 +191,31 @@ impl VaultService {
         let path = vault.join(&folder).join(format!("{slug}.md"));
         let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
         let p = vault::frontmatter::parse(&content);
+
+        // Ingebedde EXIF uit het mediabestand (alleen voor foto's). Containment:
+        // media komt uit onvertrouwde frontmatter — canonicaliseer en eis dat het
+        // binnen de vault ligt (zelfde bescherming als resolve_thumb).
+        let exif = media
+            .as_deref()
+            .and_then(|m| {
+                let src = vault.join(&folder).join(m);
+                let canon_src = std::fs::canonicalize(&src).ok()?;
+                let canon_vault = std::fs::canonicalize(&vault).ok()?;
+                canon_src.starts_with(&canon_vault).then_some(src)
+            })
+            .map(|src| media::exif_read::read_exif(&src))
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(label, value)| ExifEntry { label, value })
+            .collect();
+
         Ok(ItemMetadata {
             caption: p.get_str("caption").unwrap_or_default(),
             date: p.get_str("date").unwrap_or_default(),
             place: p.get_str("place").unwrap_or_default(),
             people: p.get("people").map(|v| v.as_string_list()).unwrap_or_default(),
             tags: p.get("tags").map(|v| v.as_string_list()).unwrap_or_default(),
+            exif,
         })
     }
 
@@ -356,7 +376,14 @@ fn mtime_ms(meta: &std::fs::Metadata) -> i64 {
         .unwrap_or(0)
 }
 
-/// Bewerkbare sidecar-metadata van een item, voor de bewerk-UI.
+/// Eén read-only EXIF-veld (label + weergavewaarde).
+#[derive(Debug, Serialize)]
+pub struct ExifEntry {
+    pub label: String,
+    pub value: String,
+}
+
+/// Bewerkbare sidecar-metadata van een item + read-only ingebedde EXIF.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ItemMetadata {
@@ -365,6 +392,7 @@ pub struct ItemMetadata {
     pub place: String,
     pub people: Vec<String>,
     pub tags: Vec<String>,
+    pub exif: Vec<ExifEntry>,
 }
 
 /// Samenvatting van een indexeer-run, terug naar de UI.

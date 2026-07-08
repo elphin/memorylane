@@ -4,7 +4,7 @@
 // DOM wordt alleen gebruikt voor overlays (loading, first-run, leeg).
 
 import { useEffect, useRef, useState } from 'react'
-import type { Backend, EventInfo, Item, SearchResult, YearSummary } from '../lib/backend'
+import type { Backend, EventInfo, ExifEntry, Item, SearchResult, YearSummary } from '../lib/backend'
 import { createBackend } from '../lib/backend'
 import { RenderEngine } from '../render/core/engine'
 import { EventScene } from '../render/scenes/event'
@@ -31,6 +31,7 @@ interface MetaForm {
   place: string
   people: string
   tags: string
+  exif: ExifEntry[]
 }
 
 /** Lokale datum als `YYYY-MM-DD` (niet UTC — voorkomt dag-/jaarverschuiving). */
@@ -513,6 +514,7 @@ export function AppShell() {
           place: m.place,
           people: m.people.join(', '),
           tags: m.tags.join(', '),
+          exif: m.exif,
         })
       })
       .catch((e) => {
@@ -734,6 +736,21 @@ function MetaPanel({
             style={{ ...field, marginTop: 4 }}
           />
         </label>
+        {form.exif.length > 0 && (
+          <div style={{ marginTop: 16, borderTop: '1px solid #2c3650', paddingTop: 12 }}>
+            <div style={{ fontSize: 12, color: '#6a7690', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+              EXIF (uit de foto)
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              {form.exif.map((e) => (
+                <div key={e.label} style={{ display: 'flex', gap: 14, fontSize: 13 }}>
+                  <span style={{ color: '#8a97b0', minWidth: 150 }}>{e.label}</span>
+                  <span style={{ color: '#dfe7f5' }}>{e.value}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 16 }}>
           <button onClick={onCancel} style={ghostBtn}>Annuleren</button>
           <button onClick={onSubmit} disabled={busy} style={primaryBtn}>
