@@ -101,7 +101,7 @@ export class FocusScene implements Scene {
     this.engine.jumpCamera(0, 0, Math.max(this.engine.camera.minZoom, Math.min(zoom, 2)))
   }
 
-  private step(delta: number): void {
+  step(delta: number): void {
     if (this.items.length < 2) return
     this.index = (this.index + delta + this.items.length) % this.items.length
     this.build()
@@ -130,14 +130,16 @@ export class FocusScene implements Scene {
     }
   }
 
-  /** Tik links/rechts van het item → vorige/volgende sibling. */
-  hitTest(worldX: number): string | null {
-    if (worldX < -FOCUS / 2) {
-      this.step(-1)
-    } else if (worldX > FOCUS / 2) {
-      this.step(1)
-    }
-    return null
+  /** Puur: geeft het id van het gefocuste item terug als het punt binnen de
+   * kaart/foto valt, anders null (lege ruimte = de app-shell zoomt uit). De
+   * links/rechts-helft-logica (vorige/volgende) zit in de app-shell. */
+  hitTest(worldX: number, worldY: number): string | null {
+    const item = this.current
+    if (!item) return null
+    const isText = item.itemType === 'text' || item.itemType === 'link'
+    const halfW = isText ? CARD_W / 2 : FOCUS / 2
+    const halfH = isText ? CARD_H / 2 : FOCUS / 2
+    return Math.abs(worldX) <= halfW && Math.abs(worldY) <= halfH ? item.id : null
   }
 
   currentId(): string | null {

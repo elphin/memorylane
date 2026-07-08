@@ -219,17 +219,31 @@ export function AppShell() {
         sceneRef.current?.onHover?.(wx, wy)
       }
       engine.onTap = (wx, wy) => {
-        // Negeer taps tijdens de reveal: de root is dan geschaald/verschoven,
+        // Negeer taps tijdens de transitie: de root is dan geschaald/verschoven,
         // dus een hitTest tegen de (uiteindelijke) wereldcoördinaten zou het
-        // verkeerde object raken en ongewild een niveau dieper navigeren.
+        // verkeerde object raken en ongewild navigeren.
         if (engine?.isTransitioning) return
-        // FocusScene.hitTest verwerkt links/rechts-tik zelf (sibling-nav) en
-        // geeft null terug; de andere niveaus navigeren op het geraakte id.
-        const hit = sceneRef.current?.hitTest?.(wx, wy)
-        if (!hit) return
-        if (levelRef.current === 'lifeline') void enterYear(hit)
-        else if (levelRef.current === 'year') void enterEvent(hit)
-        else if (levelRef.current === 'event') enterFocus(hit)
+        const scene = sceneRef.current
+        const level = levelRef.current
+        const hit = scene?.hitTest?.(wx, wy) ?? null
+
+        // L3-focus: klik óp de foto = vorige/volgende (linker-/rechterhelft),
+        // klik ernáást (lege ruimte) = uitzoomen naar het canvas.
+        if (level === 'focus') {
+          if (hit) scene?.step?.(wx >= 0 ? 1 : -1)
+          else goBack()
+          return
+        }
+
+        // L1/L2: klik óp een item = een niveau dieper.
+        if (hit) {
+          if (level === 'lifeline') void enterYear(hit)
+          else if (level === 'year') void enterEvent(hit)
+          else if (level === 'event') enterFocus(hit)
+          return
+        }
+        // Klik naast een item = een niveau uitzoomen (lifeline is de top → niets).
+        if (level !== 'lifeline') goBack()
       }
 
       try {
