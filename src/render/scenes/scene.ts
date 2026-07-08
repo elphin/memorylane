@@ -17,6 +17,10 @@ export interface Scene {
   step?(delta: number): void
   /** Ververs de item-data in-place (alleen L3-focus), na een bewerking. */
   refresh?(items: Item[]): void
+  /** Toon/verberg de Ctrl-dag-indicator (alleen L1-jaar). */
+  setDayPicker?(active: boolean): void
+  /** Datum (`YYYY-MM-DD`) onder een wereld-x op de as (alleen L1-jaar). */
+  dateAt?(worldX: number): string
   /** Laatst gefitte zoom (alleen L3): referentie voor de terug-uitzoom-drempel,
    * zodat sibling-nav naar grotere inhoud (lange notitie) niet meteen uitzoomt. */
   readonly baseZoom?: number

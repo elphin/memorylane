@@ -47,6 +47,14 @@ export class YearScene implements Scene {
   readonly root = new Container()
   private nodes: Node[] = []
   private hoveredId: string | null = null
+  // Ctrl-dag-indicator: toont de datum onder de cursor + Ctrl+klik maakt een event.
+  private yearStart = 0
+  private span = 1
+  private maxAbsY = 0
+  private dayPicker = false
+  private hoverWX: number | null = null
+  private dayLine = new Graphics()
+  private dayLabel: Text
 
   constructor(
     private engine: RenderEngine,
@@ -57,6 +65,8 @@ export class YearScene implements Scene {
     const yearStart = new Date(year, 0, 1).getTime()
     const yearEnd = new Date(year, 11, 31, 23, 59, 59).getTime()
     const span = Math.max(1, yearEnd - yearStart)
+    this.yearStart = yearStart
+    this.span = span
     const dateToX = (ms: number): number => {
       const p = Math.min(1, Math.max(0, (ms - yearStart) / span))
       return -AXIS_W / 2 + p * AXIS_W
@@ -160,8 +170,51 @@ export class YearScene implements Scene {
       this.root.addChild(hint)
     }
 
+    this.maxAbsY = maxAbsY
+
+    // Dag-indicator (Ctrl): een verticale lijn + datumlabel, standaard verborgen.
+    this.dayLine.visible = false
+    this.root.addChild(this.dayLine)
+    this.dayLabel = new Text({
+      text: '',
+      style: { fill: 0xdfe7f5, fontSize: 15, fontWeight: '600', fontFamily: 'Segoe UI, sans-serif' },
+    })
+    this.dayLabel.resolution = 2
+    this.dayLabel.anchor.set(0.5, 1)
+    this.dayLabel.visible = false
+    this.root.addChild(this.dayLabel)
+
     this.engine.world.addChild(this.root)
     this.fitCamera(maxAbsY)
+  }
+
+  /** Datum (`YYYY-MM-DD`) die hoort bij een wereld-x op de as. */
+  dateAt(worldX: number): string {
+    const p = Math.min(1, Math.max(0, (worldX + AXIS_W / 2) / AXIS_W))
+    const d = new Date(this.yearStart + p * this.span)
+    const mm = String(d.getMonth() + 1).padStart(2, '0')
+    const dd = String(d.getDate()).padStart(2, '0')
+    return `${d.getFullYear()}-${mm}-${dd}`
+  }
+
+  /** Zet de Ctrl-dag-indicator aan/uit. */
+  setDayPicker(active: boolean): void {
+    this.dayPicker = active
+    this.renderDay()
+  }
+
+  private renderDay(): void {
+    const show = this.dayPicker && this.hoverWX !== null
+    this.dayLine.visible = show
+    this.dayLabel.visible = show
+    if (!show || this.hoverWX === null) return
+    const x = this.hoverWX
+    const h = this.maxAbsY + 40
+    this.dayLine.clear()
+    this.dayLine.moveTo(x, -h).lineTo(x, h).stroke({ width: 1.5, color: 0x6ea8ff, alpha: 0.9 })
+    const d = new Date(this.yearStart + Math.min(1, Math.max(0, (x + AXIS_W / 2) / AXIS_W)) * this.span)
+    this.dayLabel.text = `${d.getDate()} ${MONTHS[d.getMonth()]}`
+    this.dayLabel.position.set(x, -h - 6)
   }
 
   private buildCard(ev: EventSummary, anchorX: number, cardY: number): Node {
@@ -253,6 +306,8 @@ export class YearScene implements Scene {
 
   onHover(worldX: number | null, worldY: number): void {
     this.hoveredId = worldX === null ? null : this.hitTest(worldX, worldY)
+    this.hoverWX = worldX
+    if (this.dayPicker) this.renderDay()
   }
 
   update(ctx: FrameContext): void {

@@ -76,6 +76,7 @@ export function AppShell() {
   useEffect(() => {
     let engine: RenderEngine | null = null
     let disposed = false
+    let ctrlDown = false // Ctrl ingedrukt → dag-indicator op de jaar-tijdlijn
 
     const setupLifeline = (): void => {
       if (!engine || !backendRef.current) return
@@ -106,6 +107,7 @@ export function AppShell() {
         if (old) engine.exitScene(old.root, dir, () => old.destroy())
         const scene = new YearScene(engine, backendRef.current, detail)
         sceneRef.current = scene
+        if (ctrlDown) scene.setDayPicker(true)
         revealScene(engine, scene, dir)
         levelRef.current = 'year'
         setUiLevel('year')
@@ -200,6 +202,26 @@ export function AppShell() {
     }
     window.addEventListener('keydown', onKeyDown)
 
+    // Ctrl (in-/uitdrukken) toont/verbergt de dag-indicator op de jaar-tijdlijn.
+    const onCtrlKey = (e: KeyboardEvent): void => {
+      if (e.key !== 'Control') return
+      const down = e.type === 'keydown'
+      if (ctrlDown === down) return
+      ctrlDown = down
+      if (levelRef.current === 'year') sceneRef.current?.setDayPicker?.(down)
+    }
+    window.addEventListener('keydown', onCtrlKey)
+    window.addEventListener('keyup', onCtrlKey)
+
+    // Vensterfocus verliezen (bijv. Alt-Tab met Ctrl ingedrukt) → de keyup mist,
+    // waardoor de indicator/tap-modus "aan" zou blijven. Reset op blur.
+    const onBlur = (): void => {
+      if (!ctrlDown) return
+      ctrlDown = false
+      if (levelRef.current === 'year') sceneRef.current?.setDayPicker?.(false)
+    }
+    window.addEventListener('blur', onBlur)
+
     const loadYears = async (): Promise<void> => {
       if (!backendRef.current) return
       const years = await backendRef.current.listYears()
@@ -246,6 +268,14 @@ export function AppShell() {
         if (engine?.isTransitioning) return
         const scene = sceneRef.current
         const level = levelRef.current
+
+        // Ctrl+klik op de jaar-tijdlijn → nieuw event op de datum onder de cursor.
+        if (level === 'year' && ctrlDown) {
+          const date = scene?.dateAt?.(wx)
+          if (date) setEventForm({ mode: 'create', title: '', startAt: date, endAt: '' })
+          return
+        }
+
         const hit = scene?.hitTest?.(wx, wy) ?? null
 
         // L3-focus: klik óp de foto = vorige/volgende (linker-/rechterhelft),
@@ -284,6 +314,9 @@ export function AppShell() {
     return () => {
       disposed = true
       window.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('keydown', onCtrlKey)
+      window.removeEventListener('keyup', onCtrlKey)
+      window.removeEventListener('blur', onBlur)
       if (searchTimerRef.current) window.clearTimeout(searchTimerRef.current)
       sceneRef.current?.destroy()
       sceneRef.current = null
