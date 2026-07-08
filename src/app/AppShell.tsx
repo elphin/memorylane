@@ -7,7 +7,9 @@ import { useEffect, useRef, useState } from 'react'
 import type { Backend, YearSummary } from '../lib/backend'
 import { createBackend } from '../lib/backend'
 import { RenderEngine } from '../render/core/engine'
+import type { Item } from '../lib/backend'
 import { EventScene } from '../render/scenes/event'
+import { FocusScene } from '../render/scenes/focus'
 import { LifelineScene } from '../render/scenes/lifeline'
 import type { Scene } from '../render/scenes/scene'
 import { YearScene } from '../render/scenes/year'
@@ -23,8 +25,10 @@ export function AppShell() {
   const backendRef = useRef<Backend | null>(null)
   const sceneRef = useRef<Scene | null>(null)
   const yearsRef = useRef<YearSummary[]>([])
-  const levelRef = useRef<'lifeline' | 'year' | 'event'>('lifeline')
+  const levelRef = useRef<'lifeline' | 'year' | 'event' | 'focus'>('lifeline')
   const currentYearRef = useRef<string | null>(null)
+  const currentEventRef = useRef<string | null>(null)
+  const currentItemsRef = useRef<Item[]>([])
   const entryZoomRef = useRef(1)
   const enterSeqRef = useRef(0)
   const enteringRef = useRef(false)
@@ -84,6 +88,8 @@ export function AppShell() {
           })
         })
         levelRef.current = 'event'
+        currentEventRef.current = eventId
+        currentItemsRef.current = detail.items
         entryZoomRef.current = engine.camera.zoom
       } catch (e) {
         if (!disposed) {
@@ -93,6 +99,19 @@ export function AppShell() {
       } finally {
         enteringRef.current = false
       }
+    }
+
+    const enterFocus = (itemId: string): void => {
+      if (!engine || !backendRef.current) return
+      const items = currentItemsRef.current
+      const index = items.findIndex((it) => it.id === itemId)
+      if (index < 0) return
+      enterSeqRef.current++ // eventuele in-flight enter invalideren
+      sceneRef.current?.destroy()
+      sceneRef.current = null
+      sceneRef.current = new FocusScene(engine, backendRef.current, items, index)
+      levelRef.current = 'focus'
+      entryZoomRef.current = engine.camera.zoom
     }
 
     const loadYears = async (): Promise<void> => {
@@ -127,14 +146,19 @@ export function AppShell() {
             setupLifeline()
           } else if (levelRef.current === 'event' && currentYearRef.current) {
             void enterYear(currentYearRef.current)
+          } else if (levelRef.current === 'focus' && currentEventRef.current) {
+            void enterEvent(currentEventRef.current)
           }
         }
       }
       engine.onTap = (wx, wy) => {
+        // FocusScene.hitTest verwerkt links/rechts-tik zelf (sibling-nav) en
+        // geeft null terug; de andere niveaus navigeren op het geraakte id.
         const hit = sceneRef.current?.hitTest?.(wx, wy)
         if (!hit) return
         if (levelRef.current === 'lifeline') void enterYear(hit)
         else if (levelRef.current === 'year') void enterEvent(hit)
+        else if (levelRef.current === 'event') enterFocus(hit)
       }
 
       try {

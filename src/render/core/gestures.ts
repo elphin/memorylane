@@ -150,11 +150,15 @@ export class GestureController {
     if (this.pointers.size < 2) {
       this.pinchDist = 0
     }
-    // Object-sleep afronden (geen tap, geen inertie).
+    // Object-sleep afronden. Bewoog het nauwelijks → tap (bijv. item aantikken
+    // om in te zoomen naar L3), anders een echte sleep (geen tap, geen inertie).
     if (this.dragTarget && this.pointers.size === 0) {
+      const p = this.localPos(e)
+      const moved = Math.hypot(p.x - this.downPos.x, p.y - this.downPos.y)
       this.dragTarget.end()
       this.dragTarget = null
       this.dragging = false
+      if (e.pointerId === this.downId && moved < 6) this.onTap?.(p.x, p.y)
       return
     }
     if (this.pointers.size === 0 && this.dragging) {

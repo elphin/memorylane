@@ -168,8 +168,13 @@ export class EventScene implements Scene {
             n.x = mx + offX
             n.y = my + offY
             n.container.position.set(n.x, n.y)
-            // Pas als echt verplaatst (drempel) telt het als een drag → write.
-            if (!moved && Math.hypot(n.x - startX, n.y - startY) > 3) moved = true
+            // Pas als echt verplaatst telt het als een drag → write. De drempel
+            // is zoom-geschaald zodat hij overeenkomt met de 6px-scherm-tapdrempel
+            // in de gesture-controller (world = screen / zoom). Anders zou een tik
+            // met lichte jitter bij uitgezoomd L2 zowel persist ALS onTap (→L3)
+            // triggeren én het item ongewild verschuiven.
+            const dragPx = 6 / this.engine.camera.zoom
+            if (!moved && Math.hypot(n.x - startX, n.y - startY) > dragPx) moved = true
           },
           end: () => {
             if (moved) this.persist()

@@ -119,7 +119,9 @@ v1's formaat blijft leesbaar; v2 breidt uit zodat de vault volledig is:
 - Automatische collage (eerst: grid + jitter), drag met physics, tekstblokjes/trefwoorden, knijp-uit, swipe naar volgend event.
 - **Canvas-layout write-through in déze fase** (`_canvas.json` persisteren).
 
-**Fase 7 — L3 focus + viewers**
+**Fase 7 — L3 focus + viewers** ✅ *kern afgerond & gecommit (GO; voltooit L0–L3)*
+- Gebouwd: L3 FocusScene (foto contain-fit groot, tekstkaart groot, caption), sibling-navigatie (pijltjestoetsen + tik links/rechts), L2↔L3-transities. Gesture-fix: tik-op-item telt als tap (voor L2→L3) mét zoom-geschaalde drag-drempel zodat tap en drag elkaar uitsluiten.
+- Uitgesteld: 2048-tier voor 4K/HEIC (nu 1024), échte Audio/Link-viewers (audio → placeholder, link → tekstkaart; playback/URL-opening als DOM-overlays komt later), video-playback.
 - Focus-view (2048-tier / on-demand JPEG voor HEIC) + sibling-navigatie; geporte viewers (Photo/Audio/Link/Text) integreren.
 
 **Fase 8 — Toevoegen & bewerken (write-through naar vault)**
