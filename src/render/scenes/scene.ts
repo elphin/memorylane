@@ -7,5 +7,7 @@ export interface Scene {
   update(ctx: FrameContext): void
   /** Geeft een id terug voor het geraakte object (jaar/event), of null. */
   hitTest?(worldX: number, worldY: number): string | null
+  /** Id van het momenteel gefocuste item (alleen L3), voor bijv. verwijderen. */
+  currentId?(): string | null
   destroy(): void
 }

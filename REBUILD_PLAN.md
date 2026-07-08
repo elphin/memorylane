@@ -124,7 +124,9 @@ v1's formaat blijft leesbaar; v2 breidt uit zodat de vault volledig is:
 - Uitgesteld: 2048-tier voor 4K/HEIC (nu 1024), échte Audio/Link-viewers (audio → placeholder, link → tekstkaart; playback/URL-opening als DOM-overlays komt later), video-playback.
 - Focus-view (2048-tier / on-demand JPEG voor HEIC) + sibling-navigatie; geporte viewers (Photo/Audio/Link/Text) integreren.
 
-**Fase 8 — Toevoegen & bewerken (write-through naar vault)**
+**Fase 8 — Toevoegen & bewerken (write-through naar vault)** ✅ *kern-deel afgerond & gecommit (GO)*
+- Gebouwd: tekst-notitie toevoegen (L2), event aanmaken (L1), item verwijderen → **OS-prullenbak** (omkeerbaar). Schrijfpad file-first + rescan; unieke slugs (item én event, id-suffix); YAML-quoting hardened; pad-containment bij trash; gedeelde-media-bescherming; lokale datum. Context-afhankelijke FAB + composer-overlays.
+- Uitgesteld (rest van fase 8): **foto-import met media-kopie** (QuickAdd drag&drop), bestaand item bewerken/hernoemen, event-properties-dialog, featured-foto-keuze.
 - QuickAdd, event-properties, featured-foto-keuze, edit; delete → **prullenbak**.
 - Schrijfpad: eerst bestand, dan index (volgorde van v1; semantiek níet): **unieke slugs verplicht** (v1 had collision-overschrijving, `writer.ts:345`), rename behoudt ID-suffix in medianamen.
 

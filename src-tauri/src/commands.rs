@@ -116,6 +116,90 @@ impl VaultService {
         media::thumbs::ensure_thumb(&src, tier, cache_root, &hash).map_err(|e| e.to_string())
     }
 
+    fn current_vault(&self) -> Result<PathBuf, String> {
+        self.vault_path
+            .lock()
+            .map_err(lock_err)?
+            .clone()
+            .ok_or_else(|| "geen vault ingesteld".to_string())
+    }
+
+    /// Herindexeert het huidige vault-pad (na een structurele wijziging).
+    fn rescan(&self) -> Result<(), String> {
+        let path = self.current_vault()?;
+        let model = vault::scan(&path);
+        let mut conn = self.conn.lock().map_err(lock_err)?;
+        index::load(&mut conn, &model).map_err(|e| e.to_string())
+    }
+
+    /// Voegt een tekst-notitie toe aan een event (file first, dan herindexeren).
+    pub fn create_text_item(
+        &self,
+        event_id: &str,
+        caption: Option<&str>,
+        body: &str,
+    ) -> Result<String, String> {
+        let vault = self.current_vault()?;
+        let folder = {
+            let conn = self.conn.lock().map_err(lock_err)?;
+            index::event_folder(&conn, event_id)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("event {event_id} niet gevonden"))?
+        };
+        let (id, _slug) =
+            writer::create_text_item(&vault, &folder, caption, body).map_err(|e| e.to_string())?;
+        self.rescan()?;
+        Ok(id)
+    }
+
+    /// Maakt een nieuw event in een jaar (file first, dan herindexeren).
+    pub fn create_event(
+        &self,
+        year_id: &str,
+        title: &str,
+        start_at: &str,
+    ) -> Result<String, String> {
+        let vault = self.current_vault()?;
+        let year_folder = {
+            let conn = self.conn.lock().map_err(lock_err)?;
+            index::year_folder(&conn, year_id)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("jaar {year_id} niet gevonden"))?
+        };
+        let (id, _folder) =
+            writer::create_event(&vault, &year_folder, title, start_at).map_err(|e| e.to_string())?;
+        self.rescan()?;
+        Ok(id)
+    }
+
+    /// Verwijdert een item naar de prullenbak (`.md` + media), dan herindexeren.
+    pub fn delete_item(&self, item_id: &str) -> Result<(), String> {
+        let vault = self.current_vault()?;
+        let (event_id, folder, slug, media) = {
+            let conn = self.conn.lock().map_err(lock_err)?;
+            index::item_files(&conn, item_id)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("item {item_id} niet gevonden"))?
+        };
+        if let Some(slug) = slug {
+            writer::trash_file(&vault, &format!("{folder}/{slug}.md"))?;
+        }
+        if let Some(media) = media {
+            // Trash het mediabestand alleen als geen ánder item ernaar verwijst.
+            // Door de v1-duplicate-`.md`-bug kunnen twee items dezelfde media
+            // delen; dan zou trashen een overlevend item breken.
+            let shared = {
+                let conn = self.conn.lock().map_err(lock_err)?;
+                index::media_shared(&conn, &event_id, &media, item_id).map_err(|e| e.to_string())?
+            };
+            if !shared {
+                writer::trash_file(&vault, &format!("{folder}/{media}"))?;
+            }
+        }
+        self.rescan()?;
+        Ok(())
+    }
+
     /// Schrijft de canvas-layout van een event naar `_canvas.json` (file first)
     /// en werkt de index bij. De folder komt uit de index (vertrouwd, uit de scan).
     pub fn save_canvas(&self, event_id: &str, items: Vec<CanvasItem>) -> Result<(), String> {
@@ -308,6 +392,31 @@ pub fn save_canvas_layout(
         })
         .collect();
     state.save_canvas(&event_id, canvas_items)
+}
+
+#[tauri::command]
+pub fn create_text_item(
+    state: State<VaultService>,
+    event_id: String,
+    caption: Option<String>,
+    body: String,
+) -> Result<String, String> {
+    state.create_text_item(&event_id, caption.as_deref(), &body)
+}
+
+#[tauri::command]
+pub fn create_event(
+    state: State<VaultService>,
+    year_id: String,
+    title: String,
+    start_at: String,
+) -> Result<String, String> {
+    state.create_event(&year_id, &title, &start_at)
+}
+
+#[tauri::command]
+pub fn delete_item(state: State<VaultService>, item_id: String) -> Result<(), String> {
+    state.delete_item(&item_id)
 }
 
 #[tauri::command]

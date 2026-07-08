@@ -444,12 +444,62 @@ pub fn list_year_photos(conn: &Connection, year_id: &str) -> rusqlite::Result<Ve
     rows.collect()
 }
 
+/// Bestandsinfo van een item voor verwijderen: (event_id, folder_path, slug, media).
+pub type ItemFiles = (String, String, Option<String>, Option<String>);
+
+pub fn item_files(conn: &Connection, item_id: &str) -> rusqlite::Result<Option<ItemFiles>> {
+    Ok(conn
+        .query_row(
+            "SELECT i.event_id, e.folder_path, i.slug, i.media
+             FROM items i JOIN events e ON i.event_id = e.id WHERE i.id = ?1",
+            params![item_id],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                    r.get::<_, Option<String>>(3)?,
+                ))
+            },
+        )
+        .ok())
+}
+
+/// Verwijst een ánder item in hetzelfde event naar hetzelfde mediabestand?
+/// Gebruikt bij verwijderen: door de v1-duplicate-`.md`-bug (twee `.md`'s → één
+/// media) mag het trashen van het mediabestand een overlevend item niet breken.
+pub fn media_shared(
+    conn: &Connection,
+    event_id: &str,
+    media: &str,
+    exclude_item_id: &str,
+) -> rusqlite::Result<bool> {
+    let n: i64 = conn.query_row(
+        "SELECT count(*) FROM items
+         WHERE event_id = ?1 AND media = ?2 COLLATE NOCASE AND id != ?3",
+        params![event_id, media, exclude_item_id],
+        |r| r.get(0),
+    )?;
+    Ok(n > 0)
+}
+
 /// Vault-relatieve folder van een event (voor het schrijven van `_canvas.json`).
 pub fn event_folder(conn: &Connection, event_id: &str) -> rusqlite::Result<Option<String>> {
     Ok(conn
         .query_row(
             "SELECT folder_path FROM events WHERE id = ?1",
             params![event_id],
+            |r| r.get::<_, String>(0),
+        )
+        .ok())
+}
+
+/// Mapnaam van een jaar (voor het aanmaken van een event daarin).
+pub fn year_folder(conn: &Connection, year_id: &str) -> rusqlite::Result<Option<String>> {
+    Ok(conn
+        .query_row(
+            "SELECT folder_name FROM years WHERE id = ?1",
+            params![year_id],
             |r| r.get::<_, String>(0),
         )
         .ok())

@@ -129,6 +129,9 @@ export interface Backend {
   getYearPhotos(yearId: string): Promise<YearPhoto[]>
   getEvent(eventId: string): Promise<EventDetail | null>
   saveCanvasLayout(eventId: string, items: CanvasLayoutInput[]): Promise<void>
+  createTextItem(eventId: string, caption: string | null, body: string): Promise<string>
+  createEvent(yearId: string, title: string, startAt: string): Promise<string>
+  deleteItem(itemId: string): Promise<void>
   thumb(itemId: string, size: 64 | 128 | 256 | 1024 | 2048): ThumbSource
 }
 
@@ -207,6 +210,21 @@ class TauriBackend implements Backend {
     await invoke('save_canvas_layout', { eventId, items })
   }
 
+  async createTextItem(eventId: string, caption: string | null, body: string): Promise<string> {
+    const invoke = await this.api()
+    return await invoke<string>('create_text_item', { eventId, caption, body })
+  }
+
+  async createEvent(yearId: string, title: string, startAt: string): Promise<string> {
+    const invoke = await this.api()
+    return await invoke<string>('create_event', { yearId, title, startAt })
+  }
+
+  async deleteItem(itemId: string): Promise<void> {
+    const invoke = await this.api()
+    await invoke('delete_item', { itemId })
+  }
+
   thumb(itemId: string, size: number): ThumbSource {
     return { url: thumbUrl(itemId, size) }
   }
@@ -231,6 +249,8 @@ class MockBackend implements Backend {
   private years: YearSummary[]
   private details = new Map<string, YearDetail>()
   private density = new Map<string, DensityPoint[]>()
+  private adds = new Map<string, Item[]>()
+  private deleted = new Set<string>()
 
   constructor() {
     const specs = [1969, 1971, 2022, 2023, 2024, 2025]
@@ -288,7 +308,7 @@ class MockBackend implements Backend {
   }
   async getEvent(eventId: string): Promise<EventDetail | null> {
     const n = 6 + (hueFor(eventId) % 7)
-    const items: Item[] = Array.from({ length: n }, (_, i) => ({
+    const base: Item[] = Array.from({ length: n }, (_, i) => ({
       id: `${eventId}-i${i}`,
       eventId,
       itemType: i === 0 ? ('text' as const) : ('photo' as const),
@@ -297,6 +317,7 @@ class MockBackend implements Backend {
       caption: `Foto ${i}`,
       slug: `${eventId}-i${i}`,
     }))
+    const items = [...base, ...(this.adds.get(eventId) ?? [])].filter((it) => !this.deleted.has(it.id))
     return {
       event: { id: eventId, kind: 'event', title: 'Gebeurtenis', startAt: '2024-06-15', folderPath: 'mock' },
       items,
@@ -305,6 +326,19 @@ class MockBackend implements Backend {
   }
   async saveCanvasLayout(): Promise<void> {
     /* mock: geen persistentie */
+  }
+  async createTextItem(eventId: string, caption: string | null, body: string): Promise<string> {
+    const id = `${eventId}-add${(this.adds.get(eventId)?.length ?? 0)}`
+    const list = this.adds.get(eventId) ?? []
+    list.push({ id, eventId, itemType: 'text', caption: caption ?? undefined, bodyText: body, slug: id })
+    this.adds.set(eventId, list)
+    return id
+  }
+  async createEvent(yearId: string, _title: string, _startAt: string): Promise<string> {
+    return `${yearId}-newevent`
+  }
+  async deleteItem(itemId: string): Promise<void> {
+    this.deleted.add(itemId)
   }
   thumb(itemId: string): ThumbSource {
     return { hue: hueFor(itemId) }

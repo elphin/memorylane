@@ -104,6 +104,9 @@ pub fn run() {
             commands::get_timeline_density,
             commands::get_year_photos,
             commands::save_canvas_layout,
+            commands::create_text_item,
+            commands::create_event,
+            commands::delete_item,
             commands::get_index_errors,
         ])
         .run(tauri::generate_context!())

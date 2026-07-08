@@ -11,6 +11,199 @@ use serde::Serialize;
 
 use crate::model::CanvasItem;
 
+// ---- Slug- en YAML-helpers (port van v1 generator.ts) --------------------
+
+/// URL-veilige slug uit tekst (ascii, lowercase, streepjes).
+pub fn generate_slug(text: &str, max_len: usize) -> String {
+    let mut out = String::new();
+    let mut prev_dash = false;
+    for ch in text.to_lowercase().chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch);
+            prev_dash = false;
+        } else if !prev_dash && !out.is_empty() {
+            out.push('-');
+            prev_dash = true;
+        }
+    }
+    let trimmed = out.trim_matches('-');
+    let sliced: String = trimmed.chars().take(max_len).collect();
+    let sliced = sliced.trim_matches('-').to_string();
+    if sliced.is_empty() {
+        "untitled".to_string()
+    } else {
+        sliced
+    }
+}
+
+/// Unieke slug = basis + korte id-suffix (voorkomt collisions — v1-bug).
+pub fn generate_unique_slug(text: &str, id: &str) -> String {
+    let base = generate_slug(text, 40);
+    let short: String = id.chars().filter(|c| *c != '-').take(8).collect();
+    format!("{base}_{short}")
+}
+
+/// Sanitiseert een mapnaam (Windows-onveilige tekens → `_`).
+fn sanitize_folder(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(|c| match c {
+            '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => '_',
+            c => c,
+        })
+        .collect();
+    let trimmed = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
+    let sliced: String = trimmed.chars().take(100).collect();
+    if sliced.trim().is_empty() {
+        "unnamed".to_string()
+    } else {
+        sliced.trim().to_string()
+    }
+}
+
+/// Quote een YAML-scalar als nodig (spiegelt v1 formatYamlValue).
+fn yaml_str(v: &str) -> String {
+    let needs = v.contains(':')
+        || v.contains('#')
+        || v.contains('\n')
+        // Leidende indicator-tekens: zonder quotes leest de eigen parser deze
+        // verkeerd terug (bijv. `[done]` → flow-seq → titel weg; `"hi"` →
+        // ontdubbelquote → quotes weg). Quoten garandeert de round-trip.
+        || v.starts_with('[')
+        || v.starts_with('{')
+        || v.starts_with('"')
+        || v.starts_with('\'')
+        || v.starts_with(' ')
+        || v.ends_with(' ')
+        || v == "true"
+        || v == "false"
+        || v == "null"
+        || v.parse::<f64>().is_ok();
+    if needs {
+        format!("\"{}\"", v.replace('"', "\\\""))
+    } else {
+        v.to_string()
+    }
+}
+
+fn now_iso() -> String {
+    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
+
+// ---- Markdown-generatie --------------------------------------------------
+
+/// Markdown voor een tekst-item (`<slug>.md`).
+pub fn text_item_markdown(id: &str, caption: Option<&str>, body: &str, category: Option<&str>) -> String {
+    let now = now_iso();
+    let mut fm = format!("---\nid: {id}\ntype: text\n");
+    if let Some(c) = caption {
+        fm.push_str(&format!("caption: {}\n", yaml_str(c)));
+    }
+    if let Some(cat) = category {
+        fm.push_str(&format!("category: {}\n", yaml_str(cat)));
+    }
+    fm.push_str(&format!("createdAt: {}\n", yaml_str(&now)));
+    fm.push_str(&format!("updatedAt: {}\n", yaml_str(&now)));
+    fm.push_str("---\n");
+    let body = body.trim();
+    if body.is_empty() {
+        fm
+    } else {
+        format!("{fm}\n{body}\n")
+    }
+}
+
+/// Markdown voor een event (`_event.md`).
+pub fn event_markdown(id: &str, title: &str, start_at: &str) -> String {
+    let now = now_iso();
+    format!(
+        "---\nid: {id}\ntype: event\ntitle: {}\nstartAt: {}\ncreatedAt: {}\nupdatedAt: {}\n---\n",
+        yaml_str(title),
+        yaml_str(start_at),
+        yaml_str(&now),
+        yaml_str(&now),
+    )
+}
+
+// ---- Schrijf-operaties ---------------------------------------------------
+
+fn write_atomic(path: &Path, content: &str) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let tmp = path.with_extension(format!("tmp.{}", std::process::id()));
+    std::fs::write(&tmp, content)?;
+    std::fs::rename(&tmp, path)?;
+    Ok(())
+}
+
+/// Maakt een tekst-item in een eventmap. Geeft (id, slug) terug.
+pub fn create_text_item(
+    vault_root: &Path,
+    folder_path: &str,
+    caption: Option<&str>,
+    body: &str,
+) -> std::io::Result<(String, String)> {
+    let id = uuid::Uuid::new_v4().to_string();
+    let slug = generate_unique_slug(caption.unwrap_or("notitie"), &id);
+    let md = text_item_markdown(&id, caption, body, None);
+    let path = vault_root.join(folder_path).join(format!("{slug}.md"));
+    write_atomic(&path, &md)?;
+    Ok((id, slug))
+}
+
+/// Maakt een event in een jaarmap. Geeft (id, folder_path) terug.
+///
+/// De mapnaam wordt uniek gemaakt: twee events met dezelfde titel én datum
+/// zouden anders dezelfde map delen en zou de tweede `create_event` het
+/// `_event.md` (de identiteit) van het bestaande event overschrijven — stil
+/// dataverlies (het plan eist expliciet unieke slugs, `writer.ts:345`).
+pub fn create_event(
+    vault_root: &Path,
+    year_folder: &str,
+    title: &str,
+    start_at: &str,
+) -> std::io::Result<(String, String)> {
+    let id = uuid::Uuid::new_v4().to_string();
+    let base_name = format!("{start_at} {}", sanitize_folder(title));
+    let folder_path = unique_event_folder(vault_root, year_folder, &base_name, &id);
+    let md = event_markdown(&id, title, start_at);
+    let path = vault_root.join(&folder_path).join("_event.md");
+    write_atomic(&path, &md)?;
+    Ok((id, folder_path))
+}
+
+/// Kiest een niet-bestaande eventmap: eerst de kale `{jaar}/{basis}`; bij een
+/// collisie een korte id-suffix erachter (nieuw uuid per event → uniek).
+fn unique_event_folder(vault_root: &Path, year_folder: &str, base_name: &str, id: &str) -> String {
+    let candidate = format!("{year_folder}/{base_name}");
+    if !vault_root.join(&candidate).exists() {
+        return candidate;
+    }
+    let short: String = id.chars().filter(|c| *c != '-').take(8).collect();
+    format!("{year_folder}/{base_name} {short}")
+}
+
+/// Verplaatst een bestand naar de OS-prullenbak (omkeerbaar).
+///
+/// Containment: `relative` kan (deels) uit onvertrouwde frontmatter komen — het
+/// `media:`-veld van een item is vrije tekst en kan `../` bevatten. Zonder
+/// controle zou `trash_file` een bestand *buiten* de vault naar de prullenbak
+/// kunnen verplaatsen. We canonicaliseren en eisen dat het doel binnen de vault
+/// ligt (zelfde bescherming als `resolve_thumb`).
+pub fn trash_file(vault_root: &Path, relative: &str) -> Result<(), String> {
+    let path = vault_root.join(relative);
+    if !path.exists() {
+        return Ok(());
+    }
+    let canon = std::fs::canonicalize(&path).map_err(|e| e.to_string())?;
+    let canon_vault = std::fs::canonicalize(vault_root).map_err(|e| e.to_string())?;
+    if !canon.starts_with(&canon_vault) {
+        return Err(format!("bestand buiten de vault geweigerd: {relative}"));
+    }
+    trash::delete(&canon).map_err(|e| e.to_string())
+}
+
 #[derive(Serialize)]
 struct CanvasEntry<'a> {
     #[serde(rename = "itemSlug")]
@@ -97,6 +290,90 @@ mod tests {
         assert!(json.contains("\"version\": 1"));
         assert!(json.contains("\"itemSlug\": \"foto\""));
         assert!(json.contains("\"zIndex\": 0"));
+    }
+
+    #[test]
+    fn slug_is_ascii_safe_and_unique() {
+        assert_eq!(generate_slug("Café op 't Plein!", 40), "caf-op-t-plein");
+        assert_eq!(generate_slug("", 40), "untitled");
+        let u = generate_unique_slug("Mooie dag", "66586b1f-bde2-4a1f");
+        assert!(u.starts_with("mooie-dag_"));
+        assert!(u.ends_with("66586b1f"));
+    }
+
+    #[test]
+    fn text_item_markdown_is_parseable() {
+        let md = text_item_markdown("id1", Some("Titel: met dubbele punt"), "De body.\n", None);
+        let parsed = crate::vault::frontmatter::parse(&md);
+        assert_eq!(parsed.get_str("id").unwrap(), "id1");
+        assert_eq!(parsed.get_str("type").unwrap(), "text");
+        assert_eq!(parsed.get_str("caption").unwrap(), "Titel: met dubbele punt");
+        assert_eq!(parsed.body, "De body.");
+    }
+
+    #[test]
+    fn create_text_item_writes_readable_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("2024/ev")).unwrap();
+        let (id, slug) = create_text_item(root, "2024/ev", Some("Notitie"), "Hallo").unwrap();
+        let content = std::fs::read_to_string(root.join(format!("2024/ev/{slug}.md"))).unwrap();
+        let parsed = crate::vault::frontmatter::parse(&content);
+        assert_eq!(parsed.get_str("id").unwrap(), id);
+        assert_eq!(parsed.body, "Hallo");
+    }
+
+    #[test]
+    fn bracket_title_roundtrips_via_frontmatter() {
+        // `[done]` zou zonder quotes als flow-seq gelezen worden → titel weg.
+        let md = event_markdown("id1", "[done]", "2024-07-01");
+        let parsed = crate::vault::frontmatter::parse(&md);
+        assert_eq!(parsed.get_str("title").unwrap(), "[done]");
+        // Ook letterlijke quotes in een titel moeten overleven.
+        let md2 = event_markdown("id2", "\"Zomer\"", "2024-07-01");
+        let parsed2 = crate::vault::frontmatter::parse(&md2);
+        assert_eq!(parsed2.get_str("title").unwrap(), "\"Zomer\"");
+    }
+
+    #[test]
+    fn create_event_does_not_overwrite_existing_event() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let (id1, folder1) = create_event(root, "2024", "Verjaardag", "2024-07-01").unwrap();
+        let (id2, folder2) = create_event(root, "2024", "Verjaardag", "2024-07-01").unwrap();
+        assert_ne!(folder1, folder2, "tweede event mag niet dezelfde map delen");
+        // Beide _event.md's bestaan nog met hun eigen identiteit.
+        let c1 = std::fs::read_to_string(root.join(&folder1).join("_event.md")).unwrap();
+        let c2 = std::fs::read_to_string(root.join(&folder2).join("_event.md")).unwrap();
+        assert!(c1.contains(&id1));
+        assert!(c2.contains(&id2));
+    }
+
+    #[test]
+    fn trash_file_rejects_path_outside_vault() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vault = tmp.path().join("vault");
+        std::fs::create_dir_all(vault.join("2024/ev")).unwrap();
+        // Bestand buiten de vault dat een gecraft media-veld zou willen trashen.
+        std::fs::write(tmp.path().join("secret.txt"), "geheim").unwrap();
+        let res = trash_file(&vault, "2024/ev/../../../secret.txt");
+        assert!(res.is_err(), "pad buiten de vault moet geweigerd worden");
+        assert!(
+            tmp.path().join("secret.txt").exists(),
+            "het externe bestand mag niet getrasht zijn"
+        );
+    }
+
+    #[test]
+    fn create_event_makes_folder_and_md() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let (id, folder) = create_event(root, "2024", "Vakantie: Spanje", "2024-07-01").unwrap();
+        assert_eq!(folder, "2024/2024-07-01 Vakantie_ Spanje");
+        let content = std::fs::read_to_string(root.join(&folder).join("_event.md")).unwrap();
+        let parsed = crate::vault::frontmatter::parse(&content);
+        assert_eq!(parsed.get_str("id").unwrap(), id);
+        assert_eq!(parsed.get_str("title").unwrap(), "Vakantie: Spanje");
     }
 
     #[test]

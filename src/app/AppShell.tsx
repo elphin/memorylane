@@ -20,6 +20,16 @@ export function AppShell() {
   const hostRef = useRef<HTMLDivElement>(null)
   const [phase, setPhase] = useState<Phase>('loading')
   const [message, setMessage] = useState('')
+  const [uiLevel, setUiLevel] = useState<'lifeline' | 'year' | 'event' | 'focus'>('lifeline')
+  const [modal, setModal] = useState<null | 'note' | 'event'>(null)
+  const [draft, setDraft] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const enterEventRef = useRef<(id: string) => void>(() => {})
+  const enterYearRef = useRef<(id: string) => void>(() => {})
+  // Re-entrancy-slot voor mutaties: `busy`-state is niet betrouwbaar tegen een
+  // dubbele klik binnen dezelfde tick (stale closure) — een ref wel.
+  const mutatingRef = useRef(false)
 
   const engineRef = useRef<RenderEngine | null>(null)
   const backendRef = useRef<Backend | null>(null)
@@ -44,6 +54,7 @@ export function AppShell() {
       sceneRef.current?.destroy()
       sceneRef.current = new LifelineScene(engine, backendRef.current, yearsRef.current)
       levelRef.current = 'lifeline'
+      setUiLevel('lifeline')
     }
 
     const enterYear = async (yearId: string): Promise<void> => {
@@ -57,6 +68,7 @@ export function AppShell() {
         sceneRef.current = null
         sceneRef.current = new YearScene(engine, backendRef.current, photos)
         levelRef.current = 'year'
+        setUiLevel('year')
         currentYearRef.current = yearId
         entryZoomRef.current = engine.camera.zoom
       } catch (e) {
@@ -88,6 +100,7 @@ export function AppShell() {
           })
         })
         levelRef.current = 'event'
+        setUiLevel('event')
         currentEventRef.current = eventId
         currentItemsRef.current = detail.items
         entryZoomRef.current = engine.camera.zoom
@@ -111,8 +124,12 @@ export function AppShell() {
       sceneRef.current = null
       sceneRef.current = new FocusScene(engine, backendRef.current, items, index)
       levelRef.current = 'focus'
+      setUiLevel('focus')
       entryZoomRef.current = engine.camera.zoom
     }
+
+    enterYearRef.current = (id) => void enterYear(id)
+    enterEventRef.current = (id) => void enterEvent(id)
 
     const loadYears = async (): Promise<void> => {
       if (!backendRef.current) return
@@ -212,12 +229,227 @@ export function AppShell() {
     }
   }
 
+  const submitNote = async (): Promise<void> => {
+    const eventId = currentEventRef.current
+    const backend = backendRef.current
+    if (!eventId || !backend || !draft.trim()) {
+      setModal(null)
+      return
+    }
+    setBusy(true)
+    try {
+      await backend.createTextItem(eventId, null, draft.trim())
+      enterEventRef.current(eventId)
+      setModal(null)
+      setDraft('')
+    } catch (e) {
+      setMessage(String(e))
+      setPhase('error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const submitEvent = async (): Promise<void> => {
+    const yearId = currentYearRef.current
+    const backend = backendRef.current
+    if (!yearId || !backend || !draft.trim()) {
+      setModal(null)
+      return
+    }
+    setBusy(true)
+    try {
+      // Lokale datum (niet toISOString/UTC): rond middernacht zou UTC de
+      // vorige dag — en op 1 jan zelfs het vorige jaar — kunnen opleveren,
+      // wat het event op de verkeerde dag/in het verkeerde jaar zou zetten.
+      const now = new Date()
+      const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(
+        now.getDate(),
+      ).padStart(2, '0')}`
+      await backend.createEvent(yearId, draft.trim(), today)
+      enterYearRef.current(yearId)
+      setModal(null)
+      setDraft('')
+    } catch (e) {
+      setMessage(String(e))
+      setPhase('error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const deleteCurrent = async (): Promise<void> => {
+    const backend = backendRef.current
+    const id = sceneRef.current?.currentId?.()
+    const eventId = currentEventRef.current
+    if (!backend || !id || mutatingRef.current) return
+    if (!window.confirm('Dit item naar de prullenbak verplaatsen?')) return
+    mutatingRef.current = true
+    setBusy(true)
+    try {
+      await backend.deleteItem(id)
+      if (eventId) enterEventRef.current(eventId)
+    } catch (e) {
+      setMessage(String(e))
+      setPhase('error')
+    } finally {
+      mutatingRef.current = false
+      setBusy(false)
+    }
+  }
+
   return (
     <div style={{ position: 'fixed', inset: 0 }}>
       <div ref={hostRef} style={{ position: 'absolute', inset: 0 }} />
       {phase !== 'ready' && <Overlay phase={phase} message={message} onPick={() => void pickVault()} />}
+      {phase === 'ready' && !modal && (
+        <Fab
+          uiLevel={uiLevel}
+          onAddEvent={() => setModal('event')}
+          onAddNote={() => setModal('note')}
+          onDelete={() => void deleteCurrent()}
+        />
+      )}
+      {modal && (
+        <Composer
+          kind={modal}
+          value={draft}
+          busy={busy}
+          onChange={setDraft}
+          onSubmit={() => void (modal === 'note' ? submitNote() : submitEvent())}
+          onCancel={() => {
+            setModal(null)
+            setDraft('')
+          }}
+        />
+      )}
     </div>
   )
+}
+
+function Fab({
+  uiLevel,
+  onAddEvent,
+  onAddNote,
+  onDelete,
+}: {
+  uiLevel: 'lifeline' | 'year' | 'event' | 'focus'
+  onAddEvent: () => void
+  onAddNote: () => void
+  onDelete: () => void
+}) {
+  const wrap: React.CSSProperties = { position: 'absolute', right: 20, bottom: 20, display: 'flex', gap: 10 }
+  if (uiLevel === 'year') {
+    return (
+      <div style={wrap}>
+        <button onClick={onAddEvent} style={fabBtn}>+ Nieuw event</button>
+      </div>
+    )
+  }
+  if (uiLevel === 'event') {
+    return (
+      <div style={wrap}>
+        <button onClick={onAddNote} style={fabBtn}>+ Notitie</button>
+      </div>
+    )
+  }
+  if (uiLevel === 'focus') {
+    return (
+      <div style={wrap}>
+        <button onClick={onDelete} style={{ ...fabBtn, background: '#7f1d1d' }}>Verwijder</button>
+      </div>
+    )
+  }
+  return null
+}
+
+function Composer({
+  kind,
+  value,
+  busy,
+  onChange,
+  onSubmit,
+  onCancel,
+}: {
+  kind: 'note' | 'event'
+  value: string
+  busy: boolean
+  onChange: (v: string) => void
+  onSubmit: () => void
+  onCancel: () => void
+}) {
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        inset: 0,
+        background: 'rgba(0,0,0,0.55)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+      }}
+    >
+      <div style={{ width: 480, maxWidth: '90%', background: '#161c28', borderRadius: 12, padding: 20 }}>
+        <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 12 }}>
+          {kind === 'note' ? 'Nieuwe notitie' : 'Nieuw event'}
+        </div>
+        {kind === 'note' ? (
+          <textarea
+            autoFocus
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder="Schrijf een herinnering…"
+            style={{ ...field, height: 140, resize: 'vertical' }}
+          />
+        ) : (
+          <input
+            autoFocus
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder="Titel van het event"
+            style={field}
+          />
+        )}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 14 }}>
+          <button onClick={onCancel} style={ghostBtn}>Annuleren</button>
+          <button onClick={onSubmit} disabled={busy || !value.trim()} style={primaryBtn}>
+            {busy ? 'Bezig…' : 'Opslaan'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+const fabBtn: React.CSSProperties = {
+  padding: '10px 16px',
+  borderRadius: 24,
+  border: 'none',
+  background: '#3b82f6',
+  color: '#fff',
+  font: '14px sans-serif',
+  cursor: 'pointer',
+  boxShadow: '0 4px 14px rgba(0,0,0,0.4)',
+}
+
+const field: React.CSSProperties = {
+  width: '100%',
+  boxSizing: 'border-box',
+  padding: '10px 12px',
+  borderRadius: 8,
+  border: '1px solid #2c3650',
+  background: '#0e1420',
+  color: '#fff',
+  font: '15px sans-serif',
+}
+
+const ghostBtn: React.CSSProperties = {
+  padding: '8px 16px',
+  borderRadius: 8,
+  border: '1px solid #2c3650',
+  background: 'transparent',
+  color: '#cfd6e4',
+  cursor: 'pointer',
 }
 
 function Overlay({

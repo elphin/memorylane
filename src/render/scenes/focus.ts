@@ -142,6 +142,10 @@ export class FocusScene implements Scene {
     return null
   }
 
+  currentId(): string | null {
+    return this.current?.id ?? null
+  }
+
   destroy(): void {
     window.removeEventListener('keydown', this.onKey)
     this.root.destroy({ children: true })
