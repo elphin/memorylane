@@ -31,6 +31,7 @@ export function AppShell() {
   const [message, setMessage] = useState('')
   const [uiLevel, setUiLevel] = useState<'lifeline' | 'year' | 'event' | 'focus'>('lifeline')
   const [modal, setModal] = useState<null | 'note' | 'event'>(null)
+  const [editing, setEditing] = useState<null | { id: string; kind: 'text' | 'photo'; value: string }>(null)
   const [draft, setDraft] = useState('')
   const [busy, setBusy] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
@@ -389,6 +390,49 @@ export function AppShell() {
     }
   }
 
+  // Bewerk het huidige item (L3): tekst-notitie → body, foto → caption.
+  const startEdit = (): void => {
+    const id = sceneRef.current?.currentId?.()
+    if (!id) return
+    const item = currentItemsRef.current.find((it) => it.id === id)
+    if (!item) return
+    const isText = item.itemType === 'text' || item.itemType === 'link'
+    setEditing({
+      id,
+      kind: isText ? 'text' : 'photo',
+      value: isText ? (item.bodyText ?? '') : (item.caption ?? ''),
+    })
+  }
+
+  const submitEdit = async (): Promise<void> => {
+    const backend = backendRef.current
+    const eventId = currentEventRef.current
+    const ed = editing
+    if (!backend || !ed || mutatingRef.current) return
+    mutatingRef.current = true
+    setBusy(true)
+    try {
+      // Tekst → body bijwerken; foto → caption bijwerken (het andere veld null).
+      if (ed.kind === 'text') await backend.updateItem(ed.id, null, ed.value)
+      else await backend.updateItem(ed.id, ed.value, null)
+      // Ververs het event en herbouw het focus-item in-place (geen transitie).
+      if (eventId) {
+        const detail = await backend.getEvent(eventId)
+        if (detail) {
+          currentItemsRef.current = detail.items
+          sceneRef.current?.refresh?.(detail.items)
+        }
+      }
+      setEditing(null)
+    } catch (e) {
+      setMessage(String(e))
+      setPhase('error')
+    } finally {
+      mutatingRef.current = false
+      setBusy(false)
+    }
+  }
+
   const runSearch = (q: string): void => {
     setSearchQuery(q)
     if (searchTimerRef.current) window.clearTimeout(searchTimerRef.current)
@@ -419,7 +463,7 @@ export function AppShell() {
     <div style={{ position: 'fixed', inset: 0 }}>
       <div ref={hostRef} style={{ position: 'absolute', inset: 0 }} />
       {phase !== 'ready' && <Overlay phase={phase} message={message} onPick={() => void pickVault()} />}
-      {phase === 'ready' && !modal && !searchOpen && (
+      {phase === 'ready' && !modal && !editing && !searchOpen && (
         <button onClick={() => setSearchOpen(true)} style={searchBtn} title="Zoeken">
           Zoeken…
         </button>
@@ -433,12 +477,13 @@ export function AppShell() {
           onClose={closeSearch}
         />
       )}
-      {phase === 'ready' && !modal && (
+      {phase === 'ready' && !modal && !editing && (
         <Fab
           uiLevel={uiLevel}
           onAddEvent={() => setModal('event')}
           onAddNote={() => setModal('note')}
           onAddPhotos={() => void addPhotos()}
+          onEdit={startEdit}
           onDelete={() => void deleteCurrent()}
         />
       )}
@@ -455,6 +500,16 @@ export function AppShell() {
           }}
         />
       )}
+      {editing && (
+        <EditPanel
+          kind={editing.kind}
+          value={editing.value}
+          busy={busy}
+          onChange={(v) => setEditing({ ...editing, value: v })}
+          onSubmit={() => void submitEdit()}
+          onCancel={() => setEditing(null)}
+        />
+      )}
     </div>
   )
 }
@@ -464,12 +519,14 @@ function Fab({
   onAddEvent,
   onAddNote,
   onAddPhotos,
+  onEdit,
   onDelete,
 }: {
   uiLevel: 'lifeline' | 'year' | 'event' | 'focus'
   onAddEvent: () => void
   onAddNote: () => void
   onAddPhotos: () => void
+  onEdit: () => void
   onDelete: () => void
 }) {
   const wrap: React.CSSProperties = { position: 'absolute', right: 20, bottom: 20, display: 'flex', gap: 10 }
@@ -491,11 +548,70 @@ function Fab({
   if (uiLevel === 'focus') {
     return (
       <div style={wrap}>
+        <button onClick={onEdit} style={fabBtn}>Bewerk</button>
         <button onClick={onDelete} style={{ ...fabBtn, background: '#7f1d1d' }}>Verwijder</button>
       </div>
     )
   }
   return null
+}
+
+function EditPanel({
+  kind,
+  value,
+  busy,
+  onChange,
+  onSubmit,
+  onCancel,
+}: {
+  kind: 'text' | 'photo'
+  value: string
+  busy: boolean
+  onChange: (v: string) => void
+  onSubmit: () => void
+  onCancel: () => void
+}) {
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        inset: 0,
+        background: 'rgba(0,0,0,0.55)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+      }}
+    >
+      <div style={{ width: 480, maxWidth: '90%', background: '#161c28', borderRadius: 12, padding: 20 }}>
+        <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 12 }}>
+          {kind === 'text' ? 'Notitie bewerken' : 'Bijschrift bewerken'}
+        </div>
+        {kind === 'text' ? (
+          <textarea
+            autoFocus
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder="Schrijf een herinnering…"
+            style={{ ...field, height: 200, resize: 'vertical' }}
+          />
+        ) : (
+          <input
+            autoFocus
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder="Bijschrift bij de foto"
+            style={field}
+          />
+        )}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 14 }}>
+          <button onClick={onCancel} style={ghostBtn}>Annuleren</button>
+          <button onClick={onSubmit} disabled={busy} style={primaryBtn}>
+            {busy ? 'Bezig…' : 'Opslaan'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 function Composer({

@@ -154,6 +154,29 @@ impl VaultService {
         Ok(id)
     }
 
+    /// Werkt de caption en/of body van een bestaand item bij (file first, dan
+    /// herindexeren). `caption`/`body` = `None` laat dat veld ongemoeid.
+    pub fn update_item(
+        &self,
+        item_id: &str,
+        caption: Option<&str>,
+        body: Option<&str>,
+    ) -> Result<(), String> {
+        let vault = self.current_vault()?;
+        let (_event_id, folder, slug, _media) = {
+            let conn = self.conn.lock().map_err(lock_err)?;
+            index::item_files(&conn, item_id)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("item {item_id} niet gevonden"))?
+        };
+        // Synthetische items (losse media zonder `.md`) hebben geen bewerkbaar
+        // bestand; die zouden eerst een sidecar nodig hebben (latere fase).
+        let slug = slug.ok_or_else(|| "dit item heeft geen bewerkbaar bestand".to_string())?;
+        writer::update_item(&vault, &folder, &slug, caption, body).map_err(|e| e.to_string())?;
+        self.rescan()?;
+        Ok(())
+    }
+
     /// Importeert foto's (bronpaden van de bestandskiezer) in een event.
     pub fn import_photos(&self, event_id: &str, sources: &[String]) -> Result<usize, String> {
         let vault = self.current_vault()?;
@@ -452,6 +475,16 @@ pub fn create_event(
 #[tauri::command]
 pub fn delete_item(state: State<VaultService>, item_id: String) -> Result<(), String> {
     state.delete_item(&item_id)
+}
+
+#[tauri::command]
+pub fn update_item(
+    state: State<VaultService>,
+    item_id: String,
+    caption: Option<String>,
+    body: Option<String>,
+) -> Result<(), String> {
+    state.update_item(&item_id, caption.as_deref(), body.as_deref())
 }
 
 #[tauri::command]

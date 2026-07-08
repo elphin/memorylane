@@ -2,6 +2,7 @@
 // de engine roept elke frame `update` aan en routeert taps naar `hitTest`.
 
 import type { Container } from 'pixi.js'
+import type { Item } from '../../lib/backend'
 import type { FrameContext } from '../core/engine'
 
 export interface Scene {
@@ -14,6 +15,8 @@ export interface Scene {
   hitTest?(worldX: number, worldY: number): string | null
   /** Ga naar de vorige/volgende sibling (alleen L3-focus). */
   step?(delta: number): void
+  /** Ververs de item-data in-place (alleen L3-focus), na een bewerking. */
+  refresh?(items: Item[]): void
   /** Laatst gefitte zoom (alleen L3): referentie voor de terug-uitzoom-drempel,
    * zodat sibling-nav naar grotere inhoud (lange notitie) niet meteen uitzoomt. */
   readonly baseZoom?: number

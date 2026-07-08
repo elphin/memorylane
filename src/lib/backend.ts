@@ -142,6 +142,9 @@ export interface Backend {
   /** Opent een bestandskiezer en importeert de gekozen foto's; geeft het aantal. */
   importPhotos(eventId: string): Promise<number>
   deleteItem(itemId: string): Promise<void>
+  /** Werkt caption en/of body van een item bij. `null` = veld ongemoeid laten;
+   * lege caption-string verwijdert de caption. */
+  updateItem(itemId: string, caption: string | null, body: string | null): Promise<void>
   search(query: string): Promise<SearchResult[]>
   thumb(itemId: string, size: 64 | 128 | 256 | 1024 | 2048): ThumbSource
 }
@@ -254,6 +257,11 @@ class TauriBackend implements Backend {
     await invoke('delete_item', { itemId })
   }
 
+  async updateItem(itemId: string, caption: string | null, body: string | null): Promise<void> {
+    const invoke = await this.api()
+    await invoke('update_item', { itemId, caption, body })
+  }
+
   async search(query: string): Promise<SearchResult[]> {
     const invoke = await this.api()
     return await invoke<SearchResult[]>('search', { query })
@@ -285,6 +293,7 @@ class MockBackend implements Backend {
   private density = new Map<string, DensityPoint[]>()
   private adds = new Map<string, Item[]>()
   private deleted = new Set<string>()
+  private edits = new Map<string, { caption: string | null; body: string | null }>()
   private thumbCache = new Map<string, string>()
 
   constructor() {
@@ -368,7 +377,17 @@ class MockBackend implements Backend {
       caption: `Foto ${i}`,
       slug: `${eventId}-i${i}`,
     }))
-    const items = [...base, ...(this.adds.get(eventId) ?? [])].filter((it) => !this.deleted.has(it.id))
+    const items = [...base, ...(this.adds.get(eventId) ?? [])]
+      .filter((it) => !this.deleted.has(it.id))
+      .map((it) => {
+        const e = this.edits.get(it.id)
+        if (!e) return it
+        return {
+          ...it,
+          caption: e.caption !== null ? e.caption || undefined : it.caption,
+          bodyText: e.body !== null ? e.body : it.bodyText,
+        }
+      })
     return {
       event: { id: eventId, kind: 'event', title: 'Gebeurtenis', startAt: '2024-06-15', folderPath: 'mock' },
       items,
@@ -400,6 +419,13 @@ class MockBackend implements Backend {
   }
   async deleteItem(itemId: string): Promise<void> {
     this.deleted.add(itemId)
+  }
+  async updateItem(itemId: string, caption: string | null, body: string | null): Promise<void> {
+    const prev = this.edits.get(itemId) ?? { caption: null, body: null }
+    this.edits.set(itemId, {
+      caption: caption !== null ? caption : prev.caption,
+      body: body !== null ? body : prev.body,
+    })
   }
   async search(query: string): Promise<SearchResult[]> {
     const q = query.toLowerCase().trim()

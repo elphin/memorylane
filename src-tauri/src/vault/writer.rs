@@ -165,6 +165,97 @@ pub fn create_text_item(
     Ok((id, slug))
 }
 
+/// Werkt een bestaand item-`.md` bij: vervangt/voegt `caption` in de
+/// frontmatter (`Some("")` verwijdert het veld, `Some(x)` zet het, `None` laat
+/// het ongemoeid) en/of vervangt de body (`None` = body ongemoeid). Bewerkt op
+/// regel-niveau: alle overige frontmatter-velden (id, type, media, category,
+/// exif, plaats, …) blijven exact behouden — non-destructief, future-proof.
+pub fn update_item(
+    vault_root: &Path,
+    folder_path: &str,
+    slug: &str,
+    caption: Option<&str>,
+    body: Option<&str>,
+) -> std::io::Result<()> {
+    let path = vault_root.join(folder_path).join(format!("{slug}.md"));
+    let original = std::fs::read_to_string(&path)?;
+    let updated = apply_item_edits(&original, caption, body);
+    write_atomic(&path, &updated)
+}
+
+/// Past caption/body-bewerkingen toe op de ruwe markdown zonder de rest te
+/// herschrijven. Zonder geldige frontmatter-fences wordt de inhoud ongemoeid
+/// teruggegeven (onze eigen items hebben altijd fences).
+fn apply_item_edits(content: &str, caption: Option<&str>, body: Option<&str>) -> String {
+    let normalized = content.replace("\r\n", "\n");
+    let lines: Vec<&str> = normalized.split('\n').collect();
+    let open = lines.iter().position(|l| l.trim() == "---");
+    let close = open.and_then(|o| {
+        lines
+            .iter()
+            .enumerate()
+            .skip(o + 1)
+            .find(|(_, l)| l.trim() == "---")
+            .map(|(i, _)| i)
+    });
+    let (Some(open), Some(close)) = (open, close) else {
+        return normalized;
+    };
+
+    let mut fm: Vec<String> = lines[open + 1..close].iter().map(|s| s.to_string()).collect();
+
+    // Alleen top-level velden (indent 0) matchen: een geneste `caption:`,
+    // `type:` of `updatedAt:` binnen een sub-map/-seq (bijv. `place:`) mag NIET
+    // geraakt worden — dat zou de geneste structuur breken (regel un-indenten →
+    // map eindigt vroeg) en is precies het dataverlies dat non-destructief
+    // schrijven moet voorkomen. Onze eigen top-level velden staan altijd op
+    // kolom 0; `starts_with` (zonder trim) matcht daarom exact die.
+    if let Some(cap) = caption {
+        let idx = fm.iter().position(|l| l.starts_with("caption:"));
+        if cap.is_empty() {
+            if let Some(i) = idx {
+                fm.remove(i);
+            }
+        } else {
+            let line = format!("caption: {}", yaml_str(cap));
+            match idx {
+                Some(i) => fm[i] = line,
+                None => {
+                    // Netjes na de `type:`-regel invoegen (of vooraan als die mist).
+                    let at = fm
+                        .iter()
+                        .position(|l| l.starts_with("type:"))
+                        .map(|i| i + 1)
+                        .unwrap_or(0);
+                    fm.insert(at, line);
+                }
+            }
+        }
+    }
+
+    // `updatedAt` bijwerken (vervang bestaande regel, of voeg toe).
+    let ua = format!("updatedAt: {}", yaml_str(&now_iso()));
+    match fm.iter().position(|l| l.starts_with("updatedAt:")) {
+        Some(i) => fm[i] = ua,
+        None => fm.push(ua),
+    }
+
+    let new_body = match body {
+        Some(b) => b.trim().to_string(),
+        None => lines[close + 1..].join("\n").trim().to_string(),
+    };
+
+    let mut out = String::from("---\n");
+    out.push_str(&fm.join("\n"));
+    out.push_str("\n---\n");
+    if !new_body.is_empty() {
+        out.push('\n');
+        out.push_str(&new_body);
+        out.push('\n');
+    }
+    out
+}
+
 /// Maakt een event in een jaarmap. Geeft (id, folder_path) terug.
 ///
 /// De mapnaam wordt uniek gemaakt: twee events met dezelfde titel én datum
@@ -373,6 +464,86 @@ mod tests {
         let parsed = crate::vault::frontmatter::parse(&content);
         assert_eq!(parsed.get_str("id").unwrap(), id);
         assert_eq!(parsed.body, "Hallo");
+    }
+
+    #[test]
+    fn update_item_preserves_other_fields() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("2024/ev")).unwrap();
+        // Een foto-item met extra velden die behouden moeten blijven.
+        std::fs::write(
+            root.join("2024/ev/foto.md"),
+            "---\nid: p1\ntype: photo\nmedia: foto.jpg\ncaption: Oud\ncategory: reizen\ncreatedAt: 2020-01-01T00:00:00.000Z\n---\n",
+        )
+        .unwrap();
+
+        // Caption wijzigen, body ongemoeid.
+        update_item(root, "2024/ev", "foto", Some("Nieuw bijschrift"), None).unwrap();
+        let content = std::fs::read_to_string(root.join("2024/ev/foto.md")).unwrap();
+        let p = crate::vault::frontmatter::parse(&content);
+        assert_eq!(p.get_str("id").unwrap(), "p1");
+        assert_eq!(p.get_str("type").unwrap(), "photo");
+        assert_eq!(p.get_str("media").unwrap(), "foto.jpg");
+        assert_eq!(p.get_str("category").unwrap(), "reizen");
+        assert_eq!(p.get_str("createdAt").unwrap(), "2020-01-01T00:00:00.000Z");
+        assert_eq!(p.get_str("caption").unwrap(), "Nieuw bijschrift");
+        assert!(p.get_str("updatedAt").is_some(), "updatedAt moet gezet zijn");
+    }
+
+    #[test]
+    fn update_item_preserves_nested_fields_and_does_not_touch_nested_caption() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("2024/ev")).unwrap();
+        // Item ZONDER top-level caption, mét een geneste `caption:` binnen `place:`
+        // en block-sequences (`people:`/`tags:`). De geneste caption is een valstrik:
+        // een naïeve `trim_start().starts_with("caption:")` zou die un-indenten en de
+        // map breken.
+        std::fs::write(
+            root.join("2024/ev/foto.md"),
+            "---\nid: p1\ntype: photo\nmedia: foto.jpg\nplace:\n  lat: 52.37\n  label: Amsterdam\n  caption: Stad aan het water\npeople:\n  - Jim\n  - Wout\ntags:\n  - strand\n---\n",
+        )
+        .unwrap();
+
+        update_item(root, "2024/ev", "foto", Some("Nieuw bijschrift"), None).unwrap();
+        let content = std::fs::read_to_string(root.join("2024/ev/foto.md")).unwrap();
+        let p = crate::vault::frontmatter::parse(&content);
+
+        // Top-level caption is nieuw toegevoegd.
+        assert_eq!(p.get_str("caption").unwrap(), "Nieuw bijschrift");
+        // De geneste map is volledig intact — inclusief de geneste `caption:`.
+        let place = p.get("place").unwrap().as_map().unwrap();
+        assert_eq!(place.get("lat").unwrap().as_f64().unwrap(), 52.37);
+        assert_eq!(place.get("label").unwrap().as_str().unwrap(), "Amsterdam");
+        assert_eq!(
+            place.get("caption").unwrap().as_str().unwrap(),
+            "Stad aan het water",
+            "geneste caption mag niet aangeraakt zijn"
+        );
+        // Block-sequences blijven behouden.
+        assert_eq!(
+            p.get("people").unwrap().as_string_list(),
+            vec!["Jim".to_string(), "Wout".to_string()]
+        );
+        assert_eq!(p.get("tags").unwrap().as_string_list(), vec!["strand".to_string()]);
+    }
+
+    #[test]
+    fn update_item_replaces_body_and_can_clear_caption() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("2024/ev")).unwrap();
+        let (_id, slug) =
+            create_text_item(root, "2024/ev", Some("Titel"), "Oude tekst").unwrap();
+
+        // Body vervangen én caption verwijderen (lege string).
+        update_item(root, "2024/ev", &slug, Some(""), Some("Nieuwe, langere tekst.")).unwrap();
+        let content = std::fs::read_to_string(root.join(format!("2024/ev/{slug}.md"))).unwrap();
+        let p = crate::vault::frontmatter::parse(&content);
+        assert_eq!(p.body, "Nieuwe, langere tekst.");
+        assert!(p.get_str("caption").is_none(), "caption moet verwijderd zijn");
+        assert_eq!(p.get_str("type").unwrap(), "text");
     }
 
     #[test]

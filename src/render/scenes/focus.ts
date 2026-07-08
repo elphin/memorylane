@@ -125,6 +125,14 @@ export class FocusScene implements Scene {
     this.build()
   }
 
+  /** Ververs de item-data (na een bewerking) en herbouw het huidige item. */
+  refresh(items: Item[]): void {
+    if (items.length === 0) return
+    this.items = items
+    this.index = Math.max(0, Math.min(this.index, items.length - 1))
+    this.build()
+  }
+
   private onKey = (e: KeyboardEvent): void => {
     if (e.key === 'ArrowLeft') this.step(-1)
     else if (e.key === 'ArrowRight') this.step(1)
