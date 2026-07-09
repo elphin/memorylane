@@ -210,7 +210,37 @@ export class EventScene implements Scene {
         n.container.zIndex = n.z
       })
     }
+    // Trek `zTop` mee met de nieuw toegewezen z'en: anders levert een sleep
+    // ná grid/scatter (`n.z = ++this.zTop`) een z ONDER de peers op (scatter
+    // gebruikt z tot 999), waardoor de gesleepte kaart niet naar voren komt.
+    for (const n of this.nodes) this.zTop = Math.max(this.zTop, n.z)
     this.refit()
+  }
+
+  /** Legt de HUIDIGE opstelling (posities + rotaties, bijv. een scatter of
+   * gesleepte grid) vast als de eigen layout: base bijwerken + `_canvas.json`
+   * schrijven, en overschakelen naar 'custom'. */
+  saveAsCustom(): void {
+    for (const n of this.nodes) {
+      // Leg de DOEL-opstelling vast (tx/ty/trot), niet de eventuele tussenframe
+      // van een nog lopende layout-animatie. Klik je "Opslaan als Eigen" vlak na
+      // "Scatter" (kaarten nog aan het settelen), dan is `n.x`/`container.rotation`
+      // een halverwege-waarde; `n.tx`/`n.trot` is de bedoelde eindstand. Voor een
+      // gesleept item geldt tx==x (moveTo zet ze gelijk), dus dat verandert niet.
+      n.baseX = n.tx
+      n.baseY = n.ty
+      n.baseRot = n.trot
+      n.baseZ = n.z
+      // Snap de node meteen op zijn eindstand (geen naschommeling na het opslaan)
+      // en zorg dat persist (die n.x/n.y/n.rotation schrijft) de eindstand wegschrijft.
+      n.x = n.tx
+      n.y = n.ty
+      n.container.position.set(n.x, n.y)
+      n.container.rotation = n.trot
+      n.rotation = n.trot // zodat persist de (scatter-)rotatie meeschrijft
+    }
+    this.mode = 'custom'
+    this.persist()
   }
 
   /** Past de camera op de huidige node-bounds (na een layout-wissel). */
@@ -294,9 +324,9 @@ export class EventScene implements Scene {
   }
 
   beginDrag(wx: number, wy: number): DragHandle | null {
-    // Slepen persisteert alleen in de eigen layout; grid/scatter zijn view-only
-    // (zodat je zelfgemaakte layout niet per ongeluk overschreven wordt).
-    if (this.mode !== 'custom') return null
+    // Slepen mag in elke stand. In 'custom' persisteert het meteen; in grid/scatter
+    // verschuif je alleen visueel (niet weggeschreven) — met "Opslaan als Eigen"
+    // leg je die opstelling vast als je eigen layout.
     // Bovenste item onder het punt.
     for (let i = this.nodes.length - 1; i >= 0; i--) {
       const n = this.nodes[i]
@@ -326,11 +356,10 @@ export class EventScene implements Scene {
             if (!moved && Math.hypot(n.x - startX, n.y - startY) > dragPx) moved = true
           },
           end: () => {
-            if (moved) {
-              // De gesleepte positie is nu de "eigen" positie: leg 'm vast in de
-              // base zodat een uitstapje naar Grid/Scatter en terug naar Eigen de
-              // net-gesleepte plek toont (niet de oude). baseRot blijft ongemoeid
-              // (slepen wijzigt geen rotatie).
+            // Alleen in de eigen layout leggen we de sleep meteen vast (base +
+            // _canvas.json). In grid/scatter verschuift het item alleen visueel;
+            // "Opslaan als Eigen" legt die opstelling desgewenst vast.
+            if (moved && this.mode === 'custom') {
               n.baseX = n.x
               n.baseY = n.y
               n.baseZ = n.z

@@ -572,6 +572,12 @@ export function AppShell() {
     sceneRef.current?.applyLayout?.(mode)
   }
 
+  // Legt de huidige (scatter/grid/gesleepte) opstelling vast als de eigen layout.
+  const saveLayoutAsCustom = (): void => {
+    sceneRef.current?.saveAsCustom?.()
+    setLayoutMode('custom')
+  }
+
   const openEditEvent = (): void => {
     const info = currentEventInfoRef.current
     if (!info) return
@@ -807,6 +813,7 @@ export function AppShell() {
           onAddPhotos={() => void addPhotos()}
           onEditEvent={openEditEvent}
           onLayout={changeLayout}
+          onSaveLayout={saveLayoutAsCustom}
           onEdit={startEdit}
           onDelete={() => void deleteCurrent()}
         />
@@ -1042,6 +1049,7 @@ function Fab({
   onAddPhotos,
   onEditEvent,
   onLayout,
+  onSaveLayout,
   onEdit,
   onDelete,
 }: {
@@ -1052,6 +1060,7 @@ function Fab({
   onAddPhotos: () => void
   onEditEvent: () => void
   onLayout: (mode: 'custom' | 'grid' | 'scatter') => void
+  onSaveLayout: () => void
   onEdit: () => void
   onDelete: () => void
 }) {
@@ -1075,6 +1084,11 @@ function Fab({
         <button onClick={() => onLayout('scatter')} style={seg('scatter')} title="Elke klik een nieuwe worp">
           Scatter 🎲
         </button>
+        {layoutMode !== 'custom' && (
+          <button onClick={onSaveLayout} style={{ ...fabBtn, background: '#166534' }} title="Deze opstelling vastleggen als je eigen layout">
+            Opslaan als Eigen
+          </button>
+        )}
         <button onClick={onAddPhotos} style={fabBtn}>+ Foto&apos;s</button>
         <button onClick={onAddNote} style={fabBtn}>+ Notitie</button>
         <button onClick={onEditEvent} style={fabBtn}>Bewerk event</button>

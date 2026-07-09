@@ -33,6 +33,8 @@ export interface Scene {
   /** Herschik het event-canvas: 'custom' (eigen posities), 'grid' (chronologisch,
    * vierkant) of 'scatter' (speels kriskras — elke aanroep opnieuw). Alleen L2. */
   applyLayout?(mode: 'custom' | 'grid' | 'scatter'): void
+  /** Leg de huidige opstelling vast als de eigen layout (alleen L2). */
+  saveAsCustom?(): void
   /** Laatst gefitte zoom (alleen L3): referentie voor de terug-uitzoom-drempel,
    * zodat sibling-nav naar grotere inhoud (lange notitie) niet meteen uitzoomt. */
   readonly baseZoom?: number
