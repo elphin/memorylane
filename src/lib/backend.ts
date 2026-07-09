@@ -85,6 +85,8 @@ export interface EventInfo {
   startAt: string
   endAt?: string
   folderPath: string
+  /** Slug of id van de uitgelichte foto (jaar-omslag), indien gekozen. */
+  featuredPhoto?: string
 }
 
 export interface EventDetail {
@@ -153,6 +155,8 @@ export interface Backend {
   getEvent(eventId: string): Promise<EventDetail | null>
   saveCanvasLayout(eventId: string, items: CanvasLayoutInput[]): Promise<void>
   createTextItem(eventId: string, caption: string | null, body: string): Promise<string>
+  /** Zet (of wist bij `null`) de uitgelichte foto van een event (jaar-omslag). */
+  setFeatured(eventId: string, itemRef: string | null): Promise<void>
   createEvent(yearId: string, title: string, startAt: string, endAt: string | null): Promise<string>
   /** Werkt titel/begin-/einddatum van een event bij. `endAt = null` verwijdert
    * de einddatum. */
@@ -278,6 +282,11 @@ class TauriBackend implements Backend {
     await invoke('update_event', { eventId, title, startAt, endAt })
   }
 
+  async setFeatured(eventId: string, itemRef: string | null): Promise<void> {
+    const invoke = await this.api()
+    await invoke('set_featured', { eventId, itemRef })
+  }
+
   async importPhotos(eventId: string): Promise<number> {
     const dialog = await import('@tauri-apps/plugin-dialog')
     const picked = await dialog.open({
@@ -356,6 +365,7 @@ class MockBackend implements Backend {
   private deleted = new Set<string>()
   private edits = new Map<string, { caption: string | null; body: string | null }>()
   private meta = new Map<string, ItemMetadata>()
+  private featured = new Map<string, string>() // eventId → item-ref
   private newEventSeq = 0
   private thumbCache = new Map<string, string>()
 
@@ -414,7 +424,18 @@ class MockBackend implements Backend {
     return this.years
   }
   async getYear(yearId: string): Promise<YearDetail | null> {
-    return this.details.get(yearId) ?? null
+    const detail = this.details.get(yearId)
+    if (!detail) return null
+    // Cover per event: featured indien gekozen, anders elke keer een WILLEKEURIGE
+    // foto (i=1..n-1; i=0 is de tekstkaart) — demonstreert "elke keer een andere".
+    const events = detail.events.map((ev) => {
+      const feat = this.featured.get(ev.id)
+      if (feat) return { ...ev, coverItemId: feat }
+      const n = 6 + (hueFor(ev.id) % 7)
+      const k = 1 + Math.floor(Math.random() * Math.max(1, n - 1))
+      return { ...ev, coverItemId: `${ev.id}-i${k}` }
+    })
+    return { year: detail.year, events }
   }
   async getTimelineDensity(yearId: string): Promise<DensityPoint[]> {
     return this.density.get(yearId) ?? []
@@ -460,6 +481,7 @@ class MockBackend implements Backend {
         startAt: summary?.startAt ?? '2024-06-15',
         endAt: summary?.endAt,
         folderPath: 'mock',
+        featuredPhoto: this.featured.get(eventId),
       },
       items,
       canvas: [],
@@ -516,6 +538,10 @@ class MockBackend implements Backend {
       ev.endAt = endAt ?? undefined
       ev.kind = endAt ? 'period' : 'event'
     }
+  }
+  async setFeatured(eventId: string, itemRef: string | null): Promise<void> {
+    if (itemRef) this.featured.set(eventId, itemRef)
+    else this.featured.delete(eventId)
   }
   async importPhotos(eventId: string): Promise<number> {
     const list = this.adds.get(eventId) ?? []

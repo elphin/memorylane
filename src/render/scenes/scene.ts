@@ -26,6 +26,10 @@ export interface Scene {
   setRange?(startWorldX: number | null, endWorldX: number | null): void
   /** Sleepbaar object onder het wereldpunt (bijv. een canvas-item op L2). */
   beginDrag?(worldX: number, worldY: number): DragHandle | null
+  /** Zet de uitgelichte foto (op ref) en werk de markering bij (alleen L2). */
+  setFeatured?(ref: string | null): void
+  /** Ref (slug/id) van de foto onder een wereldpunt, of null (alleen L2). */
+  refAt?(worldX: number, worldY: number): string | null
   /** Laatst gefitte zoom (alleen L3): referentie voor de terug-uitzoom-drempel,
    * zodat sibling-nav naar grotere inhoud (lange notitie) niet meteen uitzoomt. */
   readonly baseZoom?: number

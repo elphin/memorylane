@@ -212,6 +212,24 @@ export function AppShell() {
       else if (levelRef.current === 'focus' && currentEventRef.current) void enterEvent(currentEventRef.current, 'out')
     }
 
+    // Ctrl+klik op een foto (L2): togglet de uitgelichte foto (jaar-omslag).
+    // Optimistisch: markering + info meteen bij, schrijf async weg.
+    const toggleFeatured = (ref: string): void => {
+      const backend = backendRef.current
+      const eventId = currentEventRef.current
+      if (!backend || !eventId) return
+      const current = currentEventInfoRef.current?.featuredPhoto ?? null
+      const next = current === ref ? null : ref
+      if (currentEventInfoRef.current) {
+        currentEventInfoRef.current = { ...currentEventInfoRef.current, featuredPhoto: next ?? undefined }
+      }
+      sceneRef.current?.setFeatured?.(next)
+      void backend.setFeatured(eventId, next).catch((e) => {
+        setMessage(String(e))
+        setPhase('error')
+      })
+    }
+
     const onKeyDown = (e: KeyboardEvent): void => {
       // Laat invoervelden (composer/zoeken) hun eigen toetsen afhandelen.
       const el = document.activeElement
@@ -329,6 +347,23 @@ export function AppShell() {
             // vlag blijft gezet zodat een eventuele naloop-tap niet navigeert.
             cancel: () => {
               scene.setRange?.(null, null)
+              rangeJustEnded = true
+            },
+          }
+        }
+        // Ctrl op het event-canvas: een foto (de)selecteren als uitgelichte
+        // (jaar-omslag). Via een handle zodat Ctrl bij pointerdown "vastgezet"
+        // wordt (robuust als Ctrl tussen down en up wordt losgelaten), en geen
+        // item-drag start. `end()` togglet en onderdrukt de naloop-tap→L3.
+        if (levelRef.current === 'event' && ctrlDown && scene?.refAt) {
+          const ref = scene.refAt(wx, wy)
+          return {
+            moveTo: () => {},
+            end: () => {
+              rangeJustEnded = true
+              if (ref) toggleFeatured(ref)
+            },
+            cancel: () => {
               rangeJustEnded = true
             },
           }

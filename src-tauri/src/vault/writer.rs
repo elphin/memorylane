@@ -522,6 +522,45 @@ pub fn update_item_meta(
     write_atomic(&path, &out)
 }
 
+/// Zet (of verwijdert bij `None`/leeg) de uitgelichte foto (`featuredPhoto`) van
+/// een event op regel-niveau; overige frontmatter-velden + body blijven behouden.
+pub fn set_event_featured(
+    vault_root: &Path,
+    folder_path: &str,
+    featured: Option<&str>,
+) -> std::io::Result<()> {
+    let path = vault_root.join(folder_path).join("_event.md");
+    let original = std::fs::read_to_string(&path)?;
+    let normalized = original.replace("\r\n", "\n");
+    let lines: Vec<&str> = normalized.split('\n').collect();
+    let open = lines.iter().position(|l| l.trim() == "---");
+    let close = open.and_then(|o| {
+        lines
+            .iter()
+            .enumerate()
+            .skip(o + 1)
+            .find(|(_, l)| l.trim() == "---")
+            .map(|(i, _)| i)
+    });
+    let (Some(open), Some(close)) = (open, close) else {
+        return write_atomic(&path, &normalized);
+    };
+    let mut fm: Vec<String> = lines[open + 1..close].iter().map(|s| s.to_string()).collect();
+    set_fm_field(&mut fm, "featuredPhoto", featured.filter(|f| !f.is_empty()));
+    set_fm_field(&mut fm, "updatedAt", Some(&now_iso()));
+
+    let body = lines[close + 1..].join("\n").trim().to_string();
+    let mut out = String::from("---\n");
+    out.push_str(&fm.join("\n"));
+    out.push_str("\n---\n");
+    if !body.is_empty() {
+        out.push('\n');
+        out.push_str(&body);
+        out.push('\n');
+    }
+    write_atomic(&path, &out)
+}
+
 /// Maakt een event in een jaarmap. Geeft (id, folder_path) terug.
 ///
 /// De mapnaam wordt uniek gemaakt: twee events met dezelfde titel én datum
@@ -1061,6 +1100,23 @@ mod tests {
         let (_id, folder) = create_event(root, "2024", "Terugblik", "2023-12-30", None).unwrap();
         assert!(folder.starts_with("2023/"), "event hoort in 2023, was: {folder}");
         assert!(root.join(&folder).join("_event.md").exists());
+    }
+
+    #[test]
+    fn set_event_featured_sets_and_clears() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let (_id, folder) = create_event(root, "2024", "Reis", "2024-07-01", None).unwrap();
+
+        set_event_featured(root, &folder, Some("mooie-foto_ab12cd34")).unwrap();
+        let c1 = std::fs::read_to_string(root.join(&folder).join("_event.md")).unwrap();
+        let p1 = crate::vault::frontmatter::parse(&c1);
+        assert_eq!(p1.get_str("featuredPhoto").unwrap(), "mooie-foto_ab12cd34");
+        assert_eq!(p1.get_str("title").unwrap(), "Reis"); // overige velden intact
+
+        set_event_featured(root, &folder, None).unwrap();
+        let c2 = std::fs::read_to_string(root.join(&folder).join("_event.md")).unwrap();
+        assert!(crate::vault::frontmatter::parse(&c2).get_str("featuredPhoto").is_none());
     }
 
     #[test]

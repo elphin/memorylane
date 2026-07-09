@@ -284,11 +284,17 @@ pub fn get_year(conn: &Connection, year_id: &str) -> rusqlite::Result<Option<Yea
         return Ok(None);
     };
 
+    // Cover per event: is er een `featured_photo` (op slug óf id) → die; anders
+    // een WILLEKEURIGE foto (per query → elke keer een andere bij een bezoek).
     let mut stmt = conn.prepare(
         "SELECT e.id, e.kind, e.title, e.start_at, e.end_at,
              (SELECT count(*) FROM items i WHERE i.event_id = e.id),
-             (SELECT i.id FROM items i WHERE i.event_id = e.id AND i.item_type = 'photo'
-                 ORDER BY (i.timestamp_ms IS NULL), i.timestamp_ms LIMIT 1)
+             COALESCE(
+               (SELECT i.id FROM items i WHERE i.event_id = e.id AND i.item_type = 'photo'
+                    AND (i.slug = e.featured_photo OR i.id = e.featured_photo) LIMIT 1),
+               (SELECT i.id FROM items i WHERE i.event_id = e.id AND i.item_type = 'photo'
+                    ORDER BY RANDOM() LIMIT 1)
+             )
          FROM events e WHERE e.year_id = ?1 ORDER BY e.start_at",
     )?;
     let events = stmt
@@ -875,5 +881,99 @@ mod tests {
         let conn = open_in_memory().unwrap();
         assert!(get_year(&conn, "nope").unwrap().is_none());
         assert!(get_event(&conn, "nope").unwrap().is_none());
+    }
+
+    /// De cover-subquery in `get_year`: een gezette `featuredPhoto` (op slug) kiest
+    /// exact die foto; een `featuredPhoto` die naar een verwijderde/onbestaande
+    /// foto wijst valt via COALESCE terug op een willekeurige foto (nooit NULL
+    /// zolang het event foto's heeft); een event zónder foto's geeft NULL (geen
+    /// omslag). Dit is de data-integriteitskern van de featured-foto-feature.
+    #[test]
+    fn get_year_cover_honors_featured_and_falls_back() {
+        fn photo(id: &str, event_id: &str, slug: &str) -> Item {
+            Item {
+                id: id.into(),
+                event_id: event_id.into(),
+                item_type: ItemType::Photo,
+                media: Some(format!("{slug}.jpg")),
+                url: None,
+                caption: None,
+                happened_at: None,
+                timestamp_ms: None,
+                place: None,
+                people: vec![],
+                tags: vec![],
+                category: None,
+                body_text: None,
+                slug: Some(slug.into()),
+                synthetic: false,
+            }
+        }
+        fn event(id: &str, featured: Option<&str>) -> Event {
+            Event {
+                id: id.into(),
+                kind: EventKind::Event,
+                title: Some(id.into()),
+                description: None,
+                start_at: "2024-01-01".into(),
+                end_at: None,
+                location: None,
+                featured_photo: featured.map(|s| s.into()),
+                tags: vec![],
+                year_id: "y2024".into(),
+                folder_path: format!("2024/{id}"),
+            }
+        }
+
+        let mut m = VaultModel::default();
+        m.years.push(Year {
+            id: "y2024".into(),
+            year: 2024,
+            title: "2024".into(),
+            start_at: "2024-01-01".into(),
+            end_at: None,
+            folder_name: "2024".into(),
+        });
+        // A: featured wijst naar een bestaande foto-slug → die exact.
+        m.events.push(event("evA", Some("mooi")));
+        m.items.push(photo("a1", "evA", "saai"));
+        m.items.push(photo("a2", "evA", "mooi"));
+        // B: featured wijst naar een verwijderde foto → val terug op RANDOM (niet NULL).
+        m.events.push(event("evB", Some("weg")));
+        m.items.push(photo("b1", "evB", "over"));
+        // C: featured is een tekst-item (geen foto) → val terug op RANDOM foto.
+        m.events.push(event("evC", Some("notitie")));
+        m.items.push(Item {
+            id: "c-text".into(),
+            event_id: "evC".into(),
+            item_type: ItemType::Text,
+            media: None,
+            url: None,
+            caption: Some("een notitie".into()),
+            happened_at: None,
+            timestamp_ms: None,
+            place: None,
+            people: vec![],
+            tags: vec![],
+            category: None,
+            body_text: None,
+            slug: Some("notitie".into()),
+            synthetic: false,
+        });
+        m.items.push(photo("c1", "evC", "foto"));
+        // D: event zonder foto's → cover NULL (geen omslag).
+        m.events.push(event("evD", None));
+
+        let mut conn = open_in_memory().unwrap();
+        load(&mut conn, &m).unwrap();
+        let yd = get_year(&conn, "y2024").unwrap().unwrap();
+        let cover = |id: &str| -> Option<String> {
+            yd.events.iter().find(|e| e.id == id).unwrap().cover_item_id.clone()
+        };
+
+        assert_eq!(cover("evA").as_deref(), Some("a2"), "featured-slug kiest exact die foto");
+        assert_eq!(cover("evB").as_deref(), Some("b1"), "verwijderde featured → val terug op foto");
+        assert_eq!(cover("evC").as_deref(), Some("c1"), "tekst-featured → val terug op foto (nooit de tekst)");
+        assert!(cover("evD").is_none(), "event zonder foto's heeft geen omslag");
     }
 }

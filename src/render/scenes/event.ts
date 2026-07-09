@@ -20,6 +20,7 @@ interface Node {
   ref: string
   container: Container
   sprite: Sprite | null
+  ring: Graphics | null // gekleurde rand als deze foto de uitgelichte is
   x: number
   y: number
   half: number
@@ -41,6 +42,7 @@ export class EventScene implements Scene {
   private nodes: Node[] = []
   private zTop = 0
   private hoveredId: string | null = null
+  private featuredRef: string | null
 
   constructor(
     private engine: RenderEngine,
@@ -48,6 +50,7 @@ export class EventScene implements Scene {
     detail: EventDetail,
     private onSave: (items: CanvasLayoutInput[]) => void,
   ) {
+    this.featuredRef = detail.event.featuredPhoto ?? null
     const layout = new Map(detail.canvas.map((c) => [c.itemRef, c]))
     const cols = Math.max(1, Math.ceil(Math.sqrt(detail.items.length)))
 
@@ -58,10 +61,13 @@ export class EventScene implements Scene {
       const half = isText ? Math.max(TEXT_W, TEXT_H) / 2 : PHOTO / 2 + BORDER
 
       let sprite: Sprite | null = null
+      let ring: Graphics | null = null
       if (isText) {
         this.buildTextCard(container, item)
       } else {
         sprite = this.buildPhotoCard(container)
+        ring = this.buildFeaturedRing(container)
+        ring.visible = ref === this.featuredRef
       }
 
       // Positie: uit _canvas.json of auto-grid.
@@ -79,6 +85,7 @@ export class EventScene implements Scene {
         ref,
         container,
         sprite,
+        ring,
         x,
         y,
         half,
@@ -114,6 +121,35 @@ export class EventScene implements Scene {
     container.addChild(mask)
     sprite.mask = mask
     return sprite
+  }
+
+  /** Gekleurde rand die de uitgelichte (featured) foto markeert; standaard uit. */
+  private buildFeaturedRing(container: Container): Graphics {
+    const r = PHOTO / 2 + BORDER + 3
+    const ring = new Graphics()
+    ring.roundRect(-r, -r, r * 2, r * 2, 6).stroke({ width: 4, color: 0xffc24b, alignment: 0 })
+    ring.visible = false
+    container.addChild(ring)
+    return ring
+  }
+
+  /** Zet de uitgelichte foto (op ref) — werkt de rand in-place bij. */
+  setFeatured(ref: string | null): void {
+    this.featuredRef = ref
+    for (const n of this.nodes) {
+      if (n.ring) n.ring.visible = n.ref === ref
+    }
+  }
+
+  /** De ref (slug/id) van het item onder een wereldpunt, of null. */
+  refAt(worldX: number, worldY: number): string | null {
+    for (let i = this.nodes.length - 1; i >= 0; i--) {
+      const n = this.nodes[i]
+      if (n.sprite && Math.abs(worldX - n.x) <= n.half && Math.abs(worldY - n.y) <= n.half) {
+        return n.ref
+      }
+    }
+    return null
   }
 
   private buildTextCard(container: Container, item: Item): void {

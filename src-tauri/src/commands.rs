@@ -244,6 +244,21 @@ impl VaultService {
         Ok(())
     }
 
+    /// Zet (of wist bij `None`) de uitgelichte foto van een event (file first,
+    /// dan herindexeren). `item_ref` = de slug of id van de foto.
+    pub fn set_featured(&self, event_id: &str, item_ref: Option<&str>) -> Result<(), String> {
+        let vault = self.current_vault()?;
+        let folder = {
+            let conn = self.conn.lock().map_err(lock_err)?;
+            index::event_folder(&conn, event_id)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("event {event_id} niet gevonden"))?
+        };
+        writer::set_event_featured(&vault, &folder, item_ref).map_err(|e| e.to_string())?;
+        self.rescan()?;
+        Ok(())
+    }
+
     /// Importeert foto's (bronpaden van de bestandskiezer) in een event.
     pub fn import_photos(&self, event_id: &str, sources: &[String]) -> Result<usize, String> {
         let vault = self.current_vault()?;
@@ -593,6 +608,15 @@ pub fn update_event(
     end_at: Option<String>,
 ) -> Result<(), String> {
     state.update_event(&event_id, &title, &start_at, end_at.as_deref())
+}
+
+#[tauri::command]
+pub fn set_featured(
+    state: State<VaultService>,
+    event_id: String,
+    item_ref: Option<String>,
+) -> Result<(), String> {
+    state.set_featured(&event_id, item_ref.as_deref())
 }
 
 #[tauri::command]
