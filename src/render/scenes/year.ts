@@ -64,6 +64,16 @@ function opaqueSpan(color: number): number {
 }
 const SPAN_PALETTE = SPAN_PALETTE_RAW.map(opaqueSpan)
 
+/** Stabiele hash (FNV-1a) van een id → voor deterministische, "vrije" jitter. */
+function hashId(s: string): number {
+  let h = 2166136261
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i)
+    h = Math.imul(h, 16777619)
+  }
+  return h >>> 0
+}
+
 /** Cover-fit een sprite op een thumbnail-kaart (vult, behoudt aspect). */
 function fitCover(sprite: Sprite, tex: Texture): void {
   const s = Math.max(THUMB_W / tex.width, THUMB_H / tex.height)
@@ -174,6 +184,12 @@ export class YearScene implements Scene {
 
     withCover.forEach((ev, j) => {
       const anchorX = anchorFor(ev)
+      // "Vrije" plaatsing: nudge de kaart wat naast zijn exacte datum (deterministisch
+      // per event) zodat het speelser oogt; de gebogen leader verbindt 'm met de datum.
+      const seed = hashId(ev.id)
+      const jx = ((seed % 1000) / 1000 - 0.5) * 64 // ±32
+      const jy = (((seed >>> 10) % 1000) / 1000 - 0.5) * 28 // ±14
+      const cardX = anchorX + jx
       // Wissel de voorkeurszijde per event → gebalanceerd boven/onder.
       const prefer = j % 2 === 0 ? -1 : 1 // -1 = boven (neg. y), 1 = onder
       let side = prefer
@@ -181,31 +197,32 @@ export class YearScene implements Scene {
       for (let lvl = 0; lvl < 64; lvl++) {
         const kPref = `${prefer}:${lvl}`
         const kOther = `${-prefer}:${lvl}`
-        if (anchorX - THUMB_W / 2 > (laneRight[kPref] ?? -1e9) + CARD_GAP) {
+        if (cardX - THUMB_W / 2 > (laneRight[kPref] ?? -1e9) + CARD_GAP) {
           side = prefer
           level = lvl
           break
         }
-        if (anchorX - THUMB_W / 2 > (laneRight[kOther] ?? -1e9) + CARD_GAP) {
+        if (cardX - THUMB_W / 2 > (laneRight[kOther] ?? -1e9) + CARD_GAP) {
           side = -prefer
           level = lvl
           break
         }
       }
-      laneRight[`${side}:${level}`] = anchorX + THUMB_W / 2
-      const cardY = side * (AXIS_GAP + level * (THUMB_H + LANE_GAP))
+      laneRight[`${side}:${level}`] = cardX + THUMB_W / 2
+      const cardY = side * (AXIS_GAP + level * (THUMB_H + LANE_GAP)) + jy
       maxAbsY = Math.max(maxAbsY, Math.abs(cardY) + THUMB_H / 2)
 
-      // Leader: van de RAND van het blokje (bij een meerdaags event) of de as-lijn
-      // naar de binnenrand van de kaart. 1px, ongeacht de zoom.
+      // Gebogen leader: van de RAND van het blokje (meerdaags) of de as-lijn, in een
+      // vloeiende S-curve naar de binnenrand van de kaart. 1px, ongeacht de zoom.
       const innerY = cardY - side * (THUMB_H / 2)
       const startY = spanColor.has(ev.id) ? side * 9 : 0
+      const midY = (startY + innerY) / 2
       leaders
         .moveTo(anchorX, startY)
-        .lineTo(anchorX, innerY)
+        .bezierCurveTo(anchorX, midY, cardX, midY, cardX, innerY)
         .stroke({ width: 1, color: 0x3a4256, alpha: 0.7, pixelLine: true })
 
-      this.nodes.push(this.buildCard(ev, anchorX, cardY))
+      this.nodes.push(this.buildCard(ev, cardX, cardY))
     })
 
     // Events zonder cover: een stip + titel op de as.
