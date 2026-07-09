@@ -196,6 +196,9 @@ export function AppShell() {
   const [toast, setToast] = useState<string | null>(null)
   // Top-chrome (Zoeken/▶/⚙) verbergt na muis-inactiviteit; muisbeweging toont 'm.
   const [chromeVisible, setChromeVisible] = useState(true)
+  // "Alles passend"-knop: zichtbaar als er inhoud buiten beeld valt (L2).
+  const [showFit, setShowFit] = useState(false)
+  const showFitRef = useRef(false)
   // Ref-spiegel zodat de (één keer opgezette) engine-closures de actuele
   // voorkeuren lezen zonder stale closure.
   const settingsRef = useRef(settings)
@@ -574,6 +577,26 @@ export function AppShell() {
 
       engine.onFrame = (ctx) => {
         sceneRef.current?.update(ctx)
+        // "Alles passend"-knop tonen zodra er inhoud buiten beeld valt (alleen L2,
+        // niet tijdens een transitie). Alleen setState bij een echte verandering.
+        const cb =
+          levelRef.current === 'event' && !ctx.engine.isTransitioning
+            ? sceneRef.current?.contentBounds?.()
+            : null
+        let show = false
+        if (cb) {
+          const wb = ctx.engine.camera.worldBounds(ctx.engine.viewport())
+          const M = 4 // kleine marge tegen randgevallen/afronding
+          show =
+            cb.minX < wb.minX - M ||
+            cb.maxX > wb.maxX + M ||
+            cb.minY < wb.minY - M ||
+            cb.maxY > wb.maxY + M
+        }
+        if (show !== showFitRef.current) {
+          showFitRef.current = show
+          setShowFit(show)
+        }
         // Ver uitzoomen → één niveau terug. Niet tijdens een lopende
         // transitie-animatie (dan zit de zoom nog onder de drempel). In L3 volgt
         // de referentie de scene (sibling-nav herfit de camera), zodat stappen
@@ -1167,6 +1190,31 @@ export function AppShell() {
           onClose={() => setScreensaverIds(null)}
         />
       )}
+      {showFit &&
+        phase === 'ready' &&
+        !modal &&
+        !editing &&
+        !eventForm &&
+        !metaForm &&
+        !searchOpen &&
+        !settingsOpen &&
+        !screensaverIds && (
+          <button
+            onClick={() => {
+              sceneRef.current?.fitToView?.()
+              // Herijk de terug-uitzoom-referentie op de zojuist gefitte zoom.
+              // Anders kan een fit die ver uitzoomt (inhoud ver buiten beeld, bv.
+              // een foto ver opzij) onder de goBack-drempel (entryZoom*0.45)
+              // duiken en de gebruiker meteen het canvas uit stuiteren.
+              const z = engineRef.current?.camera.zoom
+              if (z !== undefined) entryZoomRef.current = z
+            }}
+            style={fitBtn}
+            title="Alles passend in beeld"
+          >
+            ⤢ Alles passend
+          </button>
+        )}
       {toast && <div style={toastStyle}>{toast}</div>}
       {phase === 'ready' && !modal && !editing && !eventForm && !metaForm && !searchOpen && !settingsOpen && !settings.viewMode && (
         <Fab
@@ -1886,6 +1934,20 @@ const screensaverBtn: React.CSSProperties = {
 
 // Zonder zoekknop schuift de screensaver-knop naar de plek van die knop.
 const screensaverBtnLeft: React.CSSProperties = { ...screensaverBtn, left: 16 }
+
+const fitBtn: React.CSSProperties = {
+  position: 'absolute',
+  left: 20,
+  bottom: 20,
+  padding: '9px 16px',
+  borderRadius: 20,
+  border: '1px solid rgba(255,255,255,0.18)',
+  background: 'rgba(22,28,40,0.6)',
+  color: '#e6eaf2',
+  font: '13px sans-serif',
+  cursor: 'pointer',
+  backdropFilter: 'blur(4px)',
+}
 
 const toastStyle: React.CSSProperties = {
   position: 'absolute',

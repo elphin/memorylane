@@ -56,6 +56,10 @@ export interface Scene {
   layoutState?(): { mode: 'custom' | 'grid' | 'scatter'; positions: NodePosition[] }
   /** Zet de scatter-kaarten recht of licht scheef, posities ongemoeid (alleen L2). */
   setScatterRotation?(rotate: boolean): void
+  /** Wereldgrenzen van alle inhoud (voor fit-to-view), of null als leeg. Alleen L2. */
+  contentBounds?(): { minX: number; minY: number; maxX: number; maxY: number } | null
+  /** Zoom/pan de camera zo dat alle inhoud precies past (alleen L2). */
+  fitToView?(): void
   /** Leg de huidige opstelling vast als de eigen layout (alleen L2). */
   saveAsCustom?(): void
   /** Laatst gefitte zoom (alleen L3): referentie voor de terug-uitzoom-drempel,

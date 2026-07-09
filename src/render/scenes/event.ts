@@ -332,6 +332,37 @@ export class EventScene implements Scene {
     this.persist()
   }
 
+  /** Wereldgrenzen van alle kaarten op hun HUIDIGE positie (voor fit-to-view). */
+  contentBounds(): { minX: number; minY: number; maxX: number; maxY: number } | null {
+    if (this.nodes.length === 0) return null
+    let minX = Infinity
+    let minY = Infinity
+    let maxX = -Infinity
+    let maxY = -Infinity
+    for (const n of this.nodes) {
+      minX = Math.min(minX, n.x - n.half)
+      maxX = Math.max(maxX, n.x + n.half)
+      minY = Math.min(minY, n.y - n.half)
+      maxY = Math.max(maxY, n.y + n.half)
+    }
+    return { minX, minY, maxX, maxY }
+  }
+
+  /** Zoom/pan de camera zo dat alle inhoud (huidige posities) precies past. */
+  fitToView(): void {
+    const b = this.contentBounds()
+    if (!b) return
+    const vp = this.engine.viewport()
+    const w = b.maxX - b.minX
+    const h = b.maxY - b.minY
+    const zoom = Math.min(vp.width / (w + CELL), vp.height / (h + CELL))
+    this.engine.jumpCamera(
+      (b.minX + b.maxX) / 2,
+      (b.minY + b.maxY) / 2,
+      Math.max(this.engine.camera.minZoom, Math.min(zoom, 1.2)),
+    )
+  }
+
   /** Past de camera op de huidige node-bounds (na een layout-wissel). */
   private refit(): void {
     if (this.nodes.length === 0) return
