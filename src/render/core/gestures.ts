@@ -13,6 +13,13 @@ interface PointerPos {
   y: number
 }
 
+/** Toets-modifiers op het moment van pointerdown (voor roteren/schalen i.p.v. slepen). */
+export interface DragMods {
+  alt: boolean
+  shift: boolean
+  ctrl: boolean
+}
+
 /** Handle om een object te slepen i.p.v. de camera te pannen. */
 export interface DragHandle {
   moveTo(worldX: number, worldY: number): void
@@ -47,7 +54,7 @@ export class GestureController {
     private onTap?: (sx: number, sy: number) => void,
     /** Kan een sleepbaar object teruggeven op wereldpunt; dan sleept dat i.p.v.
      * de camera te pannen. */
-    private beginDrag?: (worldX: number, worldY: number) => DragHandle | null,
+    private beginDrag?: (worldX: number, worldY: number, mods: DragMods) => DragHandle | null,
     /** Muispositie bij hoveren (sx=null bij verlaten). */
     private onHover?: (sx: number | null, sy: number) => void,
   ) {
@@ -113,7 +120,8 @@ export class GestureController {
       this.vy = 0
       // Object onder de pointer? Dan dat slepen i.p.v. de camera.
       const w = this.camera.screenToWorld(p.x, p.y, this.getVp())
-      this.dragTarget = this.beginDrag?.(w.x, w.y) ?? null
+      this.dragTarget =
+        this.beginDrag?.(w.x, w.y, { alt: e.altKey, shift: e.shiftKey, ctrl: e.ctrlKey }) ?? null
     } else if (this.pointers.size === 2) {
       // Een tweede vinger start een pinch: breek een eventuele object-sleep af
       // i.p.v. de handle te laten hangen — anders "springt" het object bij

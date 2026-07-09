@@ -340,10 +340,10 @@ export class EventScene implements Scene {
     let maxX = -Infinity
     let maxY = -Infinity
     for (const n of this.nodes) {
-      minX = Math.min(minX, n.x - n.half)
-      maxX = Math.max(maxX, n.x + n.half)
-      minY = Math.min(minY, n.y - n.half)
-      maxY = Math.max(maxY, n.y + n.half)
+      minX = Math.min(minX, n.x - n.half * n.scale)
+      maxX = Math.max(maxX, n.x + n.half * n.scale)
+      minY = Math.min(minY, n.y - n.half * n.scale)
+      maxY = Math.max(maxY, n.y + n.half * n.scale)
     }
     return { minX, minY, maxX, maxY }
   }
@@ -373,10 +373,10 @@ export class EventScene implements Scene {
     for (const n of this.nodes) {
       // Op de DOEL-bounds fitten (waar de animatie naartoe gaat), niet de
       // huidige tussenpositie.
-      minX = Math.min(minX, n.tx - n.half)
-      maxX = Math.max(maxX, n.tx + n.half)
-      minY = Math.min(minY, n.ty - n.half)
-      maxY = Math.max(maxY, n.ty + n.half)
+      minX = Math.min(minX, n.tx - n.half * n.scale)
+      maxX = Math.max(maxX, n.tx + n.half * n.scale)
+      minY = Math.min(minY, n.ty - n.half * n.scale)
+      maxY = Math.max(maxY, n.ty + n.half * n.scale)
     }
     const vp = this.engine.viewport()
     const w = maxX - minX
@@ -393,7 +393,7 @@ export class EventScene implements Scene {
   refAt(worldX: number, worldY: number): string | null {
     for (let i = this.nodes.length - 1; i >= 0; i--) {
       const n = this.nodes[i]
-      if (n.sprite && Math.abs(worldX - n.x) <= n.half && Math.abs(worldY - n.y) <= n.half) {
+      if (n.sprite && Math.abs(worldX - n.x) <= n.half * n.scale && Math.abs(worldY - n.y) <= n.half * n.scale) {
         return n.ref
       }
     }
@@ -450,7 +450,7 @@ export class EventScene implements Scene {
     // Bovenste item onder het punt.
     for (let i = this.nodes.length - 1; i >= 0; i--) {
       const n = this.nodes[i]
-      if (Math.abs(wx - n.x) <= n.half && Math.abs(wy - n.y) <= n.half) {
+      if (Math.abs(wx - n.x) <= n.half * n.scale && Math.abs(wy - n.y) <= n.half * n.scale) {
         const offX = n.x - wx
         const offY = n.y - wy
         const startX = n.x
@@ -496,6 +496,53 @@ export class EventScene implements Scene {
     return null
   }
 
+  /** Roteren (Alt) of schalen (Shift) van de foto onder het punt. Alleen in de
+   * eigen layout ('custom'), zodat het naar `_canvas.json` gepersisteerd kan worden.
+   * Roteren volgt de muishoek rond het midden; schalen de afstand tot het midden. */
+  beginTransform(wx: number, wy: number, kind: 'rotate' | 'scale'): DragHandle | null {
+    if (this.mode !== 'custom') return null
+    for (let i = this.nodes.length - 1; i >= 0; i--) {
+      const n = this.nodes[i]
+      const hw = n.half * n.scale
+      if (Math.abs(wx - n.x) > hw || Math.abs(wy - n.y) > hw) continue
+      // Naar voren halen.
+      n.z = ++this.zTop
+      n.container.zIndex = n.z
+      let changed = false
+      if (kind === 'rotate') {
+        const startAngle = Math.atan2(wy - n.y, wx - n.x)
+        const startRot = n.trot
+        return {
+          moveTo: (mx, my) => {
+            n.trot = startRot + (Math.atan2(my - n.y, mx - n.x) - startAngle)
+            n.rotation = n.trot
+            n.container.rotation = n.trot // meteen responsief (geen lerp-vertraging)
+            changed = true
+          },
+          end: () => {
+            if (!changed) return
+            n.baseRot = n.trot
+            this.persist()
+          },
+        }
+      }
+      // Schalen: factor = huidige afstand / startafstand tot het midden.
+      const startDist = Math.max(1, Math.hypot(wx - n.x, wy - n.y))
+      const startScale = n.scale
+      return {
+        moveTo: (mx, my) => {
+          const f = Math.hypot(mx - n.x, my - n.y) / startDist
+          n.scale = Math.min(4, Math.max(0.3, startScale * f))
+          changed = true
+        },
+        end: () => {
+          if (changed) this.persist()
+        },
+      }
+    }
+    return null
+  }
+
   private persist(): void {
     // Behoud bestaande layout-eigenschappen (scale/rotation/textScale/width/
     // height) uit `_canvas.json`; drag wijzigt alleen positie en z-order.
@@ -535,8 +582,9 @@ export class EventScene implements Scene {
       n.container.rotation =
         Math.abs(dr) < 0.001 ? n.trot : n.container.rotation + dr * 0.18
 
-      // Vloeiende hover-schaal.
-      const target = n.item.id === this.hoveredId ? 1.05 : 1
+      // Vloeiende schaal: de eigen (curatie-)schaal `n.scale`, met een lichte
+      // hover-boost. Zo volgt de kaart een Shift-sleep-schaal én de hover.
+      const target = n.scale * (n.item.id === this.hoveredId ? 1.05 : 1)
       const s = n.container.scale.x + (target - n.container.scale.x) * 0.2
       n.container.scale.set(s)
 
@@ -558,7 +606,7 @@ export class EventScene implements Scene {
   hitTest(worldX: number, worldY: number): string | null {
     for (let i = this.nodes.length - 1; i >= 0; i--) {
       const n = this.nodes[i]
-      if (Math.abs(worldX - n.x) <= n.half && Math.abs(worldY - n.y) <= n.half) {
+      if (Math.abs(worldX - n.x) <= n.half * n.scale && Math.abs(worldY - n.y) <= n.half * n.scale) {
         return n.item.id
       }
     }

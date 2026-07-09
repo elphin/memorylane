@@ -4,7 +4,7 @@
 
 import { Application, Container, Ticker, UPDATE_PRIORITY } from 'pixi.js'
 import { Camera, type Viewport } from './camera'
-import { GestureController, type DragHandle } from './gestures'
+import { GestureController, type DragHandle, type DragMods } from './gestures'
 import { LodManager } from './lod'
 import { TextureManager } from './textures'
 
@@ -34,8 +34,8 @@ export class RenderEngine {
   onTap?: (worldX: number, worldY: number) => void
 
   /** Sleep-hook: geeft een handle terug als er een object onder het wereldpunt
-   * ligt (dan sleept dat i.p.v. de camera). */
-  beginDrag?: (worldX: number, worldY: number) => DragHandle | null
+   * ligt (dan sleept dat i.p.v. de camera). `mods` = toets-modifiers bij pointerdown. */
+  beginDrag?: (worldX: number, worldY: number, mods: DragMods) => DragHandle | null
 
   /** Hover-hook: wereldpunt onder de muis (of null bij verlaten). */
   onHover?: (worldX: number | null, worldY: number) => void
@@ -124,7 +124,7 @@ export class RenderEngine {
       // Geen nieuwe sleep starten tijdens een niveau-transitie: het oude niveau
       // leeft dan nog ~380ms in de overlay met een actieve beginDrag-hook, maar
       // is visueel al weg — anders zou je onzichtbare items kunnen grijpen.
-      (wx, wy) => (this.isTransitioning ? null : (this.beginDrag?.(wx, wy) ?? null)),
+      (wx, wy, mods) => (this.isTransitioning ? null : (this.beginDrag?.(wx, wy, mods) ?? null)),
       (sx, sy) => {
         if (sx === null) {
           this.onHover?.(null, 0)

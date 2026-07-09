@@ -613,7 +613,7 @@ export function AppShell() {
       // Sleep-dispatcher: op de jaar-tijdlijn met Ctrl = een datum-range slepen
       // (begin→eind) i.p.v. de camera pannen; anders delegeren naar de scene
       // (bijv. een canvas-item slepen op L2).
-      engine.beginDrag = (wx, wy) => {
+      engine.beginDrag = (wx, wy, mods) => {
         // Elke nieuwe pointerdown gaat hier langs (ook een gewone klik → null).
         // Reset de tap-onderdrukking, zodat een blijvende `true` van een vorige
         // ≥6px Ctrl-sleep (waar géén onTap op volgde) niet de volgende klik slikt.
@@ -676,6 +676,25 @@ export function AppShell() {
             cancel: () => {
               rangeJustEnded = true
             },
+          }
+        }
+        // Alt-slepen = roteren, Shift-slepen = schalen (een zelf-geplaatste foto op
+        // het event-canvas). Valt terug op een gewone sleep als er niets te pakken is.
+        if (levelRef.current === 'event' && (mods.alt || mods.shift) && scene?.beginTransform) {
+          const h = scene.beginTransform(wx, wy, mods.alt ? 'rotate' : 'scale')
+          if (h) {
+            // Onderdruk de naloop-tap (→L3) na een transform (ook bij een mini-beweging).
+            return {
+              moveTo: h.moveTo,
+              end: () => {
+                rangeJustEnded = true
+                h.end()
+              },
+              cancel: () => {
+                rangeJustEnded = true
+                h.cancel?.()
+              },
+            }
           }
         }
         return scene?.beginDrag?.(wx, wy) ?? null
