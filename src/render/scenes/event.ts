@@ -25,6 +25,12 @@ interface Node {
   y: number
   half: number
   z: number
+  // Eigen ("custom") layout: de posities/rotatie/z uit `_canvas.json` (of auto-grid).
+  // Grid/scatter herschikken tijdelijk; hiernaar keer je altijd terug.
+  baseX: number
+  baseY: number
+  baseRot: number
+  baseZ: number
   key: string
   loaded: boolean
   // Layout-eigenschappen uit `_canvas.json` die deze fase (nog) niet visueel
@@ -43,6 +49,7 @@ export class EventScene implements Scene {
   private zTop = 0
   private hoveredId: string | null = null
   private featuredRef: string | null
+  private mode: 'custom' | 'grid' | 'scatter' = 'custom'
 
   constructor(
     private engine: RenderEngine,
@@ -75,7 +82,9 @@ export class EventScene implements Scene {
       const x = saved ? saved.x : (i % cols) * CELL - ((cols - 1) * CELL) / 2
       const y = saved ? saved.y : Math.floor(i / cols) * CELL
       const z = saved ? saved.zIndex : i
+      const rot = saved?.rotation ?? 0
       container.position.set(x, y)
+      container.rotation = rot
       container.zIndex = z
       this.zTop = Math.max(this.zTop, z)
 
@@ -90,10 +99,14 @@ export class EventScene implements Scene {
         y,
         half,
         z,
+        baseX: x,
+        baseY: y,
+        baseRot: rot,
+        baseZ: z,
         key: `item-${item.id}`,
         loaded: false,
         scale: saved?.scale ?? 1,
-        rotation: saved?.rotation ?? 0,
+        rotation: rot,
         textScale: saved?.textScale,
         width: saved?.width,
         height: saved?.height,
@@ -139,6 +152,82 @@ export class EventScene implements Scene {
     for (const n of this.nodes) {
       if (n.ring) n.ring.visible = n.ref === ref
     }
+  }
+
+  /** Herschik het canvas. 'custom' herstelt de eigen posities; 'grid' zet ze
+   * chronologisch in een vierkant raster; 'scatter' verspreidt ze speels
+   * (kriskras + scheef, elke aanroep opnieuw). Grid/scatter persisteren NIET. */
+  applyLayout(mode: 'custom' | 'grid' | 'scatter'): void {
+    this.mode = mode
+    if (mode === 'custom') {
+      for (const n of this.nodes) {
+        n.x = n.baseX
+        n.y = n.baseY
+        n.z = n.baseZ
+        n.container.position.set(n.x, n.y)
+        n.container.rotation = n.baseRot
+        n.container.zIndex = n.z
+      }
+    } else if (mode === 'grid') {
+      // Chronologisch (op timestamp; ongedateerd achteraan), zo vierkant mogelijk.
+      const ordered = [...this.nodes].sort(
+        (a, b) => (a.item.timestampMs ?? Infinity) - (b.item.timestampMs ?? Infinity),
+      )
+      const cols = Math.max(1, Math.ceil(Math.sqrt(ordered.length)))
+      ordered.forEach((n, i) => {
+        n.x = (i % cols) * CELL - ((cols - 1) * CELL) / 2
+        n.y = Math.floor(i / cols) * CELL
+        n.z = i
+        n.container.position.set(n.x, n.y)
+        n.container.rotation = 0
+        n.container.zIndex = n.z
+      })
+    } else {
+      // Scatter: geschudde losse raster-cellen + flinke jitter + rotatie → een
+      // "op tafel verspreid"-look; elke aanroep een nieuwe worp (dobbelsteen).
+      const shuffled = [...this.nodes]
+      for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1))
+        ;[shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]]
+      }
+      const cols = Math.max(1, Math.ceil(Math.sqrt(shuffled.length)))
+      const S = CELL * 1.15
+      shuffled.forEach((n, i) => {
+        const jx = (Math.random() - 0.5) * S * 0.75
+        const jy = (Math.random() - 0.5) * S * 0.75
+        n.x = (i % cols) * S - ((cols - 1) * S) / 2 + jx
+        n.y = Math.floor(i / cols) * S + jy
+        n.z = Math.floor(Math.random() * 1000)
+        n.container.position.set(n.x, n.y)
+        n.container.rotation = (Math.random() - 0.5) * 0.5 // ±0.25 rad
+        n.container.zIndex = n.z
+      })
+    }
+    this.refit()
+  }
+
+  /** Past de camera op de huidige node-bounds (na een layout-wissel). */
+  private refit(): void {
+    if (this.nodes.length === 0) return
+    let minX = Infinity
+    let minY = Infinity
+    let maxX = -Infinity
+    let maxY = -Infinity
+    for (const n of this.nodes) {
+      minX = Math.min(minX, n.x - n.half)
+      maxX = Math.max(maxX, n.x + n.half)
+      minY = Math.min(minY, n.y - n.half)
+      maxY = Math.max(maxY, n.y + n.half)
+    }
+    const vp = this.engine.viewport()
+    const w = maxX - minX
+    const h = maxY - minY
+    const zoom = Math.min(vp.width / (w + CELL), vp.height / (h + CELL))
+    this.engine.jumpCamera(
+      (minX + maxX) / 2,
+      (minY + maxY) / 2,
+      Math.max(this.engine.camera.minZoom, Math.min(zoom, 1.2)),
+    )
   }
 
   /** De ref (slug/id) van het item onder een wereldpunt, of null. */
@@ -196,6 +285,9 @@ export class EventScene implements Scene {
   }
 
   beginDrag(wx: number, wy: number): DragHandle | null {
+    // Slepen persisteert alleen in de eigen layout; grid/scatter zijn view-only
+    // (zodat je zelfgemaakte layout niet per ongeluk overschreven wordt).
+    if (this.mode !== 'custom') return null
     // Bovenste item onder het punt.
     for (let i = this.nodes.length - 1; i >= 0; i--) {
       const n = this.nodes[i]
@@ -222,7 +314,16 @@ export class EventScene implements Scene {
             if (!moved && Math.hypot(n.x - startX, n.y - startY) > dragPx) moved = true
           },
           end: () => {
-            if (moved) this.persist()
+            if (moved) {
+              // De gesleepte positie is nu de "eigen" positie: leg 'm vast in de
+              // base zodat een uitstapje naar Grid/Scatter en terug naar Eigen de
+              // net-gesleepte plek toont (niet de oude). baseRot blijft ongemoeid
+              // (slepen wijzigt geen rotatie).
+              n.baseX = n.x
+              n.baseY = n.y
+              n.baseZ = n.z
+              this.persist()
+            }
           },
         }
       }

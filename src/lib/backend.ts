@@ -63,6 +63,8 @@ export interface Item {
   caption?: string
   bodyText?: string
   slug?: string
+  /** Tijdstip (ms) voor chronologische sortering (grid-layout). */
+  timestampMs?: number
 }
 
 export interface CanvasItem {
@@ -461,6 +463,8 @@ class MockBackend implements Backend {
           : undefined,
       caption: `Foto ${i}`,
       slug: `${eventId}-i${i}`,
+      // Deterministische, licht-geschudde tijden zodat de grid-sortering merkbaar is.
+      timestampMs: 1_719_792_000_000 + ((i * 7) % 12) * 86_400_000 + i * 3_600_000,
     }))
     const items = [...base, ...(this.adds.get(eventId) ?? [])]
       .filter((it) => !this.deleted.has(it.id))

@@ -59,6 +59,7 @@ export function AppShell() {
   const [editing, setEditing] = useState<null | { id: string; kind: 'text' | 'photo'; value: string }>(null)
   const [eventForm, setEventForm] = useState<null | EventForm>(null)
   const [metaForm, setMetaForm] = useState<null | MetaForm>(null)
+  const [layoutMode, setLayoutMode] = useState<'custom' | 'grid' | 'scatter'>('custom')
   const [draft, setDraft] = useState('')
   const [busy, setBusy] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
@@ -173,6 +174,7 @@ export function AppShell() {
         currentEventInfoRef.current = detail.event
         currentItemsRef.current = detail.items
         entryZoomRef.current = engine.pendingZoom
+        setLayoutMode('custom') // elk event opent in de eigen layout
       } catch (e) {
         if (!disposed) {
           setMessage(String(e))
@@ -500,6 +502,13 @@ export function AppShell() {
     setEventForm({ mode: 'create', title: '', startAt, endAt: '' })
   }
 
+  // Wissel de canvas-layout (Eigen/Grid/Scatter). Scatter opnieuw aanroepen =
+  // een nieuwe worp (dobbelsteen).
+  const changeLayout = (mode: 'custom' | 'grid' | 'scatter'): void => {
+    setLayoutMode(mode)
+    sceneRef.current?.applyLayout?.(mode)
+  }
+
   const openEditEvent = (): void => {
     const info = currentEventInfoRef.current
     if (!info) return
@@ -717,10 +726,12 @@ export function AppShell() {
       {phase === 'ready' && !modal && !editing && !eventForm && !metaForm && (
         <Fab
           uiLevel={uiLevel}
+          layoutMode={layoutMode}
           onAddEvent={openNewEvent}
           onAddNote={() => setModal('note')}
           onAddPhotos={() => void addPhotos()}
           onEditEvent={openEditEvent}
+          onLayout={changeLayout}
           onEdit={startEdit}
           onDelete={() => void deleteCurrent()}
         />
@@ -871,18 +882,22 @@ function MetaPanel({
 
 function Fab({
   uiLevel,
+  layoutMode,
   onAddEvent,
   onAddNote,
   onAddPhotos,
   onEditEvent,
+  onLayout,
   onEdit,
   onDelete,
 }: {
   uiLevel: 'lifeline' | 'year' | 'event' | 'focus'
+  layoutMode: 'custom' | 'grid' | 'scatter'
   onAddEvent: () => void
   onAddNote: () => void
   onAddPhotos: () => void
   onEditEvent: () => void
+  onLayout: (mode: 'custom' | 'grid' | 'scatter') => void
   onEdit: () => void
   onDelete: () => void
 }) {
@@ -895,8 +910,17 @@ function Fab({
     )
   }
   if (uiLevel === 'event') {
+    const seg = (m: 'custom' | 'grid' | 'scatter'): React.CSSProperties => ({
+      ...fabBtn,
+      background: layoutMode === m ? '#3b82f6' : '#1f2734',
+    })
     return (
       <div style={wrap}>
+        <button onClick={() => onLayout('custom')} style={seg('custom')}>Eigen</button>
+        <button onClick={() => onLayout('grid')} style={seg('grid')}>Grid</button>
+        <button onClick={() => onLayout('scatter')} style={seg('scatter')} title="Elke klik een nieuwe worp">
+          Scatter 🎲
+        </button>
         <button onClick={onAddPhotos} style={fabBtn}>+ Foto&apos;s</button>
         <button onClick={onAddNote} style={fabBtn}>+ Notitie</button>
         <button onClick={onEditEvent} style={fabBtn}>Bewerk event</button>
