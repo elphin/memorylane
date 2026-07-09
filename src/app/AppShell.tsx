@@ -169,6 +169,24 @@ function removeEventView(eventId: string): void {
   }
 }
 
+/** Schakel echte fullscreen (borderloos, hele monitor). In Tauri via de venster-API,
+ * in de browser-dev via de Fullscreen-API. */
+async function toggleFullscreen(): Promise<void> {
+  try {
+    if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
+      const { getCurrentWindow } = await import('@tauri-apps/api/window')
+      const w = getCurrentWindow()
+      await w.setFullscreen(!(await w.isFullscreen()))
+    } else if (document.fullscreenElement) {
+      await document.exitFullscreen()
+    } else {
+      await document.documentElement.requestFullscreen()
+    }
+  } catch {
+    /* fullscreen niet beschikbaar → negeren */
+  }
+}
+
 /** Lokale datum als `YYYY-MM-DD` (niet UTC — voorkomt dag-/jaarverschuiving). */
 function todayISO(): string {
   const d = new Date()
@@ -254,6 +272,12 @@ export function AppShell() {
   // onder een open dialog/overlay.)
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
+      // F11: echte fullscreen aan/uit — werkt overal (ook in invoervelden).
+      if (e.key === 'F11') {
+        e.preventDefault()
+        void toggleFullscreen()
+        return
+      }
       if (e.ctrlKey || e.metaKey || e.altKey) return
       const el = document.activeElement
       if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) return
