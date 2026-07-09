@@ -24,9 +24,6 @@ export interface Scene {
    * ruimte. Puur (geen neveneffecten): de app-shell beslist wat een treffer of
    * een klik-in-het-luchtledige betekent. */
   hitTest?(worldX: number, worldY: number): string | null
-  /** Jaar-id als het wereldpunt op de ▶-knop van een jaartegel valt (alleen L0),
-   * anders null — voor het starten van de screensaver van dat jaar. */
-  playButtonAt?(worldX: number, worldY: number): string | null
   /** Ga naar de vorige/volgende sibling (alleen L3-focus). */
   step?(delta: number): void
   /** Ververs de item-data in-place (alleen L3-focus), na een bewerking. */

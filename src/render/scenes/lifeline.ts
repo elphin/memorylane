@@ -13,8 +13,6 @@ const TILE_H = 240
 const GAP = 80
 const COVER_H = TILE_H - 56
 const COVER_W = TILE_W - 16
-const BADGE_INSET = 26 // afstand van de ▶-knop tot de tegelrand
-const BADGE_R = 18 // straal van de ▶-knop
 
 interface Tile {
   year: YearSummary
@@ -112,20 +110,6 @@ export class LifelineScene implements Scene {
       sub.anchor.set(0.5, 0)
       sub.position.set(TILE_W / 2, COVER_H + 40)
       tile.addChild(sub)
-
-      // ▶-knop rechtsboven op de cover: start de screensaver van dit jaar.
-      const badge = new Container()
-      badge.position.set(TILE_W - BADGE_INSET, BADGE_INSET)
-      const circle = new Graphics()
-      circle
-        .circle(0, 0, BADGE_R)
-        .fill({ color: 0x000000, alpha: 0.45 })
-        .stroke({ width: 1.5, color: 0xffffff, alpha: 0.8 })
-      const tri = new Graphics()
-      tri.poly([-4, -7, -4, 7, 8, 0]).fill({ color: 0xffffff, alpha: 0.95 })
-      badge.addChild(circle)
-      badge.addChild(tri)
-      tile.addChild(badge)
 
       this.root.addChild(tile)
 
@@ -252,19 +236,6 @@ export class LifelineScene implements Scene {
       const src = this.backend.thumb(t.pool[nextIdx], 256)
       engine.textures.request({ key, url: src.url, hue: src.hue, size: 256 })
     }
-  }
-
-  /** Jaar-id als het punt op de ▶-knop van een tegel valt (met wat marge voor de
-   * hover-schaal), anders null. Checkt vóór hitTest zodat de knop vóór navigatie gaat. */
-  playButtonAt(worldX: number, worldY: number): string | null {
-    for (const tile of this.tiles) {
-      const bx = tile.worldX + TILE_W - BADGE_INSET
-      const by = -TILE_H / 2 + BADGE_INSET
-      if (Math.hypot(worldX - bx, worldY - by) <= BADGE_R + 4) {
-        return tile.year.id
-      }
-    }
-    return null
   }
 
   hitTest(worldX: number, worldY: number): string | null {

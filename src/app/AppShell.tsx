@@ -289,10 +289,6 @@ export function AppShell() {
   const applyPanLockRef = useRef<() => void>(() => {})
   // Zodat instellingen (jaar-tegel-slideshow) de lifeline live kunnen herbouwen.
   const setupLifelineRef = useRef<() => void>(() => {})
-  // Zodat de tap-handler (in de mount-closure) de screensaver kan starten.
-  const startScreensaverRef = useRef<
-    (o?: { scopeKind: 'all' | 'year' | 'event'; scopeId: string | null }) => void
-  >(() => {})
 
   useEffect(() => {
     let engine: RenderEngine | null = null
@@ -678,15 +674,6 @@ export function AppShell() {
         }
         if (level === 'year' && ctrlDown) return
 
-        // ▶-knop op een jaartegel (L0): start de screensaver voor dat jaar.
-        if (level === 'lifeline') {
-          const playYear = scene?.playButtonAt?.(wx, wy)
-          if (playYear) {
-            startScreensaverRef.current({ scopeKind: 'year', scopeId: playYear })
-            return
-          }
-        }
-
         const hit = scene?.hitTest?.(wx, wy) ?? null
 
         // L3-focus: klik óp de foto = vorige/volgende (linker-/rechterhelft),
@@ -850,30 +837,21 @@ export function AppShell() {
     setEventForm({ mode: 'create', title: '', startAt, endAt: '' })
   }
 
-  // Wissel de canvas-layout (Eigen/Grid/Scatter). Scatter opnieuw aanroepen =
-  // een nieuwe worp (dobbelsteen).
-  // Start de screensaver met een context-afhankelijke foto-set: op het overzicht
+  // Start de diavoorstelling met een context-afhankelijke foto-set: op het overzicht
   // alle foto's, in een jaar die van dat jaar, in een event alleen die van het
   // event. Tag-filter (include/exclude) uit de instellingen.
-  const startScreensaver = async (
-    override?: { scopeKind: 'all' | 'year' | 'event'; scopeId: string | null },
-  ): Promise<void> => {
+  const startScreensaver = async (): Promise<void> => {
     const backend = backendRef.current
     if (!backend) return
     let scopeKind: 'all' | 'year' | 'event' = 'all'
     let scopeId: string | null = null
-    if (override) {
-      scopeKind = override.scopeKind
-      scopeId = override.scopeId
-    } else {
-      const lvl = levelRef.current
-      if (lvl === 'year') {
-        scopeKind = 'year'
-        scopeId = currentYearRef.current
-      } else if (lvl === 'event' || lvl === 'focus') {
-        scopeKind = 'event'
-        scopeId = currentEventRef.current
-      }
+    const lvl = levelRef.current
+    if (lvl === 'year') {
+      scopeKind = 'year'
+      scopeId = currentYearRef.current
+    } else if (lvl === 'event' || lvl === 'focus') {
+      scopeKind = 'event'
+      scopeId = currentEventRef.current
     }
     const parse = (s: string): string[] => s.split(',').map((t) => t.trim()).filter(Boolean)
     const include = parse(settingsRef.current.screensaverInclude)
@@ -890,7 +868,6 @@ export function AppShell() {
       setToast(String(e))
     }
   }
-  startScreensaverRef.current = (o) => void startScreensaver(o)
 
   const changeLayout = (mode: 'custom' | 'grid' | 'scatter'): void => {
     setLayoutMode(mode)
