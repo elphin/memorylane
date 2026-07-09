@@ -23,6 +23,11 @@ interface Node {
   ring: Graphics | null // gekleurde rand als deze foto de uitgelichte is
   x: number
   y: number
+  // Doel-positie/-rotatie; `update()` lerpt de node hier vloeiend naartoe (voor
+  // de animatie bij het wisselen van layout-stand).
+  tx: number
+  ty: number
+  trot: number
   half: number
   z: number
   // Eigen ("custom") layout: de posities/rotatie/z uit `_canvas.json` (of auto-grid).
@@ -97,6 +102,9 @@ export class EventScene implements Scene {
         ring,
         x,
         y,
+        tx: x,
+        ty: y,
+        trot: rot,
         half,
         z,
         baseX: x,
@@ -159,13 +167,14 @@ export class EventScene implements Scene {
    * (kriskras + scheef, elke aanroep opnieuw). Grid/scatter persisteren NIET. */
   applyLayout(mode: 'custom' | 'grid' | 'scatter'): void {
     this.mode = mode
+    // Zet alleen de DOEL-posities/-rotatie; `update()` animeert de nodes ernaartoe.
+    // z-order snapt wel meteen (anders "kruipen" de kaarten door elkaar).
     if (mode === 'custom') {
       for (const n of this.nodes) {
-        n.x = n.baseX
-        n.y = n.baseY
+        n.tx = n.baseX
+        n.ty = n.baseY
+        n.trot = n.baseRot
         n.z = n.baseZ
-        n.container.position.set(n.x, n.y)
-        n.container.rotation = n.baseRot
         n.container.zIndex = n.z
       }
     } else if (mode === 'grid') {
@@ -175,11 +184,10 @@ export class EventScene implements Scene {
       )
       const cols = Math.max(1, Math.ceil(Math.sqrt(ordered.length)))
       ordered.forEach((n, i) => {
-        n.x = (i % cols) * CELL - ((cols - 1) * CELL) / 2
-        n.y = Math.floor(i / cols) * CELL
+        n.tx = (i % cols) * CELL - ((cols - 1) * CELL) / 2
+        n.ty = Math.floor(i / cols) * CELL
+        n.trot = 0
         n.z = i
-        n.container.position.set(n.x, n.y)
-        n.container.rotation = 0
         n.container.zIndex = n.z
       })
     } else {
@@ -195,11 +203,10 @@ export class EventScene implements Scene {
       shuffled.forEach((n, i) => {
         const jx = (Math.random() - 0.5) * S * 0.75
         const jy = (Math.random() - 0.5) * S * 0.75
-        n.x = (i % cols) * S - ((cols - 1) * S) / 2 + jx
-        n.y = Math.floor(i / cols) * S + jy
+        n.tx = (i % cols) * S - ((cols - 1) * S) / 2 + jx
+        n.ty = Math.floor(i / cols) * S + jy
+        n.trot = (Math.random() - 0.5) * 0.5 // ±0.25 rad
         n.z = Math.floor(Math.random() * 1000)
-        n.container.position.set(n.x, n.y)
-        n.container.rotation = (Math.random() - 0.5) * 0.5 // ±0.25 rad
         n.container.zIndex = n.z
       })
     }
@@ -214,10 +221,12 @@ export class EventScene implements Scene {
     let maxX = -Infinity
     let maxY = -Infinity
     for (const n of this.nodes) {
-      minX = Math.min(minX, n.x - n.half)
-      maxX = Math.max(maxX, n.x + n.half)
-      minY = Math.min(minY, n.y - n.half)
-      maxY = Math.max(maxY, n.y + n.half)
+      // Op de DOEL-bounds fitten (waar de animatie naartoe gaat), niet de
+      // huidige tussenpositie.
+      minX = Math.min(minX, n.tx - n.half)
+      maxX = Math.max(maxX, n.tx + n.half)
+      minY = Math.min(minY, n.ty - n.half)
+      maxY = Math.max(maxY, n.ty + n.half)
     }
     const vp = this.engine.viewport()
     const w = maxX - minX
@@ -304,6 +313,9 @@ export class EventScene implements Scene {
           moveTo: (mx, my) => {
             n.x = mx + offX
             n.y = my + offY
+            // Doel = huidige positie, zodat de update-lerp de sleep niet tegenwerkt.
+            n.tx = n.x
+            n.ty = n.y
             n.container.position.set(n.x, n.y)
             // Pas als echt verplaatst telt het als een drag → write. De drempel
             // is zoom-geschaald zodat hij overeenkomt met de 6px-scherm-tapdrempel
@@ -355,6 +367,21 @@ export class EventScene implements Scene {
   update(ctx: FrameContext): void {
     const { engine, frame } = ctx
     for (const n of this.nodes) {
+      // Vloeiend naar de doel-layout bewegen (animatie bij een stand-wissel).
+      // Binnen een kleine epsilon meteen snappen, zodat een node in rust niet
+      // eeuwig sub-pixel micro-updates op de container-transform blijft doen.
+      const dx = n.tx - n.x
+      const dy = n.ty - n.y
+      n.x = Math.abs(dx) < 0.05 ? n.tx : n.x + dx * 0.18
+      n.y = Math.abs(dy) < 0.05 ? n.ty : n.y + dy * 0.18
+      n.container.position.set(n.x, n.y)
+      // Rotatie via het kortste pad naar het doel lerpen.
+      let dr = n.trot - n.container.rotation
+      if (dr > Math.PI) dr -= Math.PI * 2
+      else if (dr < -Math.PI) dr += Math.PI * 2
+      n.container.rotation =
+        Math.abs(dr) < 0.001 ? n.trot : n.container.rotation + dr * 0.18
+
       // Vloeiende hover-schaal.
       const target = n.item.id === this.hoveredId ? 1.05 : 1
       const s = n.container.scale.x + (target - n.container.scale.x) * 0.2
