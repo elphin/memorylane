@@ -300,7 +300,7 @@ export class YearScene implements Scene {
     // Lege jaren: een hint in het midden.
     if (detail.events.length === 0) {
       const hint = new Text({
-        text: 'Geen gebeurtenissen in dit jaar',
+        text: 'Geen memories in dit jaar',
         style: { fill: 0x6a7690, fontSize: 20, fontFamily: 'Segoe UI, sans-serif' },
       })
       hint.resolution = 2
@@ -445,7 +445,7 @@ export class YearScene implements Scene {
     container.addChild(dot)
 
     const label = new Text({
-      text: ev.title ?? 'Gebeurtenis',
+      text: ev.title ?? 'Memory',
       style: {
         fill: 0xcfd6e4,
         fontSize: 13,

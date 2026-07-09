@@ -1415,7 +1415,7 @@ export function AppShell() {
             onClick={() => void fitYearSizes()}
             disabled={busy}
             style={fitBtn}
-            title="Schaal alle events proportioneel zodat het jaar netjes past"
+            title="Schaal alle memories proportioneel zodat het jaar netjes past"
           >
             ⤢ Passend maken
           </button>
@@ -1684,7 +1684,7 @@ function SettingsPanel({
           {tab === 'weergave' && (
             <>
               <Toggle on={settings.showTitle} set={(v) => onChange({ showTitle: v })} label="Titel bovenin tonen" />
-              {desc('"Memory Lane" op het overzicht, het jaar in een jaar, de eventnaam in een event.')}
+              {desc('"Memory Lane" op het overzicht, het jaar in een jaar, de memory-naam in een memory.')}
               {settings.showTitle && (
                 <div style={{ marginTop: 10 }}>
                   <Toggle
@@ -1692,7 +1692,7 @@ function SettingsPanel({
                     set={(v) => onChange({ photoTitleFromCaption: v })}
                     label="Bij een detailfoto de caption als titel"
                   />
-                  {desc('Heeft de foto geen caption, dan blijft de eventnaam staan (geen bestandsnamen).')}
+                  {desc('Heeft de foto geen caption, dan blijft de memory-naam staan (geen bestandsnamen).')}
                 </div>
               )}
               <div style={{ height: 1, background: '#2c3650', margin: '16px 0' }} />
@@ -1736,14 +1736,14 @@ function SettingsPanel({
                 <button onClick={() => onChange({ defaultLayout: 'grid' })} style={seg('grid')}>Grid</button>
                 <button onClick={() => onChange({ defaultLayout: 'scatter' })} style={seg('scatter')}>Scatter</button>
               </div>
-              {desc('Hoe een event opent. Je eigen posities blijven altijd bewaard onder "Eigen".')}
+              {desc('Hoe een memory opent. Je eigen posities blijven altijd bewaard onder "Eigen".')}
               <div style={{ marginTop: 12 }}>
                 <Toggle
                   on={settings.scatterRotate}
                   set={(v) => onChange({ scatterRotate: v })}
                   label="Scatter legt foto's licht scheef"
                 />
-                {desc("Uit = recht. Ook per event te wisselen met het ⟲-knopje naast Scatter.")}
+                {desc("Uit = recht. Ook per memory te wisselen met het ⟲-knopje naast Scatter.")}
               </div>
 
               <div style={{ height: 1, background: '#2c3650', margin: '16px 0' }} />
@@ -1845,7 +1845,7 @@ function SettingsPanel({
               {desc(
                 <>
                   De diavoorstelling toont foto's afhankelijk van waar je bent (overzicht = alles, jaar
-                  = dat jaar, event = dat event). Start 'm met de sneltoets <b>S</b>. Sluiten met Esc.
+                  = dat jaar, memory = die memory). Start 'm met de sneltoets <b>S</b>. Sluiten met Esc.
                 </>,
               )}
             </>
@@ -1881,7 +1881,7 @@ function SettingsPanel({
                 App-instellingen resetten
               </button>
               {desc(
-                'Zet alle app-instellingen (weergave, diavoorstelling, per-event onthouden standen) terug naar standaard. Je foto’s, events en curatie in de vault blijven ongemoeid.',
+                'Zet alle app-instellingen (weergave, diavoorstelling, per-memory onthouden standen) terug naar standaard. Je foto’s, memories en curatie in de vault blijven ongemoeid.',
               )}
             </>
           )}
@@ -1932,7 +1932,7 @@ function Fab({
   if (uiLevel === 'year') {
     return (
       <div style={wrap}>
-        <button onClick={onAddEvent} style={fabBtn}>+ Nieuw event</button>
+        <button onClick={onAddEvent} style={fabBtn}>+ Nieuwe memory</button>
       </div>
     )
   }
@@ -1962,7 +1962,7 @@ function Fab({
         )}
         <button onClick={onAddPhotos} style={fabBtn}>+ Foto&apos;s</button>
         <button onClick={onAddNote} style={fabBtn}>+ Notitie</button>
-        <button onClick={onEditEvent} style={fabBtn}>Bewerk event</button>
+        <button onClick={onEditEvent} style={fabBtn}>Bewerk memory</button>
       </div>
     )
   }
@@ -2063,13 +2063,13 @@ function EventDialog({
     >
       <div style={{ width: 480, maxWidth: '90%', background: '#161c28', borderRadius: 12, padding: 20 }}>
         <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 12 }}>
-          {form.mode === 'create' ? 'Nieuw event' : 'Event bewerken'}
+          {form.mode === 'create' ? 'Nieuwe memory' : 'Memory bewerken'}
         </div>
         <input
           autoFocus
           value={form.title}
           onChange={(e) => onChange({ title: e.target.value })}
-          placeholder="Titel van het event"
+          placeholder="Titel van de memory"
           style={field}
         />
         <div style={{ display: 'flex', gap: 12, marginTop: 12 }}>
@@ -2246,7 +2246,7 @@ function SearchPanel({
               }}
             >
               <div style={{ color: '#8a97b0', fontSize: 12, marginBottom: 2 }}>
-                {r.eventTitle ?? 'Gebeurtenis'}
+                {r.eventTitle ?? 'Memory'}
               </div>
               {r.snippet}
             </button>
