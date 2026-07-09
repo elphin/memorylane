@@ -1468,6 +1468,7 @@ function SettingsPanel({
   onChange: (patch: Partial<Settings>) => void
   onClose: () => void
 }) {
+  const [tab, setTab] = useState<'weergave' | 'tijdlijn' | 'dia'>('weergave')
   const seg = (m: 'custom' | 'grid' | 'scatter'): React.CSSProperties => ({
     ...ghostBtn,
     background: settings.defaultLayout === m ? '#3b82f6' : 'transparent',
@@ -1480,6 +1481,43 @@ function SettingsPanel({
     borderColor: active ? '#3b82f6' : '#2c3650',
     color: '#fff',
   })
+  const desc = (t: React.ReactNode): React.ReactElement => (
+    <div style={{ fontSize: 12, color: '#6a7690', marginTop: 6 }}>{t}</div>
+  )
+  const Toggle = ({
+    on,
+    set,
+    label,
+  }: {
+    on: boolean
+    set: (v: boolean) => void
+    label: string
+  }): React.ReactElement => (
+    <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
+      <input type="checkbox" checked={on} onChange={(e) => set(e.target.checked)} />
+      <span style={{ fontSize: 14, color: '#fff' }}>{label}</span>
+    </label>
+  )
+  const subhead = (t: string): React.ReactElement => (
+    <div style={{ fontSize: 13, color: '#8a97b0', margin: '16px 0 6px' }}>{t}</div>
+  )
+  const tabBtn = (id: typeof tab, label: string): React.ReactElement => (
+    <button
+      onClick={() => setTab(id)}
+      style={{
+        flex: 1,
+        padding: '10px 8px',
+        border: 'none',
+        borderBottom: tab === id ? '2px solid #3b82f6' : '2px solid transparent',
+        background: 'transparent',
+        color: tab === id ? '#fff' : '#8a97b0',
+        font: '13px sans-serif',
+        cursor: 'pointer',
+      }}
+    >
+      {label}
+    </button>
+  )
   return (
     <div
       onClick={onClose}
@@ -1495,8 +1533,8 @@ function SettingsPanel({
       <div
         onClick={(e) => e.stopPropagation()}
         style={{
-          width: 460,
-          maxWidth: '90%',
+          width: 640,
+          maxWidth: '94%',
           maxHeight: '88vh',
           background: '#161c28',
           borderRadius: 12,
@@ -1505,204 +1543,182 @@ function SettingsPanel({
           overflow: 'hidden',
         }}
       >
-        <div style={{ fontSize: 18, fontWeight: 700, padding: '20px 20px 12px' }}>Instellingen</div>
-        <div style={{ overflowY: 'auto', padding: '0 20px 4px', flex: '1 1 auto' }}>
-        <div style={{ fontSize: 13, color: '#8a97b0', marginBottom: 6 }}>Standaard canvas-weergave</div>
-        <div style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
-          <button onClick={() => onChange({ defaultLayout: 'custom' })} style={seg('custom')}>Eigen</button>
-          <button onClick={() => onChange({ defaultLayout: 'grid' })} style={seg('grid')}>Grid</button>
-          <button onClick={() => onChange({ defaultLayout: 'scatter' })} style={seg('scatter')}>Scatter</button>
+        <div style={{ fontSize: 18, fontWeight: 700, padding: '18px 22px 10px' }}>Instellingen</div>
+        <div style={{ display: 'flex', padding: '0 12px', borderBottom: '1px solid #2c3650' }}>
+          {tabBtn('weergave', 'Weergave')}
+          {tabBtn('tijdlijn', 'Tijdlijn & canvas')}
+          {tabBtn('dia', 'Diavoorstelling')}
         </div>
-        <div style={{ fontSize: 12, color: '#6a7690' }}>
-          Hoe een event opent. Je eigen posities blijven altijd bewaard onder “Eigen”.
-        </div>
-
-        <div style={{ height: 1, background: '#2c3650', margin: '18px 0' }} />
-        <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
-          <input
-            type="checkbox"
-            checked={settings.slideshow}
-            onChange={(e) => onChange({ slideshow: e.target.checked })}
-          />
-          <span style={{ fontSize: 14, color: '#fff' }}>Slideshow op de tijdlijn (thumbnails rouleren)</span>
-        </label>
-        {settings.slideshow && (
-          <div style={{ marginTop: 12 }}>
-            <div style={{ fontSize: 13, color: '#8a97b0', marginBottom: 4 }}>
-              Snelheid: {settings.slideshowSpeed}s per foto
-            </div>
-            <input
-              type="range"
-              min={2}
-              max={15}
-              step={1}
-              value={settings.slideshowSpeed}
-              onChange={(e) => onChange({ slideshowSpeed: Number(e.target.value) })}
-              style={{ width: '100%' }}
-            />
-          </div>
-        )}
-        <div style={{ fontSize: 12, color: '#6a7690', marginTop: 6 }}>
-          Wijzigingen gelden bij het (opnieuw) openen van een jaar.
-        </div>
-
-        <div style={{ height: 1, background: '#2c3650', margin: '18px 0' }} />
-        <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
-          <input
-            type="checkbox"
-            checked={settings.yearTileSlideshow}
-            onChange={(e) => onChange({ yearTileSlideshow: e.target.checked })}
-          />
-          <span style={{ fontSize: 14, color: '#fff' }}>Jaartegels als slideshow (covers rouleren)</span>
-        </label>
-        {settings.yearTileSlideshow && (
-          <div style={{ marginTop: 10 }}>
-            <div style={{ fontSize: 13, color: '#8a97b0', marginBottom: 6 }}>Cover-bron</div>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button
-                onClick={() => onChange({ yearCoverMode: 'featured' })}
-                style={segOn(settings.yearCoverMode === 'featured')}
-              >
-                Uitgelicht
-              </button>
-              <button
-                onClick={() => onChange({ yearCoverMode: 'random' })}
-                style={segOn(settings.yearCoverMode === 'random')}
-              >
-                Willekeurig
-              </button>
-            </div>
-          </div>
-        )}
-        <div style={{ fontSize: 12, color: '#6a7690', marginTop: 6 }}>
-          'Uitgelicht' rouleert door de uitgelichte foto's van dat jaar (geen uitgelicht → alle
-          foto's); 'willekeurig' door alle foto's. Snelheid volgt de slideshow hierboven.
-        </div>
-
-        <div style={{ height: 1, background: '#2c3650', margin: '18px 0' }} />
-        <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
-          <input
-            type="checkbox"
-            checked={settings.lockVerticalPan}
-            onChange={(e) => onChange({ lockVerticalPan: e.target.checked })}
-          />
-          <span style={{ fontSize: 14, color: '#fff' }}>Verticaal pannen vergrendelen (overzicht + jaar-tijdlijn)</span>
-        </label>
-        <div style={{ fontSize: 12, color: '#6a7690', marginTop: 6 }}>
-          Houdt de horizontale niveaus verticaal gecentreerd; je scrollt/zoomt alleen zijwaarts.
-        </div>
-
-        <div style={{ height: 1, background: '#2c3650', margin: '18px 0' }} />
-        <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
-          <input
-            type="checkbox"
-            checked={settings.viewMode}
-            onChange={(e) => onChange({ viewMode: e.target.checked })}
-          />
-          <span style={{ fontSize: 14, color: '#fff' }}>View-modus (alle knoppen verbergen)</span>
-        </label>
-        <div style={{ fontSize: 12, color: '#6a7690', marginTop: 6 }}>
-          Een schone weergave zonder knoppen. Druk op <b>E</b> om te wisselen.
-        </div>
-
-        <div style={{ height: 1, background: '#2c3650', margin: '18px 0' }} />
-        <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
-          <input
-            type="checkbox"
-            checked={settings.showSearchButton}
-            onChange={(e) => onChange({ showSearchButton: e.target.checked })}
-          />
-          <span style={{ fontSize: 14, color: '#fff' }}>Zoekknop tonen</span>
-        </label>
-        <div style={{ fontSize: 12, color: '#6a7690', marginTop: 6 }}>
-          Uit? Zoeken kan altijd nog met <b>Ctrl+K</b>. De knop verdwijnt sowieso na een paar
-          seconden zonder muisbeweging.
-        </div>
-
-        <div style={{ height: 1, background: '#2c3650', margin: '18px 0' }} />
-        <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
-          <input
-            type="checkbox"
-            checked={settings.showTitle}
-            onChange={(e) => onChange({ showTitle: e.target.checked })}
-          />
-          <span style={{ fontSize: 14, color: '#fff' }}>Titel bovenin tonen</span>
-        </label>
-        <div style={{ fontSize: 12, color: '#6a7690', marginTop: 6 }}>
-          "Memory Lane" op het overzicht, het jaar in een jaar, de eventnaam in een event.
-        </div>
-        {settings.showTitle && (
-          <>
-            <label
-              style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', marginTop: 12 }}
-            >
-              <input
-                type="checkbox"
-                checked={settings.photoTitleFromCaption}
-                onChange={(e) => onChange({ photoTitleFromCaption: e.target.checked })}
+        <div style={{ overflowY: 'auto', padding: '14px 22px 6px', flex: '1 1 auto' }}>
+          {tab === 'weergave' && (
+            <>
+              <Toggle on={settings.showTitle} set={(v) => onChange({ showTitle: v })} label="Titel bovenin tonen" />
+              {desc('"Memory Lane" op het overzicht, het jaar in een jaar, de eventnaam in een event.')}
+              {settings.showTitle && (
+                <div style={{ marginTop: 10 }}>
+                  <Toggle
+                    on={settings.photoTitleFromCaption}
+                    set={(v) => onChange({ photoTitleFromCaption: v })}
+                    label="Bij een detailfoto de caption als titel"
+                  />
+                  {desc('Heeft de foto geen caption, dan blijft de eventnaam staan (geen bestandsnamen).')}
+                </div>
+              )}
+              <div style={{ height: 1, background: '#2c3650', margin: '16px 0' }} />
+              <Toggle
+                on={settings.showSearchButton}
+                set={(v) => onChange({ showSearchButton: v })}
+                label="Zoekknop tonen"
               />
-              <span style={{ fontSize: 14, color: '#fff' }}>Bij een detailfoto de caption als titel</span>
-            </label>
-            <div style={{ fontSize: 12, color: '#6a7690', marginTop: 6 }}>
-              Heeft de foto geen caption, dan blijft de eventnaam staan (geen bestandsnamen).
-            </div>
-          </>
-        )}
+              {desc(
+                <>
+                  Uit? Zoeken kan altijd nog met <b>Ctrl+K</b>. De knop verdwijnt sowieso na een paar
+                  seconden zonder muisbeweging.
+                </>,
+              )}
+              <div style={{ height: 1, background: '#2c3650', margin: '16px 0' }} />
+              <Toggle
+                on={settings.viewMode}
+                set={(v) => onChange({ viewMode: v })}
+                label="View-modus (alle knoppen verbergen)"
+              />
+              {desc(
+                <>
+                  Een schone weergave zonder knoppen. Druk op <b>E</b> om te wisselen.
+                </>,
+              )}
+              <div style={{ height: 1, background: '#2c3650', margin: '16px 0' }} />
+              <Toggle
+                on={settings.lockVerticalPan}
+                set={(v) => onChange({ lockVerticalPan: v })}
+                label="Verticaal pannen vergrendelen (overzicht + jaar-tijdlijn)"
+              />
+              {desc('Houdt de horizontale niveaus verticaal gecentreerd; je scrollt/zoomt alleen zijwaarts.')}
+            </>
+          )}
 
-        <div style={{ height: 1, background: '#2c3650', margin: '18px 0' }} />
-        <div style={{ fontSize: 14, color: '#fff', marginBottom: 8 }}>Diavoorstelling</div>
-        <div style={{ fontSize: 13, color: '#8a97b0', marginBottom: 6 }}>Weergave</div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button onClick={() => onChange({ diaMode: 'kenburns' })} style={segOn(settings.diaMode === 'kenburns')}>
-            Ken Burns
-          </button>
-          <button onClick={() => onChange({ diaMode: 'crossfade' })} style={segOn(settings.diaMode === 'crossfade')}>
-            Overvloeien
-          </button>
-        </div>
-        <div style={{ fontSize: 12, color: '#6a7690', marginTop: 6 }}>
-          'Ken Burns' zoomt/pant langzaam; 'Overvloeien' toont een stilstaande foto die overvloeit.
-        </div>
-        <div style={{ fontSize: 13, color: '#8a97b0', margin: '12px 0 4px' }}>
-          Snelheid: {settings.diaSpeed}s per foto
-        </div>
-        <input
-          type="range"
-          min={2}
-          max={20}
-          step={1}
-          value={settings.diaSpeed}
-          onChange={(e) => onChange({ diaSpeed: Number(e.target.value) })}
-          style={{ width: '100%' }}
-        />
+          {tab === 'tijdlijn' && (
+            <>
+              {subhead('Standaard canvas-weergave')}
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button onClick={() => onChange({ defaultLayout: 'custom' })} style={seg('custom')}>Eigen</button>
+                <button onClick={() => onChange({ defaultLayout: 'grid' })} style={seg('grid')}>Grid</button>
+                <button onClick={() => onChange({ defaultLayout: 'scatter' })} style={seg('scatter')}>Scatter</button>
+              </div>
+              {desc('Hoe een event opent. Je eigen posities blijven altijd bewaard onder "Eigen".')}
+              <div style={{ marginTop: 12 }}>
+                <Toggle
+                  on={settings.scatterRotate}
+                  set={(v) => onChange({ scatterRotate: v })}
+                  label="Scatter legt foto's licht scheef"
+                />
+                {desc("Uit = recht. Ook per event te wisselen met het ⟲-knopje naast Scatter.")}
+              </div>
 
-        <div style={{ height: 1, background: '#2c3650', margin: '18px 0' }} />
-        <div style={{ fontSize: 14, color: '#fff', marginBottom: 8 }}>Diavoorstelling-tagfilter</div>
-        <label style={{ display: 'block', fontSize: 12, color: '#9aa6c0', marginBottom: 4 }}>
-          Alleen deze tags (komma-gescheiden)
-        </label>
-        <input
-          type="text"
-          value={settings.screensaverInclude}
-          onChange={(e) => onChange({ screensaverInclude: e.target.value })}
-          placeholder="bijv. vakantie, familie"
-          style={tagInput}
-        />
-        <label style={{ display: 'block', fontSize: 12, color: '#9aa6c0', margin: '10px 0 4px' }}>
-          Zonder deze tags (komma-gescheiden)
-        </label>
-        <input
-          type="text"
-          value={settings.screensaverExclude}
-          onChange={(e) => onChange({ screensaverExclude: e.target.value })}
-          placeholder="bijv. werk"
-          style={tagInput}
-        />
-        <div style={{ fontSize: 12, color: '#6a7690', marginTop: 6 }}>
-          De diavoorstelling toont foto's afhankelijk van waar je bent (overzicht = alles, jaar =
-          dat jaar, event = dat event). Start 'm met de sneltoets <b>S</b>. Sluiten met Esc.
-        </div>
+              <div style={{ height: 1, background: '#2c3650', margin: '16px 0' }} />
+              <Toggle
+                on={settings.slideshow}
+                set={(v) => onChange({ slideshow: v })}
+                label="Slideshow op de jaar-tijdlijn (thumbnails rouleren)"
+              />
+              {settings.slideshow && (
+                <div style={{ marginTop: 10 }}>
+                  <div style={{ fontSize: 13, color: '#8a97b0', marginBottom: 4 }}>
+                    Snelheid: {settings.slideshowSpeed}s per foto
+                  </div>
+                  <input
+                    type="range"
+                    min={2}
+                    max={15}
+                    step={1}
+                    value={settings.slideshowSpeed}
+                    onChange={(e) => onChange({ slideshowSpeed: Number(e.target.value) })}
+                    style={{ width: '100%' }}
+                  />
+                </div>
+              )}
+              {desc('Wijzigingen gelden bij het (opnieuw) openen van een jaar.')}
 
+              <div style={{ height: 1, background: '#2c3650', margin: '16px 0' }} />
+              <Toggle
+                on={settings.yearTileSlideshow}
+                set={(v) => onChange({ yearTileSlideshow: v })}
+                label="Jaartegels als slideshow (covers rouleren)"
+              />
+              {settings.yearTileSlideshow && (
+                <div style={{ marginTop: 10 }}>
+                  <div style={{ fontSize: 13, color: '#8a97b0', marginBottom: 6 }}>Cover-bron</div>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button onClick={() => onChange({ yearCoverMode: 'featured' })} style={segOn(settings.yearCoverMode === 'featured')}>
+                      Uitgelicht
+                    </button>
+                    <button onClick={() => onChange({ yearCoverMode: 'random' })} style={segOn(settings.yearCoverMode === 'random')}>
+                      Willekeurig
+                    </button>
+                  </div>
+                </div>
+              )}
+              {desc(
+                "'Uitgelicht' rouleert door de uitgelichte foto's van dat jaar (geen uitgelicht → alle foto's); 'willekeurig' door alle foto's. Een vaste jaar-cover (Ctrl+Shift-klik) overrulet dit.",
+              )}
+            </>
+          )}
+
+          {tab === 'dia' && (
+            <>
+              {subhead('Weergave')}
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button onClick={() => onChange({ diaMode: 'kenburns' })} style={segOn(settings.diaMode === 'kenburns')}>
+                  Ken Burns
+                </button>
+                <button onClick={() => onChange({ diaMode: 'crossfade' })} style={segOn(settings.diaMode === 'crossfade')}>
+                  Overvloeien
+                </button>
+              </div>
+              {desc("'Ken Burns' zoomt/pant langzaam; 'Overvloeien' toont een stilstaande foto die overvloeit.")}
+              <div style={{ fontSize: 13, color: '#8a97b0', margin: '14px 0 4px' }}>
+                Snelheid: {settings.diaSpeed}s per foto
+              </div>
+              <input
+                type="range"
+                min={2}
+                max={20}
+                step={1}
+                value={settings.diaSpeed}
+                onChange={(e) => onChange({ diaSpeed: Number(e.target.value) })}
+                style={{ width: '100%' }}
+              />
+
+              <div style={{ height: 1, background: '#2c3650', margin: '16px 0' }} />
+              {subhead('Tagfilter')}
+              <label style={{ display: 'block', fontSize: 12, color: '#9aa6c0', marginBottom: 4 }}>
+                Alleen deze tags (komma-gescheiden)
+              </label>
+              <input
+                type="text"
+                value={settings.screensaverInclude}
+                onChange={(e) => onChange({ screensaverInclude: e.target.value })}
+                placeholder="bijv. vakantie, familie"
+                style={tagInput}
+              />
+              <label style={{ display: 'block', fontSize: 12, color: '#9aa6c0', margin: '10px 0 4px' }}>
+                Zonder deze tags (komma-gescheiden)
+              </label>
+              <input
+                type="text"
+                value={settings.screensaverExclude}
+                onChange={(e) => onChange({ screensaverExclude: e.target.value })}
+                placeholder="bijv. werk"
+                style={tagInput}
+              />
+              {desc(
+                <>
+                  De diavoorstelling toont foto's afhankelijk van waar je bent (overzicht = alles, jaar
+                  = dat jaar, event = dat event). Start 'm met de sneltoets <b>S</b>. Sluiten met Esc.
+                </>,
+              )}
+            </>
+          )}
         </div>
         <div
           style={{
