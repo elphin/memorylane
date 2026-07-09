@@ -1153,6 +1153,14 @@ export function AppShell() {
         if (yearId) {
           await backend.createEvent(yearId, f.title.trim(), f.startAt, end, f.size ?? null)
           enterYearRef.current(yearId) // ververs de jaar-tijdlijn
+        } else {
+          // Geen huidig jaar (lege vault / eerste memory): maak het jaar + de
+          // memory aan op datum, herbouw de lifeline en duik het nieuwe jaar in.
+          await backend.createEventAtDate(f.title.trim(), f.startAt, end, f.size ?? null)
+          await rebuildLifeline()
+          const yearNum = Number(f.startAt.slice(0, 4))
+          const created = yearsRef.current.find((y) => y.year === yearNum)
+          if (created) enterYearRef.current(created.id)
         }
       } else if (f.eventId) {
         await backend.updateEvent(f.eventId, f.title.trim(), f.startAt, end)
@@ -1333,7 +1341,14 @@ export function AppShell() {
   return (
     <div style={{ position: 'fixed', inset: 0 }}>
       <div ref={hostRef} style={{ position: 'absolute', inset: 0 }} />
-      {phase !== 'ready' && <Overlay phase={phase} message={message} onPick={() => void pickVault()} />}
+      {phase !== 'ready' && (
+        <Overlay
+          phase={phase}
+          message={message}
+          onPick={() => void pickVault()}
+          onCreateFirst={openNewEvent}
+        />
+      )}
       {phase === 'ready' && settings.showTitle && !screensaverIds && (
         <TitleBar text={header.text} dir={header.dir} />
       )}
@@ -2438,10 +2453,12 @@ function Overlay({
   phase,
   message,
   onPick,
+  onCreateFirst,
 }: {
   phase: Phase
   message: string
   onPick: () => void
+  onCreateFirst: () => void
 }) {
   const box: React.CSSProperties = {
     position: 'absolute',
@@ -2479,9 +2496,13 @@ function Overlay({
     return (
       <div style={box}>
         <div style={{ fontSize: 22, fontWeight: 700 }}>Nog leeg</div>
-        <div style={{ color: '#8a97b0', font: '14px sans-serif' }}>
-          Er zijn nog geen jaren gevonden in deze map.
+        <div style={{ color: '#8a97b0', maxWidth: 420, font: '14px sans-serif' }}>
+          Deze map is nog leeg. Maak je eerste memory — het bijbehorende jaar wordt
+          automatisch aangemaakt.
         </div>
+        <button onClick={onCreateFirst} style={primaryBtn}>
+          + Maak je eerste memory
+        </button>
       </div>
     )
   }

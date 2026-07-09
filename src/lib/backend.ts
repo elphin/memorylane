@@ -191,6 +191,14 @@ export interface Backend {
     endAt: string | null,
     size?: number | null,
   ): Promise<string>
+  /** Maakt een memory in het jaar dat bij `startAt` hoort en maakt die jaarmap zo
+   * nodig aan — het pad voor de allereerste memory in een lege vault. */
+  createEventAtDate(
+    title: string,
+    startAt: string,
+    endAt: string | null,
+    size?: number | null,
+  ): Promise<string>
   /** Werkt titel/begin-/einddatum van een event bij. `endAt = null` verwijdert
    * de einddatum. */
   updateEvent(eventId: string, title: string, startAt: string, endAt: string | null): Promise<void>
@@ -341,6 +349,21 @@ class TauriBackend implements Backend {
     })
   }
 
+  async createEventAtDate(
+    title: string,
+    startAt: string,
+    endAt: string | null,
+    size?: number | null,
+  ): Promise<string> {
+    const invoke = await this.api()
+    return await invoke<string>('create_event_at_date', {
+      title,
+      startAt,
+      endAt,
+      size: size ?? null,
+    })
+  }
+
   async updateEvent(
     eventId: string,
     title: string,
@@ -474,7 +497,7 @@ class MockBackend implements Backend {
         return {
           id: `${id}-e${e}`,
           kind: multi ? 'period' : 'event',
-          title: `Gebeurtenis ${e + 1}`,
+          title: `Memory ${e + 1}`,
           startAt: `${y}-${mm}-${dd}`,
           endAt: multi ? `${y}-${mm}-${endDd}` : undefined,
           itemCount: Math.max(1, Math.floor(itemCount / eventCount)),
@@ -683,6 +706,38 @@ class MockBackend implements Backend {
       })
     }
     return id
+  }
+
+  async createEventAtDate(
+    title: string,
+    startAt: string,
+    endAt: string | null,
+    size?: number | null,
+  ): Promise<string> {
+    const yearNum = Number(startAt.slice(0, 4))
+    const yearId = `y${yearNum}`
+    // Jaar nog niet bekend? Maak het aan (leeg jaar + tegel), net als de scanner
+    // een nieuwe jaarmap zou oppikken.
+    if (!this.details.has(yearId)) {
+      this.details.set(yearId, {
+        year: { id: yearId, year: yearNum, title: String(yearNum), startAt: `${yearNum}-01-01`, folderName: String(yearNum) },
+        events: [],
+      })
+      this.years.push({
+        id: yearId,
+        year: yearNum,
+        title: String(yearNum),
+        startAt: `${yearNum}-01-01`,
+        endAt: `${yearNum}-12-31`,
+        eventCount: 0,
+        itemCount: 0,
+        coverItemId: undefined,
+        photoIds: [],
+        featuredIds: [],
+      })
+      this.years.sort((a, b) => a.year - b.year)
+    }
+    return this.createEvent(yearId, title, startAt, endAt, size)
   }
 
   async setEventSize(eventId: string, size: number | null): Promise<void> {

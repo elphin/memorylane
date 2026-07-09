@@ -179,7 +179,7 @@ fn set_fm_field(fm: &mut Vec<String>, key: &str, value: Option<&str>) {
 
 /// Het jaar (`YYYY`) uit een startAt (`YYYY-MM-DD` of ISO). `None` als de eerste
 /// vier tekens geen jaar zijn.
-fn year_of(start_at: &str) -> Option<String> {
+pub(crate) fn year_of(start_at: &str) -> Option<String> {
     let head: String = start_at.chars().take(4).collect();
     if head.len() == 4 && head.chars().all(|c| c.is_ascii_digit()) {
         Some(head)
@@ -1253,6 +1253,17 @@ mod tests {
         // Verhuizing zou botsen → event blijft staan, geen overschrijving.
         let result = update_event(root, &folder, "Reis", "2025-01-01", None).unwrap();
         assert_eq!(result, folder, "bij een botsend doel blijft het event op zijn plek");
+        assert!(root.join(&folder).join("_event.md").exists());
+    }
+
+    #[test]
+    fn create_event_with_empty_year_folder_creates_year_from_date() {
+        // Het "eerste memory in een lege vault"-pad: geen jaar-hint, alleen datum.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let (_id, folder) =
+            create_event(root, "", "Eerste memory", "2026-07-10", None, Some(50)).unwrap();
+        assert!(folder.starts_with("2026/"), "jaarmap uit de datum, was: {folder}");
         assert!(root.join(&folder).join("_event.md").exists());
     }
 

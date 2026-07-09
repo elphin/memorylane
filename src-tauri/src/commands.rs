@@ -343,6 +343,31 @@ impl VaultService {
         Ok(id)
     }
 
+    /// Maakt een memory in het jaar dat bij `start_at` hoort — en maakt die jaarmap
+    /// zo nodig aan. Vereist GEEN bestaand jaar, dus dit is het pad voor de
+    /// allereerste memory in een lege vault (file first, dan herindexeren).
+    pub fn create_event_at_date(
+        &self,
+        title: &str,
+        start_at: &str,
+        end_at: Option<&str>,
+        size: Option<i64>,
+    ) -> Result<String, String> {
+        let vault = self.current_vault()?;
+        // Vereis een echt jaar in `start_at` — anders zou `writer::create_event`
+        // (met lege jaar-hint) in de vault-root schrijven. De UI levert altijd een
+        // geldige datum; deze guard beschermt het rauwe IPC-command.
+        if writer::year_of(start_at).is_none() {
+            return Err(format!("ongeldige datum voor eerste memory: {start_at}"));
+        }
+        // `writer::create_event` leidt de jaarmap uit `start_at` af en maakt 'm aan;
+        // de `year_folder`-parameter wordt genegeerd zodra `start_at` een jaar bevat.
+        let (id, _folder) = writer::create_event(&vault, "", title, start_at, end_at, size)
+            .map_err(|e| e.to_string())?;
+        self.rescan()?;
+        Ok(id)
+    }
+
     /// Zet (of wist bij `None`) het `size`-veld (belang, 1–100) van een event.
     pub fn set_event_size(&self, event_id: &str, size: Option<i64>) -> Result<(), String> {
         let vault = self.current_vault()?;
@@ -642,6 +667,19 @@ pub fn create_event(
     size: Option<i64>,
 ) -> Result<String, String> {
     state.create_event(&year_id, &title, &start_at, end_at.as_deref(), size)
+}
+
+/// Maakt een memory op datum (maakt de jaarmap zo nodig aan) — voor de eerste
+/// memory in een lege vault.
+#[tauri::command]
+pub fn create_event_at_date(
+    state: State<VaultService>,
+    title: String,
+    start_at: String,
+    end_at: Option<String>,
+    size: Option<i64>,
+) -> Result<String, String> {
+    state.create_event_at_date(&title, &start_at, end_at.as_deref(), size)
 }
 
 /// Zet (of wist) het belang/`size`-veld (1–100) van een event.

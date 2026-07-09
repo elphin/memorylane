@@ -106,6 +106,7 @@ pub fn run() {
             commands::save_canvas_layout,
             commands::create_text_item,
             commands::create_event,
+            commands::create_event_at_date,
             commands::update_event,
             commands::set_featured,
             commands::set_event_size,
