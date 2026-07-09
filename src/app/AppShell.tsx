@@ -71,7 +71,7 @@ const DEFAULT_SETTINGS: Settings = {
   viewMode: false,
   screensaverInclude: '',
   screensaverExclude: '',
-  showSearchButton: true,
+  showSearchButton: false,
   yearTileSlideshow: false,
   yearCoverMode: 'featured',
   scatterRotate: true,
@@ -190,7 +190,6 @@ export function AppShell() {
   const [layoutMode, setLayoutMode] = useState<'custom' | 'grid' | 'scatter'>('custom')
   const [settings, setSettings] = useState<Settings>(loadSettings)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [viewHint, setViewHint] = useState(false)
   // Screensaver: null = dicht, anders de (context-afhankelijke) foto-ids.
   const [screensaverIds, setScreensaverIds] = useState<string[] | null>(null)
   const [toast, setToast] = useState<string | null>(null)
@@ -207,6 +206,8 @@ export function AppShell() {
   // Zelfde truc voor `phase`: de globale key-closure (Ctrl+K) leest de actuele fase.
   const phaseRef = useRef(phase)
   phaseRef.current = phase
+  // Zodat de toets-closure (sneltoets S) de diavoorstelling kan starten.
+  const startScreensaverRef = useRef<() => void>(() => {})
 
   const updateSettings = (patch: Partial<Settings>): void => {
     const next = { ...settingsRef.current, ...patch }
@@ -225,20 +226,21 @@ export function AppShell() {
     }
   }
 
-  // Toets E schakelt tussen bewerk- en view-modus (alle knoppen tonen/verbergen).
+  // Sneltoetsen op een kale letter: E = view-modus (knoppen tonen/verbergen),
+  // S = diavoorstelling starten. (Geen Ctrl/Alt/Meta; niet in een invoerveld of
+  // onder een open dialog/overlay.)
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      // Alleen de kale 'e' (geen Ctrl/Alt/Meta): Ctrl is al een modus-toets
-      // (dag-picker/uitlichten) en Ctrl/Cmd+E zijn browser-/OS-sneltoetsen.
       if (e.ctrlKey || e.metaKey || e.altKey) return
       const el = document.activeElement
       if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) return
-      // Niet stil op de achtergrond togglen terwijl er een dialog/overlay open
-      // staat (focus kan dan op een knop staan → INPUT/TEXTAREA-guard mist 'm).
       if (dialogOpenRef.current || overlayOpenRef.current) return
       if (e.key === 'e' || e.key === 'E') {
         e.preventDefault()
         updateSettings({ viewMode: !settingsRef.current.viewMode })
+      } else if (e.key === 's' || e.key === 'S') {
+        e.preventDefault()
+        startScreensaverRef.current()
       }
     }
     window.addEventListener('keydown', onKey)
@@ -246,28 +248,6 @@ export function AppShell() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Toon de hint (hoe je terugschakelt) zodra de view-modus actief is, én telkens
-  // als je de muis beweegt — anders zit je "vast" in view-modus zonder zichtbare
-  // uitweg. De hint vervaagt 2,6s na de laatste beweging. Niet tonen zolang het
-  // instellingen-paneel eroverheen staat.
-  useEffect(() => {
-    if (!settings.viewMode || settingsOpen) {
-      setViewHint(false)
-      return
-    }
-    setViewHint(true)
-    let t = window.setTimeout(() => setViewHint(false), 2600)
-    const onMove = (): void => {
-      setViewHint(true) // React bailt uit als de hint al zichtbaar is
-      window.clearTimeout(t)
-      t = window.setTimeout(() => setViewHint(false), 2600)
-    }
-    window.addEventListener('mousemove', onMove)
-    return () => {
-      window.clearTimeout(t)
-      window.removeEventListener('mousemove', onMove)
-    }
-  }, [settings.viewMode, settingsOpen])
   const [draft, setDraft] = useState('')
   const [busy, setBusy] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
@@ -923,6 +903,7 @@ export function AppShell() {
       setToast(String(e))
     }
   }
+  startScreensaverRef.current = () => void startScreensaver()
 
   const changeLayout = (mode: 'custom' | 'grid' | 'scatter'): void => {
     setLayoutMode(mode)
@@ -1157,37 +1138,9 @@ export function AppShell() {
     <div style={{ position: 'fixed', inset: 0 }}>
       <div ref={hostRef} style={{ position: 'absolute', inset: 0 }} />
       {phase !== 'ready' && <Overlay phase={phase} message={message} onPick={() => void pickVault()} />}
-      {viewHint && (
-        <div
-          style={{
-            position: 'absolute',
-            top: 16,
-            left: '50%',
-            transform: 'translateX(-50%)',
-            padding: '8px 16px',
-            borderRadius: 20,
-            background: 'rgba(22,28,40,0.9)',
-            border: '1px solid #2c3650',
-            color: '#cfd6e4',
-            font: '13px sans-serif',
-            pointerEvents: 'none',
-          }}
-        >
-          View-modus — druk op <b>E</b> voor de knoppen
-        </div>
-      )}
       {phase === 'ready' && !modal && !editing && !eventForm && !metaForm && !searchOpen && !settingsOpen && !settings.viewMode && chromeVisible && settings.showSearchButton && (
         <button onClick={() => setSearchOpen(true)} style={searchBtn} title="Zoeken (Ctrl+K)">
           Zoeken…
-        </button>
-      )}
-      {phase === 'ready' && !modal && !editing && !eventForm && !metaForm && !searchOpen && !settingsOpen && !settings.viewMode && (
-        <button
-          onClick={() => void startScreensaver()}
-          style={settings.showSearchButton ? screensaverBtn : screensaverBtnLeft}
-          title="Diavoorstelling"
-        >
-          ▶
         </button>
       )}
       {phase === 'ready' && !modal && !editing && !eventForm && !metaForm && !searchOpen && !settingsOpen && !settings.viewMode && (
@@ -1589,7 +1542,7 @@ function SettingsPanel({
         />
         <div style={{ fontSize: 12, color: '#6a7690', marginTop: 6 }}>
           De diavoorstelling toont foto's afhankelijk van waar je bent (overzicht = alles, jaar =
-          dat jaar, event = dat event). Start 'm met ▶ linksboven. Sluiten met Esc.
+          dat jaar, event = dat event). Start 'm met de sneltoets <b>S</b>. Sluiten met Esc.
         </div>
 
         </div>
@@ -1945,24 +1898,6 @@ const searchBtn: React.CSSProperties = {
   font: '13px sans-serif',
   cursor: 'pointer',
 }
-
-const screensaverBtn: React.CSSProperties = {
-  position: 'absolute',
-  top: 16,
-  left: 108,
-  width: 38,
-  height: 38,
-  borderRadius: 19,
-  border: '1px solid #2c3650',
-  background: 'rgba(22,28,40,0.85)',
-  color: '#cfd6e4',
-  fontSize: 13,
-  lineHeight: '1',
-  cursor: 'pointer',
-}
-
-// Zonder zoekknop schuift de screensaver-knop naar de plek van die knop.
-const screensaverBtnLeft: React.CSSProperties = { ...screensaverBtn, left: 16 }
 
 const fitBtn: React.CSSProperties = {
   position: 'absolute',
