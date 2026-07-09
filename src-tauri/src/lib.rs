@@ -108,6 +108,7 @@ pub fn run() {
             commands::create_event,
             commands::update_event,
             commands::set_featured,
+            commands::set_year_cover,
             commands::delete_item,
             commands::update_item,
             commands::get_item_metadata,

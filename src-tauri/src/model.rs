@@ -96,6 +96,9 @@ pub struct Year {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub end_at: Option<String>,
     pub folder_name: String,
+    /// Vaste cover-foto voor de jaartegel (item-id) — override op willekeurig/featured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cover: Option<String>,
 }
 
 /// Een gebeurtenis (`_event.md`).

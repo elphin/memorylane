@@ -259,6 +259,20 @@ impl VaultService {
         Ok(())
     }
 
+    /// Zet (of wist bij `None`) de vaste jaar-cover in `_year.md` (file first, rescan).
+    pub fn set_year_cover(&self, year_id: &str, item_ref: Option<&str>) -> Result<(), String> {
+        let vault = self.current_vault()?;
+        let folder = {
+            let conn = self.conn.lock().map_err(lock_err)?;
+            index::year_folder(&conn, year_id)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("jaar {year_id} niet gevonden"))?
+        };
+        writer::set_year_cover(&vault, &folder, item_ref).map_err(|e| e.to_string())?;
+        self.rescan()?;
+        Ok(())
+    }
+
     /// Importeert foto's (bronpaden van de bestandskiezer) in een event.
     pub fn import_photos(&self, event_id: &str, sources: &[String]) -> Result<usize, String> {
         let vault = self.current_vault()?;
@@ -619,6 +633,16 @@ pub fn set_featured(
     state.set_featured(&event_id, item_ref.as_deref())
 }
 
+/// Zet (of wist) de vaste jaar-cover (item-id) van een jaar.
+#[tauri::command]
+pub fn set_year_cover(
+    state: State<VaultService>,
+    year_id: String,
+    item_ref: Option<String>,
+) -> Result<(), String> {
+    state.set_year_cover(&year_id, item_ref.as_deref())
+}
+
 #[tauri::command]
 pub fn delete_item(state: State<VaultService>, item_id: String) -> Result<(), String> {
     state.delete_item(&item_id)
@@ -726,6 +750,63 @@ mod tests {
         let service = VaultService::new().unwrap();
         service.reindex_path(root).unwrap();
         service
+    }
+
+    #[test]
+    fn year_cover_pins_and_clears() {
+        let tmp = tempfile::tempdir().unwrap();
+        let service = service_with_photo(tmp.path());
+
+        service.set_year_cover("y24", Some("photo1")).unwrap();
+        let years = service.with_conn(index::list_years).unwrap();
+        let y = years.iter().find(|y| y.id == "y24").unwrap();
+        assert_eq!(y.pinned_cover.as_deref(), Some("photo1"));
+        assert_eq!(y.cover_item_id.as_deref(), Some("photo1"));
+        let ym = std::fs::read_to_string(tmp.path().join("2024/_year.md")).unwrap();
+        assert!(ym.contains("cover: photo1"), "cover in _year.md: {ym}");
+
+        service.set_year_cover("y24", None).unwrap();
+        let years = service.with_conn(index::list_years).unwrap();
+        assert_eq!(years.iter().find(|y| y.id == "y24").unwrap().pinned_cover, None);
+    }
+
+    #[test]
+    fn year_cover_without_year_md_keeps_year_id() {
+        // Kritiek: een jaar ZONDER `_year.md` heeft een gesynthetiseerd id. Het
+        // prikken van een cover maakt `_year.md` aan; dat mag het jaar-id NIET
+        // wijzigen (anders raken events los).
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("2024/2024-01-01 test")).unwrap();
+        std::fs::write(
+            root.join("2024/2024-01-01 test/_event.md"),
+            "---\nid: ev1\ntype: event\ntitle: Test\nstartAt: 2024-01-01\n---\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("2024/2024-01-01 test/foto.md"),
+            "---\nid: photo1\ntype: photo\nmedia: foto.jpg\n---\n",
+        )
+        .unwrap();
+        RgbImage::from_fn(10, 10, |_, _| image::Rgb([0, 0, 0]))
+            .save(root.join("2024/2024-01-01 test/foto.jpg"))
+            .unwrap();
+
+        let service = VaultService::new().unwrap();
+        service.reindex_path(root).unwrap();
+        let years = service.with_conn(index::list_years).unwrap();
+        let year_id = years[0].id.clone();
+        assert_eq!(years[0].event_count, 1);
+
+        service.set_year_cover(&year_id, Some("photo1")).unwrap();
+
+        let years = service.with_conn(index::list_years).unwrap();
+        assert_eq!(years.len(), 1);
+        assert_eq!(years[0].id, year_id, "jaar-id mag niet wijzigen");
+        assert_eq!(years[0].event_count, 1, "event nog gekoppeld aan het jaar");
+        assert_eq!(years[0].pinned_cover.as_deref(), Some("photo1"));
+        let ym = std::fs::read_to_string(root.join("2024/_year.md")).unwrap();
+        assert!(!ym.contains("id:"), "geen id in aangemaakt _year.md: {ym}");
     }
 
     #[test]

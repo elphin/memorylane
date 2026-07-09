@@ -14,7 +14,7 @@ use crate::model::{
 const SCHEMA: &str = r#"
 CREATE TABLE years (
     id TEXT PRIMARY KEY, year INTEGER NOT NULL, title TEXT NOT NULL,
-    start_at TEXT NOT NULL, end_at TEXT, folder_name TEXT NOT NULL
+    start_at TEXT NOT NULL, end_at TEXT, folder_name TEXT NOT NULL, cover_photo TEXT
 );
 CREATE TABLE events (
     id TEXT PRIMARY KEY, year_id TEXT NOT NULL, kind TEXT NOT NULL,
@@ -67,9 +67,9 @@ pub fn load(conn: &mut Connection, model: &VaultModel) -> rusqlite::Result<()> {
 
     for y in &model.years {
         tx.execute(
-            "INSERT INTO years (id, year, title, start_at, end_at, folder_name)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![y.id, y.year, y.title, y.start_at, y.end_at, y.folder_name],
+            "INSERT INTO years (id, year, title, start_at, end_at, folder_name, cover_photo)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![y.id, y.year, y.title, y.start_at, y.end_at, y.folder_name, y.cover],
         )?;
     }
 
@@ -199,6 +199,9 @@ pub struct YearSummary {
     /// Uitgelichte foto-id's van dit jaar (de event-omslagen) — voor de
     /// 'uitgelicht'-slideshow. Leeg → val terug op `photo_ids`.
     pub featured_ids: Vec<String>,
+    /// Vaste jaar-cover (item-id) indien geprikt — de tegel is dan statisch (geen
+    /// slideshow/willekeurig). None = geen pin.
+    pub pinned_cover: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -228,6 +231,9 @@ pub struct EventDetail {
     pub event: Event,
     pub items: Vec<Item>,
     pub canvas: Vec<CanvasItem>,
+    /// Vaste jaar-cover (item-id) van het jaar waar dit event onder valt, of None.
+    /// Voor de tweede ring op L2 en de toggle-vergelijking.
+    pub year_cover: Option<String>,
 }
 
 /// Een foto/video van een jaar voor de L1-collage (ook ongedateerde items).
@@ -274,9 +280,12 @@ pub fn list_years(conn: &Connection) -> rusqlite::Result<Vec<YearSummary>> {
         "SELECT y.id, y.year, y.title, y.start_at, y.end_at,
              (SELECT count(*) FROM events e WHERE e.year_id = y.id),
              (SELECT count(*) FROM items i JOIN events e ON i.event_id = e.id WHERE e.year_id = y.id),
-             (SELECT i.id FROM items i JOIN events e ON i.event_id = e.id
-                 WHERE e.year_id = y.id AND i.item_type = 'photo'
-                 ORDER BY (i.timestamp_ms IS NULL), i.timestamp_ms LIMIT 1),
+             COALESCE(
+               (SELECT i.id FROM items i JOIN events e ON i.event_id = e.id
+                  WHERE e.year_id = y.id AND i.item_type = 'photo' AND i.id = y.cover_photo LIMIT 1),
+               (SELECT i.id FROM items i JOIN events e ON i.event_id = e.id
+                   WHERE e.year_id = y.id AND i.item_type = 'photo'
+                   ORDER BY (i.timestamp_ms IS NULL), i.timestamp_ms LIMIT 1)),
              (SELECT group_concat(id) FROM
                (SELECT i.id FROM items i JOIN events e ON i.event_id = e.id
                     WHERE e.year_id = y.id AND i.item_type = 'photo'
@@ -286,7 +295,9 @@ pub fn list_years(conn: &Connection) -> rusqlite::Result<Vec<YearSummary>> {
                             AND (i.slug = e.featured_photo OR i.id = e.featured_photo) LIMIT 1) AS fid
                     FROM events e
                     WHERE e.year_id = y.id AND e.featured_photo IS NOT NULL)
-               WHERE fid IS NOT NULL)
+               WHERE fid IS NOT NULL),
+             (SELECT i.id FROM items i JOIN events e ON i.event_id = e.id
+                WHERE e.year_id = y.id AND i.item_type = 'photo' AND i.id = y.cover_photo LIMIT 1)
          FROM years y ORDER BY y.year",
     )?;
     let rows = stmt.query_map([], |r| {
@@ -301,6 +312,7 @@ pub fn list_years(conn: &Connection) -> rusqlite::Result<Vec<YearSummary>> {
             cover_item_id: r.get(7)?,
             photo_ids: split_ids(r.get(8)?),
             featured_ids: split_ids(r.get(9)?),
+            pinned_cover: r.get(10)?,
         })
     })?;
     rows.collect()
@@ -309,7 +321,7 @@ pub fn list_years(conn: &Connection) -> rusqlite::Result<Vec<YearSummary>> {
 pub fn get_year(conn: &Connection, year_id: &str) -> rusqlite::Result<Option<YearDetail>> {
     let year = conn
         .query_row(
-            "SELECT id, year, title, start_at, end_at, folder_name FROM years WHERE id = ?1",
+            "SELECT id, year, title, start_at, end_at, folder_name, cover_photo FROM years WHERE id = ?1",
             params![year_id],
             |r| {
                 Ok(Year {
@@ -319,6 +331,7 @@ pub fn get_year(conn: &Connection, year_id: &str) -> rusqlite::Result<Option<Yea
                     start_at: r.get(3)?,
                     end_at: r.get(4)?,
                     folder_name: r.get(5)?,
+                    cover: r.get(6)?,
                 })
             },
         )
@@ -406,10 +419,22 @@ pub fn get_event(conn: &Connection, event_id: &str) -> rusqlite::Result<Option<E
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
 
+    // Vaste jaar-cover van het jaar van dit event (item-id), of None.
+    let year_cover: Option<String> = conn
+        .query_row(
+            "SELECT i.id FROM items i JOIN events e ON i.event_id = e.id
+             WHERE e.year_id = ?1 AND i.item_type = 'photo'
+               AND i.id = (SELECT cover_photo FROM years WHERE id = ?1) LIMIT 1",
+            params![event.year_id],
+            |r| r.get::<_, String>(0),
+        )
+        .ok();
+
     Ok(Some(EventDetail {
         event,
         items,
         canvas,
+        year_cover,
     }))
 }
 
@@ -833,6 +858,7 @@ mod tests {
             start_at: "2024-01-01".into(),
             end_at: Some("2024-12-31".into()),
             folder_name: "2024".into(),
+            cover: None,
         });
         m.events.push(Event {
             id: "ev1".into(),
@@ -1004,6 +1030,7 @@ mod tests {
                 start_at: format!("{year}-01-01"),
                 end_at: None,
                 folder_name: year.to_string(),
+                cover: None,
             });
             m.events.push(Event {
                 id: eid.into(),
@@ -1176,6 +1203,7 @@ mod tests {
             start_at: "2024-01-01".into(),
             end_at: None,
             folder_name: "2024".into(),
+            cover: None,
         });
         m.events.push(Event {
             id: "ev1".into(),
@@ -1298,6 +1326,7 @@ mod tests {
             start_at: "2024-01-01".into(),
             end_at: None,
             folder_name: "2024".into(),
+            cover: None,
         });
         // A: featured wijst naar een bestaande foto-slug → die exact.
         m.events.push(event("evA", Some("mooi")));

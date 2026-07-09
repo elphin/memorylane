@@ -561,6 +561,62 @@ pub fn set_event_featured(
     write_atomic(&path, &out)
 }
 
+/// Zet (of wist bij `None`) de vaste jaar-cover in `<folder>/_year.md`. Bestaat er
+/// geen `_year.md` (of één zonder frontmatter-fences), dan maken we er één met
+/// minimale frontmatter — bewust ZONDER `id`, zodat de scanner deterministisch
+/// hetzelfde jaar-id afleidt (stable_id op de mapnaam) en events niet losraken.
+pub fn set_year_cover(
+    vault_root: &Path,
+    folder_name: &str,
+    cover: Option<&str>,
+) -> std::io::Result<()> {
+    let path = vault_root.join(folder_name).join("_year.md");
+    let original = std::fs::read_to_string(&path).ok();
+    // Niets te wissen als er geen bestand is → geen loos `_year.md` aanmaken.
+    if cover.is_none() && original.is_none() {
+        return Ok(());
+    }
+    let fenced = original.as_ref().and_then(|c| {
+        let n = c.replace("\r\n", "\n");
+        let lines: Vec<String> = n.split('\n').map(|s| s.to_string()).collect();
+        let open = lines.iter().position(|l| l.trim() == "---")?;
+        let close = lines
+            .iter()
+            .enumerate()
+            .skip(open + 1)
+            .find(|(_, l)| l.trim() == "---")
+            .map(|(i, _)| i)?;
+        Some((lines, open, close))
+    });
+    let (mut fm, body): (Vec<String>, String) = if let Some((lines, open, close)) = fenced {
+        (
+            lines[open + 1..close].iter().map(|s| s.to_string()).collect(),
+            lines[close + 1..].join("\n").trim().to_string(),
+        )
+    } else {
+        // Geen fences (bestand ontbreekt of malformed): minimale frontmatter ZONDER id.
+        (
+            vec![
+                "type: year".to_string(),
+                format!("title: \"{folder_name}\""),
+                format!("startAt: {folder_name}-01-01"),
+            ],
+            original.as_deref().unwrap_or("").trim().to_string(),
+        )
+    };
+    set_fm_field(&mut fm, "cover", cover.filter(|c| !c.is_empty()));
+
+    let mut out = String::from("---\n");
+    out.push_str(&fm.join("\n"));
+    out.push_str("\n---\n");
+    if !body.is_empty() {
+        out.push('\n');
+        out.push_str(&body);
+        out.push('\n');
+    }
+    write_atomic(&path, &out)
+}
+
 /// Maakt een event in een jaarmap. Geeft (id, folder_path) terug.
 ///
 /// De mapnaam wordt uniek gemaakt: twee events met dezelfde titel én datum
