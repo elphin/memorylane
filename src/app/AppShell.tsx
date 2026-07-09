@@ -770,7 +770,7 @@ export function AppShell() {
   }, [])
 
   // Verberg de top-chrome na ~4s zonder muisbeweging; muisbeweging toont 'm weer.
-  // Tijdens de screensaver niet actief (die vangt mousemove zelf af om te sluiten).
+  // Tijdens de diavoorstelling niet actief (die dekt het scherm volledig af).
   useEffect(() => {
     if (screensaverIds !== null) return
     setChromeVisible(true)
@@ -881,7 +881,7 @@ export function AppShell() {
     try {
       const ids = await backend.getScreensaverPhotos(scopeKind, scopeId, include, exclude)
       if (ids.length === 0) {
-        setToast('Geen foto’s voor de screensaver (check eventueel de tag-filters).')
+        setToast('Geen foto’s voor de diavoorstelling (check eventueel de tag-filters).')
         return
       }
       setSettingsOpen(false)
@@ -1140,7 +1140,7 @@ export function AppShell() {
         <button
           onClick={() => void startScreensaver()}
           style={settings.showSearchButton ? screensaverBtn : screensaverBtnLeft}
-          title="Screensaver (diavoorstelling)"
+          title="Diavoorstelling"
         >
           ▶
         </button>
@@ -1484,7 +1484,7 @@ function SettingsPanel({
         </div>
 
         <div style={{ height: 1, background: '#2c3650', margin: '18px 0' }} />
-        <div style={{ fontSize: 14, color: '#fff', marginBottom: 8 }}>Screensaver-tagfilter</div>
+        <div style={{ fontSize: 14, color: '#fff', marginBottom: 8 }}>Diavoorstelling-tagfilter</div>
         <label style={{ display: 'block', fontSize: 12, color: '#9aa6c0', marginBottom: 4 }}>
           Alleen deze tags (komma-gescheiden)
         </label>
@@ -1506,8 +1506,8 @@ function SettingsPanel({
           style={tagInput}
         />
         <div style={{ fontSize: 12, color: '#6a7690', marginTop: 6 }}>
-          De screensaver toont foto's afhankelijk van waar je bent (overzicht = alles, jaar = dat
-          jaar, event = dat event). Start 'm met ▶ linksboven.
+          De diavoorstelling toont foto's afhankelijk van waar je bent (overzicht = alles, jaar =
+          dat jaar, event = dat event). Start 'm met ▶ linksboven. Sluiten met Esc.
         </div>
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 18 }}>
