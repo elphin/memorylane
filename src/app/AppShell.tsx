@@ -61,6 +61,8 @@ interface Settings {
   yearCoverMode: 'featured' | 'random'
   /** Legt scatter de foto's licht scheef (geroteerd) of recht? */
   scatterRotate: boolean
+  /** Toon de titel bovenin (Memory Lane / jaar / eventnaam). */
+  showTitle: boolean
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -75,6 +77,7 @@ const DEFAULT_SETTINGS: Settings = {
   yearTileSlideshow: false,
   yearCoverMode: 'featured',
   scatterRotate: true,
+  showTitle: true,
 }
 const SETTINGS_KEY = 'memorylane-settings'
 
@@ -190,6 +193,8 @@ export function AppShell() {
   const [layoutMode, setLayoutMode] = useState<'custom' | 'grid' | 'scatter'>('custom')
   const [settings, setSettings] = useState<Settings>(loadSettings)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  // Titel bovenin: "Memory Lane" (overzicht), het jaar, of de eventnaam.
+  const [headerTitle, setHeaderTitle] = useState('Memory Lane')
   // Screensaver: null = dicht, anders de (context-afhankelijke) foto-ids.
   const [screensaverIds, setScreensaverIds] = useState<string[] | null>(null)
   const [toast, setToast] = useState<string | null>(null)
@@ -313,6 +318,7 @@ export function AppShell() {
       engine.revealScene(scene.root, 'out')
       levelRef.current = 'lifeline'
       setUiLevel('lifeline')
+      setHeaderTitle('Memory Lane')
       applyPanLock()
     }
     setupLifelineRef.current = setupLifeline
@@ -338,6 +344,7 @@ export function AppShell() {
         revealScene(engine, scene, dir)
         levelRef.current = 'year'
         setUiLevel('year')
+        setHeaderTitle(detail.year.title)
         applyPanLock()
         currentYearRef.current = yearId
         entryZoomRef.current = engine.pendingZoom
@@ -434,6 +441,7 @@ export function AppShell() {
         revealScene(engine, scene, dir)
         levelRef.current = 'event'
         setUiLevel('event')
+        setHeaderTitle(detail.event.title || detail.event.startAt)
         applyPanLock()
         currentEventRef.current = eventId
         currentEventInfoRef.current = detail.event
@@ -1138,6 +1146,7 @@ export function AppShell() {
     <div style={{ position: 'fixed', inset: 0 }}>
       <div ref={hostRef} style={{ position: 'absolute', inset: 0 }} />
       {phase !== 'ready' && <Overlay phase={phase} message={message} onPick={() => void pickVault()} />}
+      {phase === 'ready' && settings.showTitle && !screensaverIds && <div style={titleStyle}>{headerTitle}</div>}
       {phase === 'ready' && !modal && !editing && !eventForm && !metaForm && !searchOpen && !settingsOpen && !settings.viewMode && chromeVisible && settings.showSearchButton && (
         <button onClick={() => setSearchOpen(true)} style={searchBtn} title="Zoeken (Ctrl+K)">
           Zoeken…
@@ -1514,8 +1523,21 @@ function SettingsPanel({
           <span style={{ fontSize: 14, color: '#fff' }}>Zoekknop tonen</span>
         </label>
         <div style={{ fontSize: 12, color: '#6a7690', marginTop: 6 }}>
-          Uit? Zoeken kan altijd nog met <b>Ctrl+K</b>. De knoppen verdwijnen sowieso na een paar
+          Uit? Zoeken kan altijd nog met <b>Ctrl+K</b>. De knop verdwijnt sowieso na een paar
           seconden zonder muisbeweging.
+        </div>
+
+        <div style={{ height: 1, background: '#2c3650', margin: '18px 0' }} />
+        <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
+          <input
+            type="checkbox"
+            checked={settings.showTitle}
+            onChange={(e) => onChange({ showTitle: e.target.checked })}
+          />
+          <span style={{ fontSize: 14, color: '#fff' }}>Titel bovenin tonen</span>
+        </label>
+        <div style={{ fontSize: 12, color: '#6a7690', marginTop: 6 }}>
+          "Memory Lane" op het overzicht, het jaar in een jaar, de eventnaam in een event.
         </div>
 
         <div style={{ height: 1, background: '#2c3650', margin: '18px 0' }} />
@@ -1911,6 +1933,26 @@ const fitBtn: React.CSSProperties = {
   font: '13px sans-serif',
   cursor: 'pointer',
   backdropFilter: 'blur(4px)',
+}
+
+const titleStyle: React.CSSProperties = {
+  position: 'absolute',
+  top: 18,
+  left: '50%',
+  transform: 'translateX(-50%)',
+  maxWidth: '70%',
+  textAlign: 'center',
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  fontFamily: 'Georgia, "Times New Roman", serif',
+  fontSize: 30,
+  fontWeight: 600,
+  letterSpacing: 0.5,
+  color: 'rgba(245,247,251,0.92)',
+  textShadow: '0 2px 12px rgba(0,0,0,0.6)',
+  pointerEvents: 'none',
+  zIndex: 5,
 }
 
 const toastStyle: React.CSSProperties = {
