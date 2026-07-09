@@ -106,6 +106,7 @@ fn scan_year(root: &Path, year_path: &Path, folder_name: &str, model: &mut Vault
 
     model.years.push(year.clone());
 
+    let mut loose_media: Vec<String> = Vec::new();
     for entry in entries {
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().to_string();
@@ -115,14 +116,74 @@ fn scan_year(root: &Path, year_path: &Path, folder_name: &str, model: &mut Vault
             }
             scan_event(root, &path, &year, model);
         } else if !is_special(&name) && is_media_file(&name) {
-            // Losse media direct in de jaarmap: in fase 1 gelogd + geskipt.
-            model.errors.push(IndexError {
-                path: rel_path(root, &path),
-                severity: Severity::Warning,
-                reason: "los mediabestand in jaarmap (nog niet aan een event gekoppeld)".into(),
-            });
+            // Losse media direct in de jaarmap: verzamelen en straks bundelen in
+            // één synthetische "Losse foto's"-memory (i.p.v. skippen).
+            loose_media.push(name);
         }
     }
+    if !loose_media.is_empty() {
+        scan_loose_media_event(root, year_path, &year, &loose_media, model);
+    }
+}
+
+/// Bundelt losse media direct in een jaarmap tot één synthetische "Losse foto's"-
+/// memory. De memory heeft de jaarmap zelf als `folder_path` (zo resolven de
+/// media-paden), een stabiel id en synthetische items. Effectief read-only: er
+/// staat geen `_event.md` op schijf, dus schrijf-acties op deze memory beklijven
+/// niet zoals bij een echte memory — uitgelicht/grootte geven een fout (geen
+/// `_event.md`), en foto's importeren / canvas-layout landen wél in de jaarmap
+/// maar worden bij de volgende scan opnieuw als losse media gebundeld (sidecar-
+/// `.md`/`_canvas.json` worden op jaarniveau niet gelezen). Bedoeld om bestaande
+/// foto-archieven meteen zichtbaar te maken; voor curatie maak je een echte memory.
+fn scan_loose_media_event(
+    root: &Path,
+    year_path: &Path,
+    year: &Year,
+    media_files: &[String],
+    model: &mut VaultModel,
+) {
+    let folder_path = rel_path(root, year_path); // de jaarmap zelf
+    let event_id = stable_id("event", &format!("{folder_path}#loose"));
+    let event_start_ms = to_millis(&year.start_at);
+    for media in media_files {
+        let media_rel = format!("{folder_path}/{media}");
+        let item_type = media
+            .rsplit('.')
+            .next()
+            .and_then(ItemType::from_extension)
+            .unwrap_or(ItemType::Photo);
+        model.items.push(Item {
+            id: stable_id("item", &media_rel),
+            event_id: event_id.clone(),
+            item_type,
+            media: Some(media.clone()),
+            url: None,
+            caption: None,
+            happened_at: None,
+            timestamp_ms: event_start_ms,
+            place: None,
+            people: Vec::new(),
+            tags: Vec::new(),
+            category: None,
+            body_text: None,
+            slug: None,
+            synthetic: true,
+        });
+    }
+    model.events.push(Event {
+        id: event_id,
+        kind: EventKind::Event,
+        title: Some("Losse foto's".to_string()),
+        description: None,
+        start_at: year.start_at.clone(),
+        end_at: None,
+        location: None,
+        featured_photo: None,
+        tags: Vec::new(),
+        size: None,
+        year_id: year.id.clone(),
+        folder_path,
+    });
 }
 
 fn scan_event(root: &Path, event_path: &Path, year: &Year, model: &mut VaultModel) {
@@ -685,6 +746,54 @@ mod tests {
         assert!(to_millis("1969-07-01").is_some());
         assert!(to_millis("2025-12-23T21:27:59.407Z").is_some());
         assert!(to_millis("geen datum").is_none());
+    }
+
+    #[test]
+    fn loose_year_media_becomes_a_synthetic_memory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        // Jaar 2012 met twee losse foto's + één echte event-submap met een foto.
+        std::fs::create_dir_all(root.join("2012/Vakantie")).unwrap();
+        std::fs::write(root.join("2012/strand.jpg"), b"x").unwrap();
+        std::fs::write(root.join("2012/zee.png"), b"x").unwrap();
+        std::fs::write(root.join("2012/Vakantie/foto.jpg"), b"x").unwrap();
+
+        let model = scan(root);
+
+        assert_eq!(model.years.len(), 1);
+        assert_eq!(model.events.len(), 2, "echte event + synthetische losse-foto's");
+        let loose = model
+            .events
+            .iter()
+            .find(|e| e.title.as_deref() == Some("Losse foto's"))
+            .expect("synthetische losse-foto's memory");
+        assert_eq!(loose.folder_path, model.years[0].folder_name); // = de jaarmap zelf
+        assert_eq!(loose.year_id, model.years[0].id);
+        let loose_items: Vec<_> = model.items.iter().filter(|i| i.event_id == loose.id).collect();
+        assert_eq!(loose_items.len(), 2, "beide losse foto's als items");
+        assert!(loose_items.iter().all(|i| i.synthetic));
+        // De echte event bestaat óók (met zijn eigen submap-foto).
+        assert!(model.events.iter().any(|e| e.folder_path.ends_with("Vakantie")));
+    }
+
+    #[test]
+    fn year_with_only_loose_media_still_shows_a_memory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        // Enkel losse foto's, geen submappen — het klassieke "archief"-geval.
+        std::fs::create_dir_all(root.join("2018")).unwrap();
+        std::fs::write(root.join("2018/a.jpg"), b"x").unwrap();
+        std::fs::write(root.join("2018/b.jpg"), b"x").unwrap();
+
+        let model = scan(root);
+        assert_eq!(model.years.len(), 1);
+        assert_eq!(model.events.len(), 1, "één synthetische losse-foto's memory");
+        let ev = &model.events[0];
+        assert_eq!(ev.title.as_deref(), Some("Losse foto's"));
+        // Media resolven t.o.v. de jaarmap: folder_path + media = 2018/a.jpg.
+        let items: Vec<_> = model.items.iter().filter(|i| i.event_id == ev.id).collect();
+        assert_eq!(items.len(), 2);
+        assert_eq!(format!("{}/{}", ev.folder_path, items[0].media.as_deref().unwrap_or("")), "2018/a.jpg");
     }
 
     #[test]
