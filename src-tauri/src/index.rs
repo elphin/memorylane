@@ -189,6 +189,8 @@ pub struct EventSummary {
     pub end_at: Option<String>,
     pub item_count: i64,
     pub cover_item_id: Option<String>,
+    /// Foto-id's van dit event (chronologisch, max ~24) — voor de slideshow-roulatie.
+    pub photo_ids: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -237,6 +239,13 @@ pub struct DensityPoint {
 }
 
 // ---- Queries -------------------------------------------------------------
+
+/// Splitst een `group_concat`-resultaat (`"a,b,c"`) in losse id's; leeg → [].
+fn split_ids(joined: Option<String>) -> Vec<String> {
+    joined
+        .map(|s| s.split(',').filter(|p| !p.is_empty()).map(|p| p.to_string()).collect())
+        .unwrap_or_default()
+}
 
 pub fn list_years(conn: &Connection) -> rusqlite::Result<Vec<YearSummary>> {
     let mut stmt = conn.prepare(
@@ -294,7 +303,10 @@ pub fn get_year(conn: &Connection, year_id: &str) -> rusqlite::Result<Option<Yea
                     AND (i.slug = e.featured_photo OR i.id = e.featured_photo) LIMIT 1),
                (SELECT i.id FROM items i WHERE i.event_id = e.id AND i.item_type = 'photo'
                     ORDER BY RANDOM() LIMIT 1)
-             )
+             ),
+             (SELECT group_concat(id) FROM
+               (SELECT id FROM items WHERE event_id = e.id AND item_type = 'photo'
+                    ORDER BY (timestamp_ms IS NULL), timestamp_ms LIMIT 24))
          FROM events e WHERE e.year_id = ?1 ORDER BY e.start_at",
     )?;
     let events = stmt
@@ -308,6 +320,7 @@ pub fn get_year(conn: &Connection, year_id: &str) -> rusqlite::Result<Option<Yea
                 end_at: r.get(4)?,
                 item_count: r.get(5)?,
                 cover_item_id: r.get(6)?,
+                photo_ids: split_ids(r.get::<_, Option<String>>(7)?),
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -874,6 +887,104 @@ mod tests {
         assert!(search(&conn, "   ").unwrap().is_empty());
         // Speciale tekens breken de FTS-parser niet.
         assert!(search(&conn, "\"'(*)").unwrap().is_empty());
+    }
+
+    /// De slideshow-query in `get_year`: `photo_ids` bevat alle foto's van het
+    /// event, chronologisch (ongedateerde achteraan), gecapt op 24; een event
+    /// zonder foto's geeft [] (NULL → split_ids). Alleen foto's (geen tekst).
+    #[test]
+    fn get_year_photo_ids_are_chronological_and_photos_only() {
+        fn photo(id: &str, event_id: &str, ts: Option<i64>) -> Item {
+            Item {
+                id: id.into(),
+                event_id: event_id.into(),
+                item_type: ItemType::Photo,
+                media: Some(format!("{id}.jpg")),
+                url: None,
+                caption: None,
+                happened_at: None,
+                timestamp_ms: ts,
+                place: None,
+                people: vec![],
+                tags: vec![],
+                category: None,
+                body_text: None,
+                slug: Some(id.into()),
+                synthetic: false,
+            }
+        }
+
+        let mut m = VaultModel::default();
+        m.years.push(Year {
+            id: "y2024".into(),
+            year: 2024,
+            title: "2024".into(),
+            start_at: "2024-01-01".into(),
+            end_at: None,
+            folder_name: "2024".into(),
+        });
+        m.events.push(Event {
+            id: "ev1".into(),
+            kind: EventKind::Event,
+            title: Some("ev1".into()),
+            description: None,
+            start_at: "2024-01-01".into(),
+            end_at: None,
+            location: None,
+            featured_photo: None,
+            tags: vec![],
+            year_id: "y2024".into(),
+            folder_path: "2024/ev1".into(),
+        });
+        // Bewust in niet-chronologische invoer-volgorde + één ongedateerde.
+        m.items.push(photo("p_late", "ev1", Some(3000)));
+        m.items.push(photo("p_early", "ev1", Some(1000)));
+        m.items.push(photo("p_undated", "ev1", None));
+        m.items.push(photo("p_mid", "ev1", Some(2000)));
+        // Een tekst-item mag NIET in photo_ids belanden.
+        m.items.push(Item {
+            id: "t1".into(),
+            event_id: "ev1".into(),
+            item_type: ItemType::Text,
+            media: None,
+            url: None,
+            caption: Some("notitie".into()),
+            happened_at: None,
+            timestamp_ms: Some(500),
+            place: None,
+            people: vec![],
+            tags: vec![],
+            category: None,
+            body_text: None,
+            slug: Some("t1".into()),
+            synthetic: false,
+        });
+        // Event zónder foto's → photo_ids = [].
+        m.events.push(Event {
+            id: "ev2".into(),
+            kind: EventKind::Event,
+            title: Some("ev2".into()),
+            description: None,
+            start_at: "2024-02-01".into(),
+            end_at: None,
+            location: None,
+            featured_photo: None,
+            tags: vec![],
+            year_id: "y2024".into(),
+            folder_path: "2024/ev2".into(),
+        });
+
+        let mut conn = open_in_memory().unwrap();
+        load(&mut conn, &m).unwrap();
+        let yd = get_year(&conn, "y2024").unwrap().unwrap();
+        let ev1 = yd.events.iter().find(|e| e.id == "ev1").unwrap();
+        assert_eq!(
+            ev1.photo_ids,
+            vec!["p_early", "p_mid", "p_late", "p_undated"],
+            "chronologisch, ongedateerde achteraan, geen tekst-item"
+        );
+        let ev2 = yd.events.iter().find(|e| e.id == "ev2").unwrap();
+        assert!(ev2.photo_ids.is_empty(), "event zonder foto's → lege lijst");
     }
 
     #[test]

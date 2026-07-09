@@ -29,11 +29,27 @@ interface Node {
   coverItemId?: string
   container: Container
   sprite: Sprite | null
+  sprite2: Sprite | null // crossfade-overlay voor de slideshow
   halfW: number
   halfH: number
   key: string
   loaded: boolean
   scale: number
+  wasVisible: boolean // vorige frame in beeld? (voor nextAt-reset bij herintrede)
+  // Slideshow-roulatie (alleen cover-kaarten met >1 foto).
+  photoIds: string[]
+  photoIdx: number
+  pendingIdx: number
+  curKey: string // key van de texture die nu in `sprite` zit (warm houden)
+  pendingKey: string // key van de texture die nu in `sprite2` zit tijdens een fade
+  nextAt: number // frame waarop de volgende foto komt
+  fade: number // 0 = niet aan het faden; >0 = crossfade-voortgang
+}
+
+/** Cover-fit een sprite op een thumbnail-kaart (vult, behoudt aspect). */
+function fitCover(sprite: Sprite, tex: Texture): void {
+  const s = Math.max(THUMB_W / tex.width, THUMB_H / tex.height)
+  sprite.setSize(tex.width * s, tex.height * s)
 }
 
 /** Parse een `YYYY-MM-DD`-datum LOKAAL (niet als UTC — dat verschuift op
@@ -56,12 +72,17 @@ export class YearScene implements Scene {
   private dayLine = new Graphics()
   private dayLabel: Text
   private rangeBand = new Graphics() // Ctrl-sleep-selectie (begin→eind)
+  private slideEnabled: boolean
+  private slideMs: number
 
   constructor(
     private engine: RenderEngine,
     private backend: Backend,
     detail: YearDetail,
+    slideshow: { enabled: boolean; speedMs: number } = { enabled: false, speedMs: 5000 },
   ) {
+    this.slideEnabled = slideshow.enabled
+    this.slideMs = Math.max(800, slideshow.speedMs)
     const year = detail.year.year
     const yearStart = new Date(year, 0, 1).getTime()
     const yearEnd = new Date(year, 11, 31, 23, 59, 59).getTime()
@@ -247,17 +268,27 @@ export class YearScene implements Scene {
       .fill(0xf5f5f0)
     container.addChild(frame)
 
-    const mask = new Graphics()
-    mask.rect(-THUMB_W / 2, -THUMB_H / 2, THUMB_W, THUMB_H).fill(0xffffff)
+    // Geklipte laag met de basis-sprite + een crossfade-overlay (slideshow).
+    const photoLayer = new Container()
     const sprite = new Sprite(Texture.WHITE)
     sprite.anchor.set(0.5)
     sprite.setSize(THUMB_W, THUMB_H)
     sprite.tint = 0x2a3345
-    container.addChild(sprite)
-    container.addChild(mask)
-    sprite.mask = mask
+    const sprite2 = new Sprite(Texture.WHITE)
+    sprite2.anchor.set(0.5)
+    sprite2.setSize(THUMB_W, THUMB_H)
+    sprite2.alpha = 0
+    const mask = new Graphics()
+    mask.rect(-THUMB_W / 2, -THUMB_H / 2, THUMB_W, THUMB_H).fill(0xffffff)
+    photoLayer.addChild(sprite)
+    photoLayer.addChild(sprite2)
+    photoLayer.addChild(mask)
+    photoLayer.mask = mask
+    container.addChild(photoLayer)
 
     this.root.addChild(container)
+    const photoIds = ev.photoIds ?? []
+    const startIdx = Math.max(0, photoIds.indexOf(ev.coverItemId ?? ''))
     return {
       eventId: ev.id,
       anchorX,
@@ -267,11 +298,21 @@ export class YearScene implements Scene {
       coverItemId: ev.coverItemId,
       container,
       sprite,
+      sprite2,
       halfW: THUMB_W / 2 + BORDER,
       halfH: THUMB_H / 2 + BORDER,
       key: `cover-${ev.coverItemId}`,
       loaded: false,
       scale: 1,
+      wasVisible: false,
+      photoIds,
+      photoIdx: startIdx,
+      pendingIdx: startIdx,
+      curKey: `cover-${ev.coverItemId}`,
+      pendingKey: '',
+      // Versprongen start zodat niet alle kaarten tegelijk wisselen.
+      nextAt: 0,
+      fade: 0,
     }
   }
 
@@ -308,11 +349,20 @@ export class YearScene implements Scene {
       hasCover: false,
       container,
       sprite: null,
+      sprite2: null,
       halfW: Math.max(DOT_R, 70),
       halfH: DOT_R + 26,
       key: '',
       loaded: false,
       scale: 1,
+      wasVisible: false,
+      photoIds: [],
+      photoIdx: 0,
+      pendingIdx: 0,
+      curKey: '',
+      pendingKey: '',
+      nextAt: 0,
+      fade: 0,
     }
   }
 
@@ -331,7 +381,11 @@ export class YearScene implements Scene {
   }
 
   update(ctx: FrameContext): void {
-    const { engine, frame } = ctx
+    const { engine, frame, dtMS } = ctx
+    // Slideshow-timing op wereldklok (fps-onafhankelijk); dt geclampt tegen
+    // sprongen na een tab-throttle/hapering.
+    const now = performance.now()
+    const dt = Math.min(dtMS, 100)
     const b = engine.camera.worldBounds(engine.viewport())
     const marginX = THUMB_W
     const marginY = THUMB_H
@@ -342,27 +396,92 @@ export class YearScene implements Scene {
         n.cardX - n.halfW < b.maxX + marginX &&
         n.cardY + n.halfH > b.minY - marginY &&
         n.cardY - n.halfH < b.maxY + marginY
+      const wasVisible = n.wasVisible
+      n.wasVisible = visible
       n.container.visible = visible
       if (!visible) continue
+
+      // Net weer in beeld: verschuif `nextAt` naar de toekomst zodat een
+      // ver-in-het-verleden liggende deadline geen directe wissel forceert
+      // (culling pauzeert de slideshow; herintrede mag niet meteen springen).
+      if (!wasVisible && n.loaded && n.fade === 0) {
+        n.nextAt = now + this.slideMs * (0.3 + Math.random())
+      }
 
       // Micro-animatie: vloeiende hover-schaal.
       const target = n.eventId === this.hoveredId ? 1.05 : 1
       n.scale += (target - n.scale) * 0.2
       n.container.scale.set(n.scale)
 
-      if (!n.sprite || n.loaded || !n.coverItemId) continue
-      const tex = engine.textures.get(n.key, frame)
-      if (tex) {
-        n.sprite.texture = tex
-        n.sprite.tint = 0xffffff
-        // Cover-fit: vul de kaart met behoud van aspect.
-        const s = Math.max(THUMB_W / tex.width, THUMB_H / tex.height)
-        n.sprite.setSize(tex.width * s, tex.height * s)
-        n.loaded = true
-      } else {
-        const src = this.backend.thumb(n.coverItemId, 256)
-        engine.textures.request({ key: n.key, url: src.url, hue: src.hue, size: 256 })
+      // Basis-cover laden.
+      if (n.sprite && !n.loaded && n.coverItemId) {
+        const tex = engine.textures.get(n.key, frame)
+        if (tex) {
+          n.sprite.texture = tex
+          n.sprite.tint = 0xffffff
+          fitCover(n.sprite, tex)
+          n.loaded = true
+          n.curKey = n.key
+          // Versprongen start zodat niet alle kaarten tegelijk wisselen.
+          if (n.nextAt === 0) n.nextAt = now + this.slideMs * (0.3 + Math.random())
+        } else {
+          const src = this.backend.thumb(n.coverItemId, 256)
+          engine.textures.request({ key: n.key, url: src.url, hue: src.hue, size: 256 })
+        }
       }
+
+      // Houd de texture(s) die nu op deze zichtbare kaart getoond worden "warm"
+      // in de LRU-cache: anders bevriest hun `lastUsed` (we `get`-en ze niet elke
+      // frame) en kan de eviction ze `destroy`-en terwijl de sprite ze nog
+      // gebruikt → zwarte kaart. (Zelfde patroon als de lifeline-tegels.)
+      if (n.loaded) {
+        if (n.curKey) engine.textures.get(n.curKey, frame)
+        if (n.fade > 0 && n.pendingKey) engine.textures.get(n.pendingKey, frame)
+      }
+
+      // Slideshow: rouleer de cover door de foto's van het event (crossfade).
+      if (this.slideEnabled && n.loaded && n.sprite && n.sprite2 && n.photoIds.length > 1) {
+        this.tickSlideshow(n, engine, frame, now, dt)
+      }
+    }
+  }
+
+  /** Eén slideshow-stap voor een cover-kaart: volgende foto voorbereiden en
+   * crossfaden; bij voltooien de overlay de nieuwe basis maken. */
+  private tickSlideshow(n: Node, engine: RenderEngine, frame: number, now: number, dt: number): void {
+    const s2 = n.sprite2!
+    const s1 = n.sprite!
+    if (n.fade > 0) {
+      n.fade += dt / 300 // ~0.3s crossfade
+      s2.alpha = Math.min(1, n.fade)
+      if (n.fade >= 1) {
+        s1.texture = s2.texture
+        s1.setSize(s2.width, s2.height)
+        s2.alpha = 0
+        n.photoIdx = n.pendingIdx
+        n.curKey = n.pendingKey // s1 toont nu de zojuist ingefade-de foto
+        n.pendingKey = ''
+        n.fade = 0
+        // Versprongen volgende beurt (licht random in tijd).
+        n.nextAt = now + this.slideMs * (0.7 + Math.random() * 0.6)
+      }
+      return
+    }
+    if (now < n.nextAt) return
+    const nextIdx = (n.photoIdx + 1) % n.photoIds.length
+    const key = `cover-${n.photoIds[nextIdx]}`
+    const tex = engine.textures.get(key, frame)
+    if (tex) {
+      s2.texture = tex
+      s2.tint = 0xffffff
+      fitCover(s2, tex)
+      s2.alpha = 0
+      n.pendingIdx = nextIdx
+      n.pendingKey = key
+      n.fade = 0.001 // start crossfade
+    } else {
+      const src = this.backend.thumb(n.photoIds[nextIdx], 256)
+      engine.textures.request({ key, url: src.url, hue: src.hue, size: 256 })
     }
   }
 

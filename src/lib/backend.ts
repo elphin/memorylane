@@ -24,6 +24,8 @@ export interface EventSummary {
   endAt?: string
   itemCount: number
   coverItemId?: string
+  /** Foto-id's van dit event (voor de slideshow-roulatie op de tijdlijn). */
+  photoIds: string[]
 }
 
 export interface Year {
@@ -396,6 +398,7 @@ class MockBackend implements Backend {
           itemCount: Math.max(1, Math.floor(itemCount / eventCount)),
           // Af en toe een event zonder cover → test het stip-pad in de tijdlijn.
           coverItemId: e % 7 === 6 ? undefined : `${id}-e${e}-i0`,
+          photoIds: [], // door getYear gevuld (mock)
         }
       })
       const points: DensityPoint[] = []
@@ -431,11 +434,13 @@ class MockBackend implements Backend {
     // Cover per event: featured indien gekozen, anders elke keer een WILLEKEURIGE
     // foto (i=1..n-1; i=0 is de tekstkaart) — demonstreert "elke keer een andere".
     const events = detail.events.map((ev) => {
-      const feat = this.featured.get(ev.id)
-      if (feat) return { ...ev, coverItemId: feat }
       const n = 6 + (hueFor(ev.id) % 7)
+      // Foto's van dit event (i=1..n-1; i=0 is de tekstkaart) — voor de slideshow.
+      const photoIds = Array.from({ length: Math.max(0, n - 1) }, (_, k) => `${ev.id}-i${k + 1}`)
+      const feat = this.featured.get(ev.id)
+      if (feat) return { ...ev, coverItemId: feat, photoIds }
       const k = 1 + Math.floor(Math.random() * Math.max(1, n - 1))
-      return { ...ev, coverItemId: `${ev.id}-i${k}` }
+      return { ...ev, coverItemId: `${ev.id}-i${k}`, photoIds }
     })
     return { year: detail.year, events }
   }
@@ -525,6 +530,7 @@ class MockBackend implements Backend {
         endAt: endAt ?? undefined,
         itemCount: 0,
         coverItemId: undefined,
+        photoIds: [],
       })
     }
     return id

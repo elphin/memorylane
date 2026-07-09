@@ -38,9 +38,13 @@ interface MetaForm {
 interface Settings {
   /** Weergave waarin een event-canvas standaard opent. */
   defaultLayout: 'custom' | 'grid' | 'scatter'
+  /** Rouleren de thumbnails op de jaar-tijdlijn door de foto's (slideshow)? */
+  slideshow: boolean
+  /** Seconden per foto in de slideshow. */
+  slideshowSpeed: number
 }
 
-const DEFAULT_SETTINGS: Settings = { defaultLayout: 'custom' }
+const DEFAULT_SETTINGS: Settings = { defaultLayout: 'custom', slideshow: true, slideshowSpeed: 5 }
 const SETTINGS_KEY = 'memorylane-settings'
 
 function loadSettings(): Settings {
@@ -171,7 +175,10 @@ export function AppShell() {
         const old = sceneRef.current
         sceneRef.current = null
         if (old) engine.exitScene(old.root, dir, () => old.destroy())
-        const scene = new YearScene(engine, backendRef.current, detail)
+        const scene = new YearScene(engine, backendRef.current, detail, {
+          enabled: settingsRef.current.slideshow,
+          speedMs: settingsRef.current.slideshowSpeed * 1000,
+        })
         sceneRef.current = scene
         if (ctrlDown) scene.setDayPicker(true)
         revealScene(engine, scene, dir)
@@ -989,6 +996,36 @@ function SettingsPanel({
         <div style={{ fontSize: 12, color: '#6a7690' }}>
           Hoe een event opent. Je eigen posities blijven altijd bewaard onder “Eigen”.
         </div>
+
+        <div style={{ height: 1, background: '#2c3650', margin: '18px 0' }} />
+        <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
+          <input
+            type="checkbox"
+            checked={settings.slideshow}
+            onChange={(e) => onChange({ slideshow: e.target.checked })}
+          />
+          <span style={{ fontSize: 14, color: '#fff' }}>Slideshow op de tijdlijn (thumbnails rouleren)</span>
+        </label>
+        {settings.slideshow && (
+          <div style={{ marginTop: 12 }}>
+            <div style={{ fontSize: 13, color: '#8a97b0', marginBottom: 4 }}>
+              Snelheid: {settings.slideshowSpeed}s per foto
+            </div>
+            <input
+              type="range"
+              min={2}
+              max={15}
+              step={1}
+              value={settings.slideshowSpeed}
+              onChange={(e) => onChange({ slideshowSpeed: Number(e.target.value) })}
+              style={{ width: '100%' }}
+            />
+          </div>
+        )}
+        <div style={{ fontSize: 12, color: '#6a7690', marginTop: 6 }}>
+          Wijzigingen gelden bij het (opnieuw) openen van een jaar.
+        </div>
+
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 18 }}>
           <button onClick={onClose} style={primaryBtn}>Klaar</button>
         </div>
