@@ -43,6 +43,9 @@ export interface Year {
   startAt: string
   endAt?: string
   folderName: string
+  /** Globale schaalfactor voor álle event-kaarten van dit jaar (proportioneel
+   * "passend maken"). Afwezig = 1.0 (geen schaling). */
+  sizeFactor?: number
 }
 
 export interface YearDetail {
@@ -177,6 +180,8 @@ export interface Backend {
   setFeatured(eventId: string, itemRef: string | null): Promise<void>
   /** Zet (of wist bij `null`) de vaste jaar-cover (item-id) van een jaar. */
   setYearCover(yearId: string, itemRef: string | null): Promise<void>
+  /** Zet (of wist bij `null`/≈1.0) de globale event-kaartschaal van een jaar. */
+  setYearSizeFactor(yearId: string, factor: number | null): Promise<void>
   /** Zet (of wist bij `null`) het belang/grootte (1–100) van een event. */
   setEventSize(eventId: string, size: number | null): Promise<void>
   createEvent(
@@ -361,6 +366,11 @@ class TauriBackend implements Backend {
     await invoke('set_event_size', { eventId, size })
   }
 
+  async setYearSizeFactor(yearId: string, factor: number | null): Promise<void> {
+    const invoke = await this.api()
+    await invoke('set_year_size_factor', { yearId, factor })
+  }
+
   async importPhotos(eventId: string): Promise<number> {
     const dialog = await import('@tauri-apps/plugin-dialog')
     const picked = await dialog.open({
@@ -441,6 +451,7 @@ class MockBackend implements Backend {
   private meta = new Map<string, ItemMetadata>()
   private featured = new Map<string, string>() // eventId → item-ref
   private yearCovers = new Map<string, string>() // yearId → item-id (vaste jaar-cover)
+  private yearFactors = new Map<string, number>() // yearId → globale event-kaartschaal
   private newEventSeq = 0
   private thumbCache = new Map<string, string>()
 
@@ -523,9 +534,14 @@ class MockBackend implements Backend {
     if (itemRef) this.yearCovers.set(yearId, itemRef)
     else this.yearCovers.delete(yearId)
   }
+  async setYearSizeFactor(yearId: string, factor: number | null): Promise<void> {
+    if (factor == null || Math.abs(factor - 1) <= 0.001) this.yearFactors.delete(yearId)
+    else this.yearFactors.set(yearId, Math.max(0.1, Math.min(5, factor)))
+  }
   async getYear(yearId: string): Promise<YearDetail | null> {
     const detail = this.details.get(yearId)
     if (!detail) return null
+    const sizeFactor = this.yearFactors.get(yearId)
     // Cover per event: featured indien gekozen, anders elke keer een WILLEKEURIGE
     // foto (i=1..n-1; i=0 is de tekstkaart) — demonstreert "elke keer een andere".
     const events = detail.events.map((ev) => {
@@ -537,7 +553,7 @@ class MockBackend implements Backend {
       const k = 1 + Math.floor(Math.random() * Math.max(1, n - 1))
       return { ...ev, coverItemId: `${ev.id}-i${k}`, photoIds }
     })
-    return { year: detail.year, events }
+    return { year: { ...detail.year, sizeFactor }, events }
   }
   async getTimelineDensity(yearId: string): Promise<DensityPoint[]> {
     return this.density.get(yearId) ?? []

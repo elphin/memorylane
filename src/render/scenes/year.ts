@@ -30,6 +30,75 @@ function cardScale(size?: number): number {
   return Math.max(CARD_MIN_SCALE, Math.min(CARD_MAX_SCALE, s / 50))
 }
 
+/** Plaatsing van één cover-kaart (resultaat van de lane-packing). */
+interface Placement {
+  ev: EventSummary
+  anchorX: number
+  cardX: number
+  cardY: number
+  side: number
+  bs: number // baseScale (grootte-schaal) van deze kaart
+  ch: number // geschaalde kaarthoogte
+  innerY: number // binnenrand (leader-eindpunt)
+  startY: number // leader-startpunt op de as (blokrand bij meerdaags)
+}
+
+/** Zuivere lane-packing: plaatst de (op datum gesorteerde) cover-events rond hun
+ * datum in lanes boven/onder de as, geschaald met `factor` × hun eigen `size`.
+ * Geen Pixi-neveneffecten → herbruikbaar door `setup()` (tekenen) én de
+ * "passend maken"-solver (alleen `maxAbsY` meten bij een proef-factor). */
+function computePlacements(
+  withCoverSorted: EventSummary[],
+  factor: number,
+  anchorXOf: (ev: EventSummary) => number,
+  spanIds: Set<string>,
+): { placements: Placement[]; maxAbsY: number } {
+  const laneRight: Record<string, number> = {}
+  let maxAbsY = 0
+  // Speelse verticale variatie: meer events → meer verschil (jitter naar buiten).
+  const jyAmp = Math.min(120, 30 + withCoverSorted.length * 2)
+  // Constante vrije ruimte as→binnenrand van een lane-0-kaart; rijafstand op de
+  // grootst mogelijke kaart, zodat grote/kleine kaarten nooit tussen lanes botsen.
+  const INNER_CLEAR = AXIS_GAP - THUMB_H / 2
+  const LANE_PITCH = THUMB_H * CARD_MAX_SCALE + LANE_GAP
+  const placements: Placement[] = []
+  withCoverSorted.forEach((ev, j) => {
+    const anchorX = anchorXOf(ev)
+    const bs = cardScale((ev.size ?? 50) * factor)
+    const cw = THUMB_W * bs
+    const ch = THUMB_H * bs
+    const seed = hashId(ev.id)
+    const jx = ((seed % 1000) / 1000 - 0.5) * 64 // ±32 (speels zijwaarts)
+    const jy = (((seed >>> 10) % 1000) / 1000) * jyAmp // 0..jyAmp, altijd naar buiten
+    const cardX = anchorX + jx
+    const prefer = j % 2 === 0 ? -1 : 1 // -1 = boven (neg. y), 1 = onder
+    let side = prefer
+    let level = 0
+    for (let lvl = 0; lvl < 64; lvl++) {
+      const kPref = `${prefer}:${lvl}`
+      const kOther = `${-prefer}:${lvl}`
+      if (cardX - cw / 2 > (laneRight[kPref] ?? -1e9) + CARD_GAP) {
+        side = prefer
+        level = lvl
+        break
+      }
+      if (cardX - cw / 2 > (laneRight[kOther] ?? -1e9) + CARD_GAP) {
+        side = -prefer
+        level = lvl
+        break
+      }
+    }
+    laneRight[`${side}:${level}`] = cardX + cw / 2
+    const gap = INNER_CLEAR + ch / 2 + (side === 1 ? LABEL_CLEARANCE : 0)
+    const cardY = side * (gap + level * LANE_PITCH + jy)
+    maxAbsY = Math.max(maxAbsY, Math.abs(cardY) + ch / 2)
+    const innerY = cardY - side * (ch / 2)
+    const startY = spanIds.has(ev.id) ? side * 9 : 0
+    placements.push({ ev, anchorX, cardX, cardY, side, bs, ch, innerY, startY })
+  })
+  return { placements, maxAbsY }
+}
+
 const MONTHS = ['jan', 'feb', 'mrt', 'apr', 'mei', 'jun', 'jul', 'aug', 'sep', 'okt', 'nov', 'dec']
 
 interface Node {
@@ -116,6 +185,13 @@ export class YearScene implements Scene {
   private rangeBand = new Graphics() // Ctrl-sleep-selectie (begin→eind)
   private slideEnabled: boolean
   private slideMs: number
+  // Globale event-kaartschaal van dit jaar (proportioneel "passend maken").
+  private yearFactor = 1
+  // Bewaard voor de "passend maken"-solver: de gesorteerde cover-events + de
+  // (zuivere) anchor-x-functie + de set van meerdaagse events.
+  private withCoverSorted: EventSummary[] = []
+  private anchorXOf: (ev: EventSummary) => number = () => 0
+  private spanIds: Set<string> = new Set()
 
   constructor(
     private engine: RenderEngine,
@@ -131,6 +207,8 @@ export class YearScene implements Scene {
     const span = Math.max(1, yearEnd - yearStart)
     this.yearStart = yearStart
     this.span = span
+    // Factor uit `_year.md` (afwezig/≈1.0 = geen schaling), geklemd voor de zekerheid.
+    this.yearFactor = Math.max(0.1, Math.min(5, detail.year.sizeFactor ?? 1))
     const dateToX = (ms: number): number => {
       const p = Math.min(1, Math.max(0, (ms - yearStart) / span))
       return -AXIS_W / 2 + p * AXIS_W
@@ -160,25 +238,29 @@ export class YearScene implements Scene {
     // Meerdaagse events (period): een balkje op de as over de hele periode.
     const spans = new Graphics()
     this.root.addChild(spans)
+    // Is dit event meerdaags genoeg voor een balkje (i.p.v. één punt op de as)?
+    const isSpan = (e: EventSummary): boolean =>
+      !!e.endAt && dateToX(parseLocalDate(e.endAt)) - dateToX(parseLocalDate(e.startAt)) > 4
     // Kleur per meerdaags event: chronologisch uit het palet, zodat twee naburige
     // blokjes nooit dezelfde kleur krijgen.
     const spanColor = new Map<string, number>()
     detail.events
-      .filter((e) => e.endAt && dateToX(parseLocalDate(e.endAt)) - dateToX(parseLocalDate(e.startAt)) > 4)
+      .filter(isSpan)
       .sort((a, b) => parseLocalDate(a.startAt) - parseLocalDate(b.startAt))
       .forEach((e, k) => spanColor.set(e.id, SPAN_PALETTE[k % SPAN_PALETTE.length]!))
-    // Datumplek van een event op de as: bij een meerdaags event het midden van
-    // de periode (en teken meteen het balkje), anders exact de startdatum.
-    const anchorFor = (ev: EventSummary): number => {
+    // Teken de balkjes (scherpe hoeken, ondoorzichtige gedimde kleur).
+    for (const e of detail.events) {
+      if (!isSpan(e)) continue
+      const sX = dateToX(parseLocalDate(e.startAt))
+      const eX = dateToX(parseLocalDate(e.endAt!))
+      spans.rect(sX, -9, eX - sX, 18).fill(spanColor.get(e.id) ?? SPAN_PALETTE[0]!)
+    }
+    // Datumplek van een event op de as: bij een meerdaags event het midden van de
+    // periode, anders exact de startdatum. Zuiver (geen teken-neveneffect) zodat
+    // de solver 'm kan hergebruiken.
+    const anchorXOf = (ev: EventSummary): number => {
       const startX = dateToX(parseLocalDate(ev.startAt))
-      if (ev.endAt) {
-        const endX = dateToX(parseLocalDate(ev.endAt))
-        if (endX - startX > 4) {
-          // Recht (scherpe hoeken) rechthoekig blokje; ondoorzichtige, gedimde kleur.
-          spans.rect(startX, -9, endX - startX, 18).fill(spanColor.get(ev.id) ?? SPAN_PALETTE[0]!)
-          return (startX + endX) / 2
-        }
-      }
+      if (isSpan(ev)) return (startX + dateToX(parseLocalDate(ev.endAt!))) / 2
       return startX
     }
 
@@ -193,69 +275,26 @@ export class YearScene implements Scene {
     // Sorteer op datum zodat de lane-toewijzing links→rechts loopt.
     withCover.sort((a, b) => parseLocalDate(a.startAt) - parseLocalDate(b.startAt))
 
-    const laneRight: Record<string, number> = {}
-    let maxAbsY = 0
-    // Speelse verticale variatie: meer events → meer verschil (met een ruime
-    // minimum-marge). De jitter duwt kaarten alleen NAAR BUITEN (weg van de as),
-    // zodat de marge onder de maandnamen altijd behouden blijft.
-    const jyAmp = Math.min(120, 30 + withCover.length * 2)
+    // Bewaar wat de solver nodig heeft om `maxAbsY` bij een proef-factor te meten.
+    this.withCoverSorted = withCover
+    this.anchorXOf = anchorXOf
+    this.spanIds = new Set(spanColor.keys())
 
-    // Constante vrije ruimte tussen de as en de binnenrand van een lane-0-kaart,
-    // ongeacht de kaartgrootte. Rijafstand op de grootst mogelijke kaart, zodat
-    // grote en kleine kaarten nooit tussen lanes overlappen.
-    const INNER_CLEAR = AXIS_GAP - THUMB_H / 2
-    const LANE_PITCH = THUMB_H * CARD_MAX_SCALE + LANE_GAP
-    withCover.forEach((ev, j) => {
-      const anchorX = anchorFor(ev)
-      const bs = cardScale(ev.size)
-      const cw = THUMB_W * bs
-      const ch = THUMB_H * bs
-      const seed = hashId(ev.id)
-      const jx = ((seed % 1000) / 1000 - 0.5) * 64 // ±32 (speels zijwaarts)
-      const jy = (((seed >>> 10) % 1000) / 1000) * jyAmp // 0..jyAmp, altijd naar buiten
-      const cardX = anchorX + jx
-      // Wissel de voorkeurszijde per event → gebalanceerd boven/onder.
-      const prefer = j % 2 === 0 ? -1 : 1 // -1 = boven (neg. y), 1 = onder
-      let side = prefer
-      let level = 0
-      for (let lvl = 0; lvl < 64; lvl++) {
-        const kPref = `${prefer}:${lvl}`
-        const kOther = `${-prefer}:${lvl}`
-        if (cardX - cw / 2 > (laneRight[kPref] ?? -1e9) + CARD_GAP) {
-          side = prefer
-          level = lvl
-          break
-        }
-        if (cardX - cw / 2 > (laneRight[kOther] ?? -1e9) + CARD_GAP) {
-          side = -prefer
-          level = lvl
-          break
-        }
-      }
-      laneRight[`${side}:${level}`] = cardX + cw / 2
-      // Vaste binnenrand-marge + halve kaarthoogte → grote kaarten schuiven naar
-      // buiten i.p.v. over de as/maandnamen. Onder de as extra label-ruimte.
-      const gap = INNER_CLEAR + ch / 2 + (side === 1 ? LABEL_CLEARANCE : 0)
-      const cardY = side * (gap + level * LANE_PITCH + jy)
-      maxAbsY = Math.max(maxAbsY, Math.abs(cardY) + ch / 2)
-
+    const { placements, maxAbsY } = computePlacements(withCover, this.yearFactor, anchorXOf, this.spanIds)
+    for (const p of placements) {
       // Gebogen leader (2px): van de RAND van het blokje (meerdaags) of de as-lijn,
       // in een vloeiende S-curve naar de binnenrand van de kaart.
-      const innerY = cardY - side * (ch / 2)
-      const startY = spanColor.has(ev.id) ? side * 9 : 0
-      const midY = (startY + innerY) / 2
+      const midY = (p.startY + p.innerY) / 2
       leaders
-        .moveTo(anchorX, startY)
-        .bezierCurveTo(anchorX, midY, cardX, midY, cardX, innerY)
+        .moveTo(p.anchorX, p.startY)
+        .bezierCurveTo(p.anchorX, midY, p.cardX, midY, p.cardX, p.innerY)
         .stroke({ width: 2, color: 0x3a4256, alpha: 0.7, pixelLine: true })
-
-      this.nodes.push(this.buildCard(ev, cardX, cardY, bs))
-    })
+      this.nodes.push(this.buildCard(p.ev, p.cardX, p.cardY, p.bs))
+    }
 
     // Events zonder cover: een stip + titel op de as.
     withoutCover.forEach((ev) => {
-      const anchorX = anchorFor(ev)
-      this.nodes.push(this.buildDot(ev, anchorX))
+      this.nodes.push(this.buildDot(ev, anchorXOf(ev)))
     })
 
     // Lege jaren: een hint in het midden.
@@ -594,7 +633,8 @@ export class YearScene implements Scene {
       let changed = false
       const apply = (size: number): void => {
         n.size = Math.max(1, Math.min(100, Math.round(size)))
-        n.baseScale = cardScale(n.size)
+        // De visuele schaal is altijd size × de globale jaar-factor.
+        n.baseScale = cardScale(n.size * this.yearFactor)
         n.halfW = (THUMB_W / 2 + BORDER) * n.baseScale
         n.halfH = (THUMB_H / 2 + BORDER) * n.baseScale
         n.container.scale.set(n.scale * n.baseScale)
@@ -611,6 +651,39 @@ export class YearScene implements Scene {
       }
     }
     return null
+  }
+
+  /** "Passend maken": zoekt de grootste globale factor (binnen [0.5, 1.6]) waarbij
+   * de layout nog binnen de comfortabele (horizontaal-begrensde) zoom past, zodat
+   * belangrijke events zo groot mogelijk blijven zonder de tijdlijn te overspoelen.
+   * Proportioneel — de onderlinge `size`-verhoudingen blijven intact. Geeft de
+   * factor terug (AppShell persisteert 'm en herlaadt het jaar). */
+  computeFitFactor(): number {
+    if (this.withCoverSorted.length === 0) return 1
+    const vp = this.engine.viewport()
+    const contentW = AXIS_W + THUMB_W * CARD_MAX_SCALE + 120
+    // Doelhoogte = waar de verticale beperking de horizontale net gaat domineren
+    // (spiegelt `fitCamera`: contentH = 2·maxAbsY + 120, met de 320-vloer).
+    const targetContentH = (vp.height / vp.width) * contentW
+    const targetMaxAbsY = Math.max(160, (targetContentH - 120) / 2)
+    const measure = (f: number): number =>
+      computePlacements(this.withCoverSorted, f, this.anchorXOf, this.spanIds).maxAbsY
+    const FMIN = 0.5
+    const FMAX = 1.6
+    // Past zelfs de kleinste factor niet (te veel events op dezelfde datum)?
+    // Accepteer de overloop — `fitCamera` zoomt dan verder uit.
+    if (measure(FMIN) > targetMaxAbsY) return FMIN
+    // Past de grootste factor nog? Gebruik die (kaarten zo groot als toegestaan).
+    if (measure(FMAX) <= targetMaxAbsY) return FMAX
+    // Binair zoeken naar de grens (maxAbsY is monotoon niet-dalend in de factor).
+    let lo = FMIN
+    let hi = FMAX
+    for (let i = 0; i < 24; i++) {
+      const mid = (lo + hi) / 2
+      if (measure(mid) <= targetMaxAbsY) lo = mid
+      else hi = mid
+    }
+    return Math.round(lo * 100) / 100
   }
 
   destroy(): void {

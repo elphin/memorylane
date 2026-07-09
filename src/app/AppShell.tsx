@@ -1106,6 +1106,28 @@ export function AppShell() {
     if (id) saveEventView(id, { mode: 'custom' })
   }
 
+  // "Passend maken" (L1): laat de scene de proportionele jaar-schaalfactor
+  // berekenen, persisteer 'm en herlaad het jaar zodat alles netjes past.
+  const fitYearSizes = async (): Promise<void> => {
+    const scene = sceneRef.current
+    const backend = backendRef.current
+    const yearId = currentYearRef.current
+    if (!scene?.computeFitFactor || !backend || !yearId || mutatingRef.current) return
+    const factor = scene.computeFitFactor()
+    mutatingRef.current = true
+    setBusy(true)
+    try {
+      await backend.setYearSizeFactor(yearId, factor)
+      enterYearRef.current(yearId) // herlaad de jaar-tijdlijn met de nieuwe factor
+    } catch (e) {
+      setMessage(String(e))
+      setPhase('error')
+    } finally {
+      mutatingRef.current = false
+      setBusy(false)
+    }
+  }
+
   const openEditEvent = (): void => {
     const info = currentEventInfoRef.current
     if (!info) return
@@ -1377,6 +1399,25 @@ export function AppShell() {
             title="Alles passend in beeld"
           >
             ⤢ Alles passend
+          </button>
+        )}
+      {uiLevel === 'year' &&
+        phase === 'ready' &&
+        !modal &&
+        !editing &&
+        !eventForm &&
+        !metaForm &&
+        !searchOpen &&
+        !settingsOpen &&
+        !screensaverIds &&
+        !settings.viewMode && (
+          <button
+            onClick={() => void fitYearSizes()}
+            disabled={busy}
+            style={fitBtn}
+            title="Schaal alle events proportioneel zodat het jaar netjes past"
+          >
+            ⤢ Passend maken
           </button>
         )}
       {toast && <div style={toastStyle}>{toast}</div>}
