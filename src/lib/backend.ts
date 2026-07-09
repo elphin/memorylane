@@ -162,6 +162,8 @@ export interface Backend {
   readonly isMock: boolean
   getVaultPath(): Promise<string | null>
   pickAndSetVault(): Promise<IndexSummary | null>
+  /** Herbouwt de index volledig uit de huidige vault (scan + herindexeren). */
+  reindex(): Promise<IndexSummary>
   listYears(): Promise<YearSummary[]>
   getYear(yearId: string): Promise<YearDetail | null>
   getTimelineDensity(yearId: string): Promise<DensityPoint[]>
@@ -250,6 +252,11 @@ class TauriBackend implements Backend {
     if (typeof picked !== 'string') return null
     const invoke = await this.api()
     return await invoke<IndexSummary>('set_vault_path', { path: picked })
+  }
+
+  async reindex(): Promise<IndexSummary> {
+    const invoke = await this.api()
+    return await invoke<IndexSummary>('reindex')
   }
 
   async listYears(): Promise<YearSummary[]> {
@@ -476,6 +483,9 @@ class MockBackend implements Backend {
     return 'L:/Jim/MemoryLane (mock)'
   }
   async pickAndSetVault(): Promise<IndexSummary | null> {
+    return { yearCount: this.years.length, eventCount: 12, itemCount: 200, errorCount: 0 }
+  }
+  async reindex(): Promise<IndexSummary> {
     return { yearCount: this.years.length, eventCount: 12, itemCount: 200, errorCount: 0 }
   }
   async listYears(): Promise<YearSummary[]> {

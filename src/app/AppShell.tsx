@@ -221,6 +221,7 @@ export function AppShell() {
   const [layoutMode, setLayoutMode] = useState<'custom' | 'grid' | 'scatter'>('custom')
   const [settings, setSettings] = useState<Settings>(loadSettings)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [vaultPath, setVaultPath] = useState<string | null>(null)
   // Titel bovenin: "Memory Lane" (overzicht), het jaar, of de eventnaam. `dir`
   // bepaalt de richting van de zoom/crossfade (in = dieper, out = terug).
   const [header, setHeader] = useState<{ text: string; dir: 'in' | 'out' }>({
@@ -824,6 +825,7 @@ export function AppShell() {
       try {
         const path = await backendRef.current.getVaultPath()
         if (disposed) return
+        setVaultPath(path)
         if (!path) {
           setPhase('first-run')
           return
@@ -904,6 +906,31 @@ export function AppShell() {
     }
   }, [screensaverIds])
 
+  // Herbouw het overzicht (lifeline) uit de huidige backend-staat — na een
+  // vault-wissel of herindexering.
+  const rebuildLifeline = async (): Promise<void> => {
+    const backend = backendRef.current
+    const engine = engineRef.current
+    if (!backend || !engine) return
+    const years = await backend.listYears()
+    yearsRef.current = years
+    setVaultPath(await backend.getVaultPath())
+    if (years.length > 0) {
+      sceneRef.current?.destroy()
+      sceneRef.current = new LifelineScene(engine, backend, years, {
+        enabled: settingsRef.current.yearTileSlideshow,
+        mode: settingsRef.current.yearCoverMode,
+        speedMs: settingsRef.current.slideshowSpeed * 1000,
+      })
+      levelRef.current = 'lifeline'
+      setUiLevel('lifeline')
+      setHeader({ text: 'Memory Lane', dir: 'out' })
+      setPhase('ready')
+    } else {
+      setPhase('empty')
+    }
+  }
+
   const pickVault = async (): Promise<void> => {
     const backend = backendRef.current
     if (!backend) return
@@ -914,25 +941,41 @@ export function AppShell() {
         setPhase('first-run')
         return
       }
-      const years = await backend.listYears()
-      yearsRef.current = years
-      const engine = engineRef.current
-      if (engine && years.length > 0) {
-        sceneRef.current?.destroy()
-        sceneRef.current = new LifelineScene(engine, backend, years, {
-          enabled: settingsRef.current.yearTileSlideshow,
-          mode: settingsRef.current.yearCoverMode,
-          speedMs: settingsRef.current.slideshowSpeed * 1000,
-        })
-        levelRef.current = 'lifeline'
-        setPhase('ready')
-      } else {
-        setPhase('empty')
-      }
+      await rebuildLifeline()
     } catch (e) {
       setMessage(String(e))
       setPhase('error')
     }
+  }
+
+  // Beheer: index herberekenen (scan de vault opnieuw).
+  const reindexVault = async (): Promise<void> => {
+    const backend = backendRef.current
+    if (!backend) return
+    setSettingsOpen(false)
+    setPhase('loading')
+    try {
+      await backend.reindex()
+      await rebuildLifeline()
+    } catch (e) {
+      setMessage(String(e))
+      setPhase('error')
+    }
+  }
+
+  // Beheer: alle app-instellingen (localStorage) terug naar standaard — foto's en
+  // de vault blijven ongemoeid.
+  const resetAppSettings = (): void => {
+    try {
+      localStorage.removeItem(SETTINGS_KEY)
+      localStorage.removeItem(EVENTVIEWS_KEY)
+    } catch {
+      /* negeren */
+    }
+    settingsRef.current = DEFAULT_SETTINGS
+    setSettings(DEFAULT_SETTINGS)
+    applyPanLockRef.current()
+    setToast('App-instellingen teruggezet naar standaard.')
   }
 
   const submitNote = async (): Promise<void> => {
@@ -1262,6 +1305,10 @@ export function AppShell() {
           settings={settings}
           onChange={updateSettings}
           onClose={() => setSettingsOpen(false)}
+          vaultPath={vaultPath}
+          onChangeVault={() => void pickVault()}
+          onReindex={() => void reindexVault()}
+          onResetSettings={resetAppSettings}
         />
       )}
       {screensaverIds && (
@@ -1463,12 +1510,20 @@ function SettingsPanel({
   settings,
   onChange,
   onClose,
+  vaultPath,
+  onChangeVault,
+  onReindex,
+  onResetSettings,
 }: {
   settings: Settings
   onChange: (patch: Partial<Settings>) => void
   onClose: () => void
+  vaultPath: string | null
+  onChangeVault: () => void
+  onReindex: () => void
+  onResetSettings: () => void
 }) {
-  const [tab, setTab] = useState<'weergave' | 'tijdlijn' | 'dia'>('weergave')
+  const [tab, setTab] = useState<'weergave' | 'tijdlijn' | 'dia' | 'beheer'>('weergave')
   const seg = (m: 'custom' | 'grid' | 'scatter'): React.CSSProperties => ({
     ...ghostBtn,
     background: settings.defaultLayout === m ? '#3b82f6' : 'transparent',
@@ -1548,6 +1603,7 @@ function SettingsPanel({
           {tabBtn('weergave', 'Weergave')}
           {tabBtn('tijdlijn', 'Tijdlijn & canvas')}
           {tabBtn('dia', 'Diavoorstelling')}
+          {tabBtn('beheer', 'Beheer')}
         </div>
         <div style={{ overflowY: 'auto', padding: '14px 22px 6px', flex: '1 1 auto' }}>
           {tab === 'weergave' && (
@@ -1716,6 +1772,41 @@ function SettingsPanel({
                   De diavoorstelling toont foto's afhankelijk van waar je bent (overzicht = alles, jaar
                   = dat jaar, event = dat event). Start 'm met de sneltoets <b>S</b>. Sluiten met Esc.
                 </>,
+              )}
+            </>
+          )}
+
+          {tab === 'beheer' && (
+            <>
+              {subhead('Vault-map (waar je bestanden staan)')}
+              <div
+                style={{
+                  fontSize: 13,
+                  color: '#cfd6e4',
+                  background: 'rgba(12,16,24,0.6)',
+                  border: '1px solid #2c3650',
+                  borderRadius: 8,
+                  padding: '8px 10px',
+                  wordBreak: 'break-all',
+                }}
+              >
+                {vaultPath ?? '(nog geen map gekozen)'}
+              </div>
+              <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                <button onClick={onChangeVault} style={ghostBtn}>Andere map kiezen…</button>
+                <button onClick={onReindex} style={ghostBtn}>Index herberekenen</button>
+              </div>
+              {desc(
+                'Kies een andere map met je vault, of herbereken de index (scan de map opnieuw) als je bestanden buiten de app hebt gewijzigd. Je bestanden blijven altijd behouden — de index is een weggooibare cache.',
+              )}
+
+              <div style={{ height: 1, background: '#2c3650', margin: '16px 0' }} />
+              {subhead('Resetten')}
+              <button onClick={onResetSettings} style={{ ...ghostBtn, borderColor: '#7a3b3b', color: '#ffb4b4' }}>
+                App-instellingen resetten
+              </button>
+              {desc(
+                'Zet alle app-instellingen (weergave, diavoorstelling, per-event onthouden standen) terug naar standaard. Je foto’s, events en curatie in de vault blijven ongemoeid.',
               )}
             </>
           )}
