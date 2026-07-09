@@ -55,6 +55,7 @@ export class YearScene implements Scene {
   private hoverWX: number | null = null
   private dayLine = new Graphics()
   private dayLabel: Text
+  private rangeBand = new Graphics() // Ctrl-sleep-selectie (begin→eind)
 
   constructor(
     private engine: RenderEngine,
@@ -89,6 +90,8 @@ export class YearScene implements Scene {
       axis.addChild(label)
     }
     this.root.addChild(axis)
+    // Range-selectie-band (Ctrl+slepen) — achter de kaarten, boven de as.
+    this.root.addChild(this.rangeBand)
 
     // Meerdaagse events (period): een balkje op de as over de hele periode.
     const spans = new Graphics()
@@ -200,6 +203,23 @@ export class YearScene implements Scene {
   /** Zet de Ctrl-dag-indicator aan/uit. */
   setDayPicker(active: boolean): void {
     this.dayPicker = active
+    this.renderDay()
+  }
+
+  /** Toon (of wis bij null) de Ctrl-sleep-selectie als een band begin→eind; de
+   * dag-indicator volgt de bewegende rand (toont de einddatum). */
+  setRange(startWorldX: number | null, endWorldX: number | null): void {
+    this.rangeBand.clear()
+    if (startWorldX === null || endWorldX === null) {
+      this.hoverWX = null
+      this.renderDay()
+      return
+    }
+    const a = Math.min(startWorldX, endWorldX)
+    const b = Math.max(startWorldX, endWorldX)
+    const h = this.maxAbsY + 40
+    this.rangeBand.rect(a, -h, b - a, 2 * h).fill({ color: 0x6ea8ff, alpha: 0.14 })
+    this.hoverWX = endWorldX
     this.renderDay()
   }
 

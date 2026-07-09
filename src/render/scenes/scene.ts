@@ -4,6 +4,7 @@
 import type { Container } from 'pixi.js'
 import type { Item } from '../../lib/backend'
 import type { FrameContext } from '../core/engine'
+import type { DragHandle } from '../core/gestures'
 
 export interface Scene {
   /** Root-container van de scene (voor de reveal-transitie). */
@@ -21,6 +22,10 @@ export interface Scene {
   setDayPicker?(active: boolean): void
   /** Datum (`YYYY-MM-DD`) onder een wereld-x op de as (alleen L1-jaar). */
   dateAt?(worldX: number): string
+  /** Toon/verberg de Ctrl-sleep-selectie (begin→eind) op de as (alleen L1-jaar). */
+  setRange?(startWorldX: number | null, endWorldX: number | null): void
+  /** Sleepbaar object onder het wereldpunt (bijv. een canvas-item op L2). */
+  beginDrag?(worldX: number, worldY: number): DragHandle | null
   /** Laatst gefitte zoom (alleen L3): referentie voor de terug-uitzoom-drempel,
    * zodat sibling-nav naar grotere inhoud (lange notitie) niet meteen uitzoomt. */
   readonly baseZoom?: number

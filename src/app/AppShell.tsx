@@ -71,6 +71,10 @@ export function AppShell() {
   // Re-entrancy-slot voor mutaties: `busy`-state is niet betrouwbaar tegen een
   // dubbele klik binnen dezelfde tick (stale closure) — een ref wel.
   const mutatingRef = useRef(false)
+  // Staat er een blokkerende DOM-dialog open? De canvas-gestures (in een closure
+  // die maar één keer draait) kunnen de React-state niet stale-vrij lezen; deze
+  // ref wel. Voorkomt dat een Ctrl-sleep een half-ingevulde dialog stil overschrijft.
+  const dialogOpenRef = useRef(false)
 
   const engineRef = useRef<RenderEngine | null>(null)
   const backendRef = useRef<Backend | null>(null)
@@ -89,6 +93,11 @@ export function AppShell() {
     let engine: RenderEngine | null = null
     let disposed = false
     let ctrlDown = false // Ctrl ingedrukt → dag-indicator op de jaar-tijdlijn
+    // Zet door de Ctrl-sleep-handle bij `end()`; door de eropvolgende `onTap`
+    // geconsumeerd. Zo wordt de tap ná een Ctrl-sleep/klik betrouwbaar onderdrukt,
+    // óók als de gebruiker Ctrl losliet tussen pointerdown en pointerup (dan is
+    // `ctrlDown` al false en zou de tap anders alsnog navigeren + dubbel openen).
+    let rangeJustEnded = false
 
     const setupLifeline = (): void => {
       if (!engine || !backendRef.current) return
@@ -273,6 +282,59 @@ export function AppShell() {
       engine.onHover = (wx, wy) => {
         sceneRef.current?.onHover?.(wx, wy)
       }
+      // Sleep-dispatcher: op de jaar-tijdlijn met Ctrl = een datum-range slepen
+      // (begin→eind) i.p.v. de camera pannen; anders delegeren naar de scene
+      // (bijv. een canvas-item slepen op L2).
+      engine.beginDrag = (wx, wy) => {
+        // Elke nieuwe pointerdown gaat hier langs (ook een gewone klik → null).
+        // Reset de tap-onderdrukking, zodat een blijvende `true` van een vorige
+        // ≥6px Ctrl-sleep (waar géén onTap op volgde) niet de volgende klik slikt.
+        rangeJustEnded = false
+        const scene = sceneRef.current
+        // Geen nieuwe Ctrl-range starten terwijl er al een dialog open staat —
+        // anders zou de sleep die half-ingevulde dialog stil overschrijven.
+        if (
+          levelRef.current === 'year' &&
+          ctrlDown &&
+          !dialogOpenRef.current &&
+          scene?.dateAt &&
+          scene.setRange
+        ) {
+          const startWX = wx
+          let endWX = wx
+          scene.setRange(startWX, startWX)
+          return {
+            moveTo: (mx: number) => {
+              endWX = mx
+              scene.setRange?.(startWX, endWX)
+            },
+            end: () => {
+              scene.setRange?.(null, null)
+              // De gesture-controller roept ná deze end() bij <6px nog onTap aan;
+              // markeer dat zodat die tap (klik óf sleep) niet óók navigeert.
+              rangeJustEnded = true
+              const a = Math.min(startWX, endWX)
+              const b = Math.max(startWX, endWX)
+              const startDate = scene.dateAt!(a)
+              const endDate = scene.dateAt!(b)
+              setEventForm({
+                mode: 'create',
+                title: '',
+                startAt: startDate,
+                endAt: startDate === endDate ? '' : endDate,
+              })
+            },
+            // Afgebroken (pointercancel of onderbroken door een tweede vinger):
+            // alleen de band opruimen, NIET committen — geen dialog openen. De
+            // vlag blijft gezet zodat een eventuele naloop-tap niet navigeert.
+            cancel: () => {
+              scene.setRange?.(null, null)
+              rangeJustEnded = true
+            },
+          }
+        }
+        return scene?.beginDrag?.(wx, wy) ?? null
+      }
       engine.onTap = (wx, wy) => {
         // Negeer taps tijdens de transitie: de root is dan geschaald/verschoven,
         // dus een hitTest tegen de (uiteindelijke) wereldcoördinaten zou het
@@ -281,12 +343,17 @@ export function AppShell() {
         const scene = sceneRef.current
         const level = levelRef.current
 
-        // Ctrl+klik op de jaar-tijdlijn → nieuw event op de datum onder de cursor.
-        if (level === 'year' && ctrlDown) {
-          const date = scene?.dateAt?.(wx)
-          if (date) setEventForm({ mode: 'create', title: '', startAt: date, endAt: '' })
+        // Ctrl op de jaar-tijdlijn wordt volledig door de sleep-handle afgehandeld
+        // (klik = één datum via end(), sleep = range) — hier niets doen, anders
+        // zou een Ctrl+klik óók navigeren of dubbel een event maken. We kijken
+        // naar `rangeJustEnded` (gezet in de handle) i.p.v. alleen de live
+        // `ctrlDown`: Ctrl kan losgelaten zijn tussen down en up, maar de handle
+        // liep al en opende de dialog — dan mag deze tap niet alsnog navigeren.
+        if (rangeJustEnded) {
+          rangeJustEnded = false
           return
         }
+        if (level === 'year' && ctrlDown) return
 
         const hit = scene?.hitTest?.(wx, wy) ?? null
 
@@ -337,6 +404,11 @@ export function AppShell() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Houd de gesture-closure op de hoogte of er een blokkerende dialog open staat.
+  useEffect(() => {
+    dialogOpenRef.current = !!(modal || editing || eventForm || metaForm)
+  }, [modal, editing, eventForm, metaForm])
 
   const pickVault = async (): Promise<void> => {
     const backend = backendRef.current

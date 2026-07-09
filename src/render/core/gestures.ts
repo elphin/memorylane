@@ -16,7 +16,12 @@ interface PointerPos {
 /** Handle om een object te slepen i.p.v. de camera te pannen. */
 export interface DragHandle {
   moveTo(worldX: number, worldY: number): void
+  /** Normale afronding (pointerup): commit de sleep. */
   end(): void
+  /** Afbreken (pointercancel of onderbroken door een tweede vinger/pinch): ruim
+   * tijdelijke UI op ZONDER het commit-neveneffect (bijv. geen dialog openen).
+   * Ontbreekt `cancel`, dan valt de controller terug op `end()`. */
+  cancel?(): void
 }
 
 export class GestureController {
@@ -50,7 +55,7 @@ export class GestureController {
     canvas.addEventListener('pointerdown', this.onPointerDown)
     canvas.addEventListener('pointermove', this.onPointerMove)
     canvas.addEventListener('pointerup', this.onPointerUp)
-    canvas.addEventListener('pointercancel', this.onPointerUp)
+    canvas.addEventListener('pointercancel', this.onPointerCancel)
     canvas.addEventListener('pointerleave', this.onPointerLeave)
     // Voorkom browser-gebaren (page-zoom) op het canvas.
     canvas.style.touchAction = 'none'
@@ -61,7 +66,7 @@ export class GestureController {
     this.canvas.removeEventListener('pointerdown', this.onPointerDown)
     this.canvas.removeEventListener('pointermove', this.onPointerMove)
     this.canvas.removeEventListener('pointerup', this.onPointerUp)
-    this.canvas.removeEventListener('pointercancel', this.onPointerUp)
+    this.canvas.removeEventListener('pointercancel', this.onPointerCancel)
     this.canvas.removeEventListener('pointerleave', this.onPointerLeave)
   }
 
@@ -110,11 +115,14 @@ export class GestureController {
       const w = this.camera.screenToWorld(p.x, p.y, this.getVp())
       this.dragTarget = this.beginDrag?.(w.x, w.y) ?? null
     } else if (this.pointers.size === 2) {
-      // Een tweede vinger start een pinch: rond een eventuele object-sleep netjes
-      // af (persist bij beweging) i.p.v. de handle te laten hangen — anders
-      // "springt" het object bij terugkeer naar één vinger of blijft het plakken.
+      // Een tweede vinger start een pinch: breek een eventuele object-sleep af
+      // i.p.v. de handle te laten hangen — anders "springt" het object bij
+      // terugkeer naar één vinger of blijft het plakken. `cancel` (val terug op
+      // `end`) zodat een sleep die commit-neveneffecten heeft (bijv. de L1-range
+      // die een dialog opent) hier NIET committeert; L2 persisteert een
+      // verplaatsing gewoon via zijn `end`-fallback.
       if (this.dragTarget) {
-        this.dragTarget.end()
+        ;(this.dragTarget.cancel ?? this.dragTarget.end).call(this.dragTarget)
         this.dragTarget = null
       }
       this.dragging = false
@@ -190,6 +198,37 @@ export class GestureController {
       }
     } else if (this.pointers.size === 1) {
       // Terug naar één vinger: hervat drag vanaf de resterende pointer.
+      const [pos] = [...this.pointers.values()]
+      this.dragging = true
+      this.lastDrag = pos
+    }
+  }
+
+  // Pointercancel (OS pakt de pointer af, gesture-conflict, scroll-overname):
+  // dit is een ANNULERING, geen afronding. Breek een object-sleep af via
+  // `cancel` (val terug op `end`) en genereer NOOIT een tap — anders zou een
+  // afgebroken Ctrl-range alsnog een dialog openen of navigeren.
+  private onPointerCancel = (e: PointerEvent): void => {
+    if (this.canvas.hasPointerCapture(e.pointerId)) {
+      this.canvas.releasePointerCapture(e.pointerId)
+    }
+    this.pointers.delete(e.pointerId)
+    if (this.pointers.size < 2) {
+      this.pinchDist = 0
+    }
+    if (this.dragTarget && this.pointers.size === 0) {
+      ;(this.dragTarget.cancel ?? this.dragTarget.end).call(this.dragTarget)
+      this.dragTarget = null
+    }
+    if (this.pointers.size === 0) {
+      // Laatste pointer weg: stop de drag, geen inertie (afbreken ≠ afronden).
+      this.dragging = false
+      this.vx = 0
+      this.vy = 0
+    } else if (this.pointers.size === 1) {
+      // Eén van twee vingers gecanceld: hervat een enkelvoudige drag vanaf de
+      // resterende pointer (zoals onPointerUp), anders is die vinger "dood" voor
+      // pan/pinch tot een volledige lift.
       const [pos] = [...this.pointers.values()]
       this.dragging = true
       this.lastDrag = pos
