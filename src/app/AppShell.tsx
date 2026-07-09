@@ -705,6 +705,11 @@ export function AppShell() {
         // Reset de tap-onderdrukking, zodat een blijvende `true` van een vorige
         // ≥6px Ctrl-sleep (waar géén onTap op volgde) niet de volgende klik slikt.
         rangeJustEnded = false
+        // View-modus = alleen kijken. Geen enkele bewerk-sleep: geen foto
+        // verplaatsen (L2), roteren/schalen, event-resize, uitgelicht zetten of
+        // datum-range trekken. Val terug op `null` → de gesture-controller pant
+        // dan gewoon de camera. Tikken (navigeren tussen niveaus) blijft werken.
+        if (settingsRef.current.viewMode) return null
         const scene = sceneRef.current
         // Geen nieuwe Ctrl-range starten terwijl er al een dialog open staat —
         // anders zou de sleep die half-ingevulde dialog stil overschrijven.
