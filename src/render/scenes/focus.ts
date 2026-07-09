@@ -33,6 +33,9 @@ export class FocusScene implements Scene {
     private backend: Backend,
     private items: Item[],
     startIndex: number,
+    // Aangeroepen na elke stap (tik óf pijltjestoets) met de richting en het nieuwe
+    // item-id, zodat de app-shell de titel kan meelaten lopen.
+    private onStep?: (delta: number, currentId: string | null) => void,
   ) {
     this.index = Math.max(0, Math.min(startIndex, items.length - 1))
     this.root.addChild(this.display)
@@ -123,6 +126,7 @@ export class FocusScene implements Scene {
     if (this.items.length < 2) return
     this.index = (this.index + delta + this.items.length) % this.items.length
     this.build()
+    this.onStep?.(delta, this.current?.id ?? null)
   }
 
   /** Ververs de item-data (na een bewerking) en herbouw het huidige item. */

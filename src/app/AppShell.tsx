@@ -63,6 +63,9 @@ interface Settings {
   scatterRotate: boolean
   /** Toon de titel bovenin (Memory Lane / jaar / eventnaam). */
   showTitle: boolean
+  /** Bij een detailfoto: toon de caption als titel (indien aanwezig; anders de
+   * eventnaam). Uit = altijd de eventnaam. */
+  photoTitleFromCaption: boolean
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -78,6 +81,7 @@ const DEFAULT_SETTINGS: Settings = {
   yearCoverMode: 'featured',
   scatterRotate: true,
   showTitle: true,
+  photoTitleFromCaption: false,
 }
 const SETTINGS_KEY = 'memorylane-settings'
 
@@ -217,6 +221,16 @@ export function AppShell() {
   phaseRef.current = phase
   // Zodat de toets-closure (sneltoets S) de diavoorstelling kan starten.
   const startScreensaverRef = useRef<() => void>(() => {})
+
+  // Titel bij een detailfoto: caption (indien de instelling aan is én er een
+  // caption is), anders de eventnaam. Zo krijg je zonder caption geen rare
+  // bestandsnamen, maar netjes de eventnaam.
+  const focusTitleFor = (item: Item | undefined): string => {
+    const cap = item?.caption?.trim()
+    if (settingsRef.current.photoTitleFromCaption && cap) return cap
+    const info = currentEventInfoRef.current
+    return info ? info.title || info.startAt : 'Memory Lane'
+  }
 
   const updateSettings = (patch: Partial<Settings>): void => {
     const next = { ...settingsRef.current, ...patch }
@@ -471,11 +485,16 @@ export function AppShell() {
       const old = sceneRef.current
       sceneRef.current = null
       if (old) engine.exitScene(old.root, 'in', () => old.destroy())
-      const scene = new FocusScene(engine, backendRef.current, items, index)
+      const scene = new FocusScene(engine, backendRef.current, items, index, (delta, id) => {
+        // Titel meelaten lopen bij stappen (tik óf pijltjestoets).
+        const it = id ? currentItemsRef.current.find((x) => x.id === id) : undefined
+        setHeader({ text: focusTitleFor(it), dir: delta > 0 ? 'in' : 'out' })
+      })
       sceneRef.current = scene
       revealScene(engine, scene, 'in')
       levelRef.current = 'focus'
       setUiLevel('focus')
+      setHeader({ text: focusTitleFor(items[index]), dir: 'in' })
       applyPanLock()
       entryZoomRef.current = engine.pendingZoom
     }
@@ -726,6 +745,7 @@ export function AppShell() {
         // L3-focus: klik óp de foto = vorige/volgende (linker-/rechterhelft),
         // klik ernáást (lege ruimte) = uitzoomen naar het canvas.
         if (level === 'focus') {
+          // step() laat de titel via de onStep-callback meelopen.
           if (hit) scene?.step?.(wx >= 0 ? 1 : -1)
           else goBack()
           return
@@ -1044,6 +1064,12 @@ export function AppShell() {
     if (detail) {
       currentItemsRef.current = detail.items
       sceneRef.current?.refresh?.(detail.items)
+      // Titel meelaten lopen als de caption van de huidige foto is gewijzigd.
+      if (levelRef.current === 'focus') {
+        const id = sceneRef.current?.currentId?.()
+        const item = id ? detail.items.find((it) => it.id === id) : undefined
+        setHeader({ text: focusTitleFor(item), dir: 'in' })
+      }
     }
   }
 
@@ -1545,6 +1571,23 @@ function SettingsPanel({
         <div style={{ fontSize: 12, color: '#6a7690', marginTop: 6 }}>
           "Memory Lane" op het overzicht, het jaar in een jaar, de eventnaam in een event.
         </div>
+        {settings.showTitle && (
+          <>
+            <label
+              style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', marginTop: 12 }}
+            >
+              <input
+                type="checkbox"
+                checked={settings.photoTitleFromCaption}
+                onChange={(e) => onChange({ photoTitleFromCaption: e.target.checked })}
+              />
+              <span style={{ fontSize: 14, color: '#fff' }}>Bij een detailfoto de caption als titel</span>
+            </label>
+            <div style={{ fontSize: 12, color: '#6a7690', marginTop: 6 }}>
+              Heeft de foto geen caption, dan blijft de eventnaam staan (geen bestandsnamen).
+            </div>
+          </>
+        )}
 
         <div style={{ height: 1, background: '#2c3650', margin: '18px 0' }} />
         <div style={{ fontSize: 14, color: '#fff', marginBottom: 8 }}>Diavoorstelling-tagfilter</div>
