@@ -46,12 +46,23 @@ interface Node {
   fade: number // 0 = niet aan het faden; >0 = crossfade-voortgang
 }
 
-// Felle kleuren voor de meerdaagse-event-blokjes; op 40% dekking (60% transparant)
-// oogt het stijlvol. Chronologisch toegewezen zodat naburige blokjes verschillen.
-const SPAN_PALETTE = [
-  0xff5c5c, 0xffa63c, 0xffd93c, 0x7ed957, 0x3cd6b5, 0x3ca5ff, 0x6c7bff, 0xb15cff, 0xff5cb0,
-  0xa0d63c,
+// Felle basiskleuren met sterk wisselende tinten (warm/koel afgewisseld, over de
+// hele kleurcirkel) zodat twee naburige blokjes altijd contrasteren.
+const SPAN_PALETTE_RAW = [
+  0xff5c5c, 0x3cd6d6, 0xffd93c, 0xb15cff, 0x6ee06e, 0xff5cc0, 0x5c8cff, 0xffa63c, 0x38c9a0,
+  0xf05545,
 ]
+/** Meng een felle kleur met de donkere achtergrond tot een gedimde, maar
+ * ONDOORZICHTIGE kleur — zo schijnen de as-lijn en leader niet door het blokje. */
+function opaqueSpan(color: number): number {
+  const bg = 0x0a0a0f
+  const mix = (c: number, b: number): number => Math.round(c * 0.45 + b * 0.55)
+  const r = mix((color >> 16) & 255, (bg >> 16) & 255)
+  const g = mix((color >> 8) & 255, (bg >> 8) & 255)
+  const b = mix(color & 255, bg & 255)
+  return (r << 16) | (g << 8) | b
+}
+const SPAN_PALETTE = SPAN_PALETTE_RAW.map(opaqueSpan)
 
 /** Cover-fit een sprite op een thumbnail-kaart (vult, behoudt aspect). */
 function fitCover(sprite: Sprite, tex: Texture): void {
@@ -103,10 +114,11 @@ export class YearScene implements Scene {
 
     // ---- Achtergrond: as-lijn, maand-separators en -labels -----------------
     const axis = new Graphics()
-    axis.moveTo(-AXIS_W / 2, 0).lineTo(AXIS_W / 2, 0).stroke({ width: 2, color: 0x3a4256 })
+    // pixelLine: alle lijnen blijven 1 scherm-pixel, ongeacht de zoom (strak).
+    axis.moveTo(-AXIS_W / 2, 0).lineTo(AXIS_W / 2, 0).stroke({ width: 1, color: 0x3a4256, pixelLine: true })
     for (let m = 0; m < 12; m++) {
       const mx = dateToX(new Date(year, m, 1).getTime())
-      if (m > 0) axis.moveTo(mx, -16).lineTo(mx, 16).stroke({ width: 1, color: 0x2a3142 })
+      if (m > 0) axis.moveTo(mx, -16).lineTo(mx, 16).stroke({ width: 1, color: 0x2a3142, pixelLine: true })
       const label = new Text({
         text: MONTHS[m],
         style: { fill: 0x8a97b0, fontSize: 15, fontFamily: 'Segoe UI, sans-serif' },
@@ -138,8 +150,8 @@ export class YearScene implements Scene {
       if (ev.endAt) {
         const endX = dateToX(parseLocalDate(ev.endAt))
         if (endX - startX > 4) {
-          // Recht (scherpe hoeken) rechthoekig blokje; felle kleur op 40% dekking.
-          spans.rect(startX, -9, endX - startX, 18).fill({ color: spanColor.get(ev.id) ?? SPAN_PALETTE[0]!, alpha: 0.4 })
+          // Recht (scherpe hoeken) rechthoekig blokje; ondoorzichtige, gedimde kleur.
+          spans.rect(startX, -9, endX - startX, 18).fill(spanColor.get(ev.id) ?? SPAN_PALETTE[0]!)
           return (startX + endX) / 2
         }
       }
@@ -184,9 +196,14 @@ export class YearScene implements Scene {
       const cardY = side * (AXIS_GAP + level * (THUMB_H + LANE_GAP))
       maxAbsY = Math.max(maxAbsY, Math.abs(cardY) + THUMB_H / 2)
 
-      // Leader: van de datumplek op de as naar de binnenrand van de kaart.
+      // Leader: van de RAND van het blokje (bij een meerdaags event) of de as-lijn
+      // naar de binnenrand van de kaart. 1px, ongeacht de zoom.
       const innerY = cardY - side * (THUMB_H / 2)
-      leaders.moveTo(anchorX, 0).lineTo(anchorX, innerY).stroke({ width: 1.5, color: 0x3a4256, alpha: 0.7 })
+      const startY = spanColor.has(ev.id) ? side * 9 : 0
+      leaders
+        .moveTo(anchorX, startY)
+        .lineTo(anchorX, innerY)
+        .stroke({ width: 1, color: 0x3a4256, alpha: 0.7, pixelLine: true })
 
       this.nodes.push(this.buildCard(ev, anchorX, cardY))
     })
