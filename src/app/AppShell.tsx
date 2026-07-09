@@ -194,7 +194,8 @@ export function AppShell() {
   // Screensaver: null = dicht, anders de (context-afhankelijke) foto-ids.
   const [screensaverIds, setScreensaverIds] = useState<string[] | null>(null)
   const [toast, setToast] = useState<string | null>(null)
-  // Top-chrome (Zoeken/▶/⚙) verbergt na muis-inactiviteit; muisbeweging toont 'm.
+  // De zoekknop verbergt na muis-inactiviteit; muisbeweging toont 'm weer. (De ▶-
+  // en ⚙-knop blijven altijd staan.)
   const [chromeVisible, setChromeVisible] = useState(true)
   // "Alles passend"-knop: zichtbaar als er inhoud buiten beeld valt (L2).
   const [showFit, setShowFit] = useState(false)
@@ -801,7 +802,7 @@ export function AppShell() {
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
-  // Verberg de top-chrome na ~4s zonder muisbeweging; muisbeweging toont 'm weer.
+  // Verberg de zoekknop na ~4s zonder muisbeweging; muisbeweging toont 'm weer.
   // Tijdens de diavoorstelling niet actief (die dekt het scherm volledig af).
   useEffect(() => {
     if (screensaverIds !== null) return
@@ -1171,7 +1172,7 @@ export function AppShell() {
           Zoeken…
         </button>
       )}
-      {phase === 'ready' && !modal && !editing && !eventForm && !metaForm && !searchOpen && !settingsOpen && !settings.viewMode && chromeVisible && (
+      {phase === 'ready' && !modal && !editing && !eventForm && !metaForm && !searchOpen && !settingsOpen && !settings.viewMode && (
         <button
           onClick={() => void startScreensaver()}
           style={settings.showSearchButton ? screensaverBtn : screensaverBtnLeft}
@@ -1180,7 +1181,7 @@ export function AppShell() {
           ▶
         </button>
       )}
-      {phase === 'ready' && !modal && !editing && !eventForm && !metaForm && !searchOpen && !settingsOpen && !settings.viewMode && chromeVisible && (
+      {phase === 'ready' && !modal && !editing && !eventForm && !metaForm && !searchOpen && !settingsOpen && !settings.viewMode && (
         <button onClick={() => setSettingsOpen(true)} style={gearBtn} title="Instellingen">
           ⚙
         </button>
