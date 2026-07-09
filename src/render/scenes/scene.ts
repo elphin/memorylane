@@ -6,6 +6,16 @@ import type { Item } from '../../lib/backend'
 import type { FrameContext } from '../core/engine'
 import type { DragHandle } from '../core/gestures'
 
+/** Positie/rotatie/z van één canvas-item — voor het onthouden van een
+ * scatter/grid-opstelling per event (los van de vault-`_canvas.json`). */
+export interface NodePosition {
+  ref: string
+  x: number
+  y: number
+  rot: number
+  z: number
+}
+
 export interface Scene {
   /** Root-container van de scene (voor de reveal-transitie). */
   readonly root: Container
@@ -31,8 +41,19 @@ export interface Scene {
   /** Ref (slug/id) van de foto onder een wereldpunt, of null (alleen L2). */
   refAt?(worldX: number, worldY: number): string | null
   /** Herschik het event-canvas: 'custom' (eigen posities), 'grid' (chronologisch,
-   * vierkant) of 'scatter' (speels kriskras — elke aanroep opnieuw). Alleen L2. */
-  applyLayout?(mode: 'custom' | 'grid' | 'scatter'): void
+   * vierkant) of 'scatter' (speels kriskras — elke aanroep opnieuw). `snap` zet de
+   * kaarten meteen op hun plek (geen animatie), voor de eerste opbouw. Alleen L2. */
+  applyLayout?(mode: 'custom' | 'grid' | 'scatter', snap?: boolean): void
+  /** Herstel expliciete posities (een onthouden scatter/grid per event). Items
+   * zonder opgeslagen positie (later toegevoegd) worden bij het zwaartepunt
+   * geplaatst. Geeft terug hoeveel er matchten en het totaal. Alleen L2. */
+  applyPositions?(
+    mode: 'grid' | 'scatter',
+    positions: NodePosition[],
+    snap?: boolean,
+  ): { matched: number; total: number }
+  /** Huidige layout-stand + doelposities (voor het onthouden per event). Alleen L2. */
+  layoutState?(): { mode: 'custom' | 'grid' | 'scatter'; positions: NodePosition[] }
   /** Leg de huidige opstelling vast als de eigen layout (alleen L2). */
   saveAsCustom?(): void
   /** Laatst gefitte zoom (alleen L3): referentie voor de terug-uitzoom-drempel,

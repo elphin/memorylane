@@ -7,7 +7,13 @@ import { Container, Graphics, Sprite, Text, Texture } from 'pixi.js'
 import type { Backend, CanvasLayoutInput, EventDetail, Item } from '../../lib/backend'
 import type { FrameContext, RenderEngine } from '../core/engine'
 import type { DragHandle } from '../core/gestures'
-import type { Scene } from './scene'
+import type { NodePosition, Scene } from './scene'
+
+/** Huidige stand + doelposities van het canvas (voor per-event view-geheugen). */
+export interface LayoutState {
+  mode: 'custom' | 'grid' | 'scatter'
+  positions: NodePosition[]
+}
 
 const PHOTO = 200
 const BORDER = 8
@@ -61,6 +67,9 @@ export class EventScene implements Scene {
     private backend: Backend,
     detail: EventDetail,
     private onSave: (items: CanvasLayoutInput[]) => void,
+    // Aangeroepen als een niet-'custom' opstelling verandert (drag in grid/scatter):
+    // de app onthoudt de view dan per event (grid/scatter leven niet in de vault).
+    private onViewChange?: (state: LayoutState) => void,
   ) {
     this.featuredRef = detail.event.featuredPhoto ?? null
     const layout = new Map(detail.canvas.map((c) => [c.itemRef, c]))
@@ -165,7 +174,7 @@ export class EventScene implements Scene {
   /** Herschik het canvas. 'custom' herstelt de eigen posities; 'grid' zet ze
    * chronologisch in een vierkant raster; 'scatter' verspreidt ze speels
    * (kriskras + scheef, elke aanroep opnieuw). Grid/scatter persisteren NIET. */
-  applyLayout(mode: 'custom' | 'grid' | 'scatter'): void {
+  applyLayout(mode: 'custom' | 'grid' | 'scatter', snap = false): void {
     this.mode = mode
     // Zet alleen de DOEL-posities/-rotatie; `update()` animeert de nodes ernaartoe.
     // z-order snapt wel meteen (anders "kruipen" de kaarten door elkaar).
@@ -214,7 +223,79 @@ export class EventScene implements Scene {
     // ná grid/scatter (`n.z = ++this.zTop`) een z ONDER de peers op (scatter
     // gebruikt z tot 999), waardoor de gesleepte kaart niet naar voren komt.
     for (const n of this.nodes) this.zTop = Math.max(this.zTop, n.z)
+    if (snap) this.snapAll()
     this.refit()
+  }
+
+  /** Zet elke node meteen op zijn doel (geen animatie) — voor de eerste opbouw:
+   * een onthouden scatter moet direct staan, niet vanaf de basis inklappen. */
+  private snapAll(): void {
+    for (const n of this.nodes) {
+      n.x = n.tx
+      n.y = n.ty
+      n.container.position.set(n.x, n.y)
+      n.container.rotation = n.trot
+    }
+  }
+
+  /** Huidige stand + doelposities (tx/ty/trot/z = de eindstand, ook midden in een
+   * animatie). Posities afgerond → kleinere localStorage-footprint. */
+  layoutState(): LayoutState {
+    return {
+      mode: this.mode,
+      positions: this.nodes.map((n) => ({
+        ref: n.ref,
+        x: Math.round(n.tx),
+        y: Math.round(n.ty),
+        rot: Math.round(n.trot * 1000) / 1000,
+        z: Math.round(n.z),
+      })),
+    }
+  }
+
+  /** Herstel een onthouden scatter/grid: zet per node de doel-positie uit
+   * `positions` (op ref). Items zonder opgeslagen positie (later toegevoegd) komen
+   * bij het zwaartepunt met wat jitter te liggen, zodat ze meedoen i.p.v. op hun
+   * basispositie te plakken. Geeft {matched,total} terug. */
+  applyPositions(mode: 'grid' | 'scatter', positions: NodePosition[], snap = false): {
+    matched: number
+    total: number
+  } {
+    this.mode = mode
+    const byRef = new Map(positions.map((p) => [p.ref, p]))
+    // Zwaartepunt van de opgeslagen posities (plek voor nieuwe items).
+    let cx = 0
+    let cy = 0
+    for (const p of positions) {
+      cx += p.x
+      cy += p.y
+    }
+    if (positions.length) {
+      cx /= positions.length
+      cy /= positions.length
+    }
+    let matched = 0
+    for (const n of this.nodes) {
+      const p = byRef.get(n.ref)
+      if (p) {
+        n.tx = p.x
+        n.ty = p.y
+        n.trot = p.rot
+        n.z = p.z
+        n.container.zIndex = p.z
+        matched++
+      } else {
+        n.tx = cx + (Math.random() - 0.5) * CELL
+        n.ty = cy + (Math.random() - 0.5) * CELL
+        n.trot = mode === 'scatter' ? (Math.random() - 0.5) * 0.4 : 0
+        n.z = ++this.zTop
+        n.container.zIndex = n.z
+      }
+    }
+    for (const n of this.nodes) this.zTop = Math.max(this.zTop, n.z)
+    if (snap) this.snapAll()
+    this.refit()
+    return { matched, total: this.nodes.length }
   }
 
   /** Legt de HUIDIGE opstelling (posities + rotaties, bijv. een scatter of
@@ -364,6 +445,10 @@ export class EventScene implements Scene {
               n.baseY = n.y
               n.baseZ = n.z
               this.persist()
+            } else if (moved) {
+              // Grid/scatter gaat niet naar de vault, maar de per-event view
+              // onthouden we wél (een gesleepte scatter blijft zo bewaard).
+              this.onViewChange?.(this.layoutState())
             }
           },
         }

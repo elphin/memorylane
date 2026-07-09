@@ -8,6 +8,7 @@ import type { Backend, EventInfo, ExifEntry, Item, SearchResult, YearSummary } f
 import { createBackend } from '../lib/backend'
 import { RenderEngine } from '../render/core/engine'
 import { EventScene } from '../render/scenes/event'
+import type { NodePosition } from '../render/scenes/scene'
 import { FocusScene } from '../render/scenes/focus'
 import { LifelineScene } from '../render/scenes/lifeline'
 import type { Scene } from '../render/scenes/scene'
@@ -71,6 +72,73 @@ function saveSettings(s: Settings): void {
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(s))
   } catch {
     /* localStorage niet beschikbaar → voorkeuren gelden alleen deze sessie */
+  }
+}
+
+/** Onthouden weergave per event: de layout-stand, en voor grid/scatter de exacte
+ * posities (custom-posities leven in de vault-`_canvas.json`, niet hier). */
+type LayoutView = { mode: 'custom' } | { mode: 'grid' | 'scatter'; positions: NodePosition[] }
+const EVENTVIEWS_KEY = 'memorylane-eventviews'
+
+/** Valideer één opgeslagen view-record (localStorage kan oud/corrupt zijn). */
+function parseView(v: unknown): LayoutView | null {
+  if (!v || typeof v !== 'object') return null
+  const mode = (v as { mode?: unknown }).mode
+  if (mode === 'custom') return { mode: 'custom' }
+  if (mode !== 'grid' && mode !== 'scatter') return null
+  const raw = (v as { positions?: unknown }).positions
+  if (!Array.isArray(raw)) return null
+  const positions: NodePosition[] = []
+  for (const p of raw) {
+    if (
+      p &&
+      typeof p === 'object' &&
+      typeof (p as NodePosition).ref === 'string' &&
+      typeof (p as NodePosition).x === 'number' &&
+      typeof (p as NodePosition).y === 'number' &&
+      typeof (p as NodePosition).rot === 'number' &&
+      typeof (p as NodePosition).z === 'number'
+    ) {
+      positions.push(p as NodePosition)
+    }
+  }
+  return { mode, positions }
+}
+
+function loadEventViews(): Record<string, LayoutView> {
+  try {
+    const raw = localStorage.getItem(EVENTVIEWS_KEY)
+    if (!raw) return {}
+    const obj = JSON.parse(raw) as Record<string, unknown>
+    const out: Record<string, LayoutView> = {}
+    for (const [id, v] of Object.entries(obj)) {
+      const view = parseView(v)
+      if (view) out[id] = view
+    }
+    return out
+  } catch {
+    return {}
+  }
+}
+
+function saveEventView(eventId: string, view: LayoutView): void {
+  try {
+    const all = loadEventViews()
+    all[eventId] = view
+    localStorage.setItem(EVENTVIEWS_KEY, JSON.stringify(all))
+  } catch {
+    /* localStorage niet beschikbaar → view geldt alleen deze sessie */
+  }
+}
+
+function removeEventView(eventId: string): void {
+  try {
+    const all = loadEventViews()
+    if (!(eventId in all)) return
+    delete all[eventId]
+    localStorage.setItem(EVENTVIEWS_KEY, JSON.stringify(all))
+  } catch {
+    /* negeer */
   }
 }
 
@@ -246,6 +314,47 @@ export function AppShell() {
       }
     }
 
+    // Open een net gebouwde event-scene in de globale standaard-weergave, en
+    // bevries een (willekeurige) scatter meteen zodat terugkeren 'm herstelt.
+    const applyDefaultView = (scene: EventScene, eventId: string): void => {
+      const dl = settingsRef.current.defaultLayout
+      if (dl !== 'custom') {
+        scene.applyLayout(dl, true) // snap: geen inklap-animatie bij binnenkomst
+        setLayoutMode(dl)
+        saveEventView(eventId, { mode: dl, positions: scene.layoutState().positions })
+      } else {
+        setLayoutMode('custom')
+      }
+    }
+
+    // Herstel de onthouden weergave van dit event (of val terug op de standaard).
+    const initEventView = (scene: EventScene, eventId: string): void => {
+      const saved = loadEventViews()[eventId]
+      if (!saved) {
+        applyDefaultView(scene, eventId)
+        return
+      }
+      if (saved.mode === 'custom') {
+        // Custom-posities komen uit de vault (_canvas.json); scene staat er al op.
+        setLayoutMode('custom')
+        return
+      }
+      const { matched, total } = scene.applyPositions(saved.mode, saved.positions, true)
+      if (matched === 0) {
+        // Alle refs verouderd (bv. hernoemd/verwijderd) → weggooien, standaard tonen.
+        removeEventView(eventId)
+        applyDefaultView(scene, eventId)
+        return
+      }
+      setLayoutMode(saved.mode)
+      // Wijkt de node-set af van de snapshot (item toegevoegd → matched<total, of
+      // verwijderd → snapshot bevat een verweesde ref)? Onthoud de opgeschoonde
+      // opstelling, zodat dode refs niet blijven hangen.
+      if (matched < total || matched < saved.positions.length) {
+        saveEventView(eventId, { mode: saved.mode, positions: scene.layoutState().positions })
+      }
+    }
+
     const enterEvent = async (eventId: string, dir: 'in' | 'out' = 'in'): Promise<void> => {
       if (!engine || !backendRef.current || enteringRef.current) return
       enteringRef.current = true
@@ -259,20 +368,32 @@ export function AppShell() {
         const old = sceneRef.current
         sceneRef.current = null
         if (old) engine.exitScene(old.root, dir, () => old.destroy())
-        const scene = new EventScene(engine, backend, detail, (items) => {
-          void backend.saveCanvasLayout(eventId, items).catch((e) => {
-            if (!disposed) {
-              setMessage(String(e))
-              setPhase('error')
-            }
-          })
-        })
+        const scene = new EventScene(
+          engine,
+          backend,
+          detail,
+          (items) => {
+            void backend.saveCanvasLayout(eventId, items).catch((e) => {
+              if (!disposed) {
+                setMessage(String(e))
+                setPhase('error')
+              }
+            })
+          },
+          (state) => {
+            // Drag in grid/scatter → onthoud de view. Alleen als dit nog het
+            // actieve event is (geen stale write na snel wegnavigeren).
+            if (currentEventRef.current !== eventId) return
+            saveEventView(
+              eventId,
+              state.mode === 'custom' ? { mode: 'custom' } : { mode: state.mode, positions: state.positions },
+            )
+          },
+        )
         sceneRef.current = scene
-        // Open in de ingestelde standaard-weergave (vóór de reveal, zodat de
-        // camera-fit meteen klopt). 'custom' = de eigen posities.
-        const dl = settingsRef.current.defaultLayout
-        if (dl !== 'custom') scene.applyLayout(dl)
-        setLayoutMode(dl)
+        // Open in de onthouden weergave van dit event (vóór de reveal, zodat de
+        // camera-fit meteen klopt); valt terug op de globale standaard.
+        initEventView(scene, eventId)
         revealScene(engine, scene, dir)
         levelRef.current = 'event'
         setUiLevel('event')
@@ -631,13 +752,22 @@ export function AppShell() {
   // een nieuwe worp (dobbelsteen).
   const changeLayout = (mode: 'custom' | 'grid' | 'scatter'): void => {
     setLayoutMode(mode)
-    sceneRef.current?.applyLayout?.(mode)
+    const scene = sceneRef.current
+    scene?.applyLayout?.(mode)
+    // Onthoud de view per event. Grid/scatter: de zojuist gezette doelposities.
+    const id = currentEventRef.current
+    const state = scene?.layoutState?.()
+    if (id && state) {
+      saveEventView(id, mode === 'custom' ? { mode: 'custom' } : { mode, positions: state.positions })
+    }
   }
 
   // Legt de huidige (scatter/grid/gesleepte) opstelling vast als de eigen layout.
   const saveLayoutAsCustom = (): void => {
     sceneRef.current?.saveAsCustom?.()
     setLayoutMode('custom')
+    const id = currentEventRef.current
+    if (id) saveEventView(id, { mode: 'custom' })
   }
 
   const openEditEvent = (): void => {
