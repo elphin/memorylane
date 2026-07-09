@@ -23,7 +23,17 @@ interface EventForm {
   title: string
   startAt: string
   endAt: string
+  /** Belang/grootte (1–100) die de kaartgrootte op de jaar-tijdlijn bepaalt. */
+  size?: number
 }
+
+/** Drie startwaarden voor het belang van een nieuw event (de gebruiker kan het
+ * later op de tijdlijn fijn-afstellen). */
+const IMPORTANCE_CHOICES: { size: number; label: string; hint: string }[] = [
+  { size: 30, label: 'Gewoon', hint: 'Het onthouden waard' },
+  { size: 50, label: 'Bijzonder', hint: 'Echt een bijzonder moment' },
+  { size: 70, label: 'Uitzonderlijk', hint: 'Springt eruit in het jaar' },
+]
 
 /** Foto-metadata in het bewerk-paneel; mensen/trefwoorden als komma-strings. */
 interface MetaForm {
@@ -1003,7 +1013,7 @@ export function AppShell() {
   const openNewEvent = (): void => {
     const yearNum = yearsRef.current.find((y) => y.id === currentYearRef.current)?.year
     const startAt = yearNum ? `${yearNum}-01-01` : todayISO()
-    setEventForm({ mode: 'create', title: '', startAt, endAt: '' })
+    setEventForm({ mode: 'create', title: '', startAt, endAt: '', size: 50 })
   }
 
   // Start de diavoorstelling met een context-afhankelijke foto-set: op het overzicht
@@ -1095,7 +1105,7 @@ export function AppShell() {
       if (f.mode === 'create') {
         const yearId = currentYearRef.current
         if (yearId) {
-          await backend.createEvent(yearId, f.title.trim(), f.startAt, end)
+          await backend.createEvent(yearId, f.title.trim(), f.startAt, end, f.size ?? null)
           enterYearRef.current(yearId) // ververs de jaar-tijdlijn
         }
       } else if (f.eventId) {
@@ -2021,6 +2031,37 @@ function EventDialog({
         {endBeforeStart && (
           <div style={{ color: '#f0a0a0', fontSize: 13, marginTop: 8 }}>
             De einddatum ligt vóór de begindatum.
+          </div>
+        )}
+        {form.mode === 'create' && (
+          <div style={{ marginTop: 14 }}>
+            <div style={{ fontSize: 13, color: '#9aa6bd', marginBottom: 6 }}>Hoe bijzonder?</div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              {IMPORTANCE_CHOICES.map((c) => {
+                const active = (form.size ?? 50) === c.size
+                return (
+                  <button
+                    key={c.size}
+                    type="button"
+                    onClick={() => onChange({ size: c.size })}
+                    title={c.hint}
+                    style={{
+                      flex: 1,
+                      padding: '10px 8px',
+                      borderRadius: 8,
+                      cursor: 'pointer',
+                      textAlign: 'center',
+                      border: active ? '1px solid #6ea8ff' : '1px solid #2a3345',
+                      background: active ? 'rgba(110,168,255,0.16)' : '#1b2230',
+                      color: active ? '#dfe7f5' : '#aab4c8',
+                    }}
+                  >
+                    <div style={{ fontWeight: 600, fontSize: 14 }}>{c.label}</div>
+                    <div style={{ fontSize: 11, color: '#8794aa', marginTop: 2 }}>{c.hint}</div>
+                  </button>
+                )
+              })}
+            </div>
           </div>
         )}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 14 }}>
