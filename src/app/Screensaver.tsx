@@ -1,39 +1,31 @@
-// Full-screen diavoorstelling (Ken Burns). Toont de meegegeven foto's in
-// willekeurige volgorde met een langzame, doorlopende zoom/pan en een crossfade
-// tussen de foto's. Sluit alleen met Escape (het is een diavoorstelling, geen
-// screensaver — muisbeweging sluit 'm niet). De rotatie-timer draait los van het
-// laden van de afbeelding: een kapotte thumbnail blokkeert 'm niet.
+// Full-screen diavoorstelling. Twee weergaven (instelling `diaMode`):
+// - 'kenburns': langzame, doorlopende zoom/pan + crossfade.
+// - 'crossfade': stilstaande full-screen foto die naar de volgende overvloeit.
 //
-// Elke foto is een eigen <img> met een STABIELE key, zodat de uitgaande foto zijn
-// animatie behoudt (geen terugsprong naar de beginstand). Twee losse animaties:
-// - ml-kb: de Ken Burns-transform (loopt langer dan het slide-interval, dus de
-//   beweging staat nooit stil vóór de wissel).
-// - ml-fade: de opacity-crossfade waarmee de nieuwe foto over de vorige infadet.
+// De crossfade speelt ALTIJD over een geladen afbeelding: bij het wisselen preloaden
+// we de volgende foto en wisselen we pas als die klaar is. Zo "popt" een trage foto
+// niet meer in beeld (de bug waarbij sommige overgangen niet mooi infaden).
+//
+// Sluit alleen met Escape (het is een diavoorstelling; muisbeweging sluit 'm niet).
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { Backend } from '../lib/backend'
 
 interface Props {
   photoIds: string[]
   thumb: Backend['thumb']
   speedMs: number
+  mode: 'kenburns' | 'crossfade'
   onClose: () => void
 }
 
-// Ken Burns-varianten: begin- en eind-transform (scale + translate). Per foto
-// afgewisseld zodat de beweging niet elke keer identiek is.
+// Ken Burns-varianten (begin/eind transform), per foto afgewisseld.
 const KB = [
   { from: 'scale(1) translate(0%, 0%)', to: 'scale(1.14) translate(-2.5%, -2%)' },
   { from: 'scale(1.14) translate(2.5%, 1.5%)', to: 'scale(1) translate(0%, 0%)' },
   { from: 'scale(1.02) translate(1%, -1%)', to: 'scale(1.16) translate(2.5%, -1.5%)' },
   { from: 'scale(1.16) translate(-1.5%, 2%)', to: 'scale(1.04) translate(1.5%, -2%)' },
 ]
-
-interface Slide {
-  id: number // stabiele key → de uitgaande foto behoudt zijn animatie
-  idx: number // index in `order`
-  kb: number // Ken Burns-variant
-}
 
 function shuffle<T>(a: T[]): T[] {
   const r = [...a]
@@ -44,30 +36,52 @@ function shuffle<T>(a: T[]): T[] {
   return r
 }
 
-export function Screensaver({ photoIds, thumb, speedMs, onClose }: Props) {
+export function Screensaver({ photoIds, thumb, speedMs, mode, onClose }: Props) {
   const [order] = useState(() => shuffle(photoIds))
-  const [slides, setSlides] = useState<Slide[]>(() => [{ id: 0, idx: 0, kb: 0 }])
-  const dur = Math.max(2500, speedMs)
-  // De Ken Burns-beweging loopt langer dan het interval → altijd nog in beweging
-  // bij de wissel (geen "stilstand" aan het eind). De crossfade is korter.
-  const kbDur = Math.round(dur * 1.6)
-  const fadeMs = Math.min(1400, Math.round(dur * 0.45))
+  const [cur, setCur] = useState(0)
+  const [prev, setPrev] = useState<number | null>(null)
+  const [tick, setTick] = useState(0) // forceert een verse animatie per wissel
+  const curRef = useRef(0)
+  curRef.current = cur
 
-  // Rotatie-timer, ontkoppeld van image-load. Houd alleen de laatste twee foto's
-  // in beeld (de uitgaande onder de infadende nieuwe).
+  const dur = Math.max(2000, speedMs)
+  const kbDur = Math.round(dur * 1.6) // beweging loopt langer dan het interval
+  const fadeMs = Math.min(1600, Math.round(dur * 0.5))
+
+  const url = (i: number): string => {
+    const id = order[i]
+    return (id ? thumb(id, 2048).url : '') ?? ''
+  }
+
+  // Rotatie: preload de volgende foto, wissel PAS bij load (of error) → de crossfade
+  // speelt altijd over een geladen afbeelding. Timer los van image-load.
   useEffect(() => {
     if (order.length <= 1) return
-    const t = window.setInterval(() => {
-      setSlides((s) => {
-        const last = s[s.length - 1]!
-        const id = last.id + 1
-        return [last, { id, idx: (last.idx + 1) % order.length, kb: id % KB.length }]
-      })
-    }, dur)
-    return () => window.clearInterval(t)
+    let cancelled = false
+    let timer = 0
+    const advance = (): void => {
+      const next = (curRef.current + 1) % order.length
+      const pre = new Image()
+      const go = (): void => {
+        if (cancelled) return
+        setPrev(curRef.current)
+        setCur(next)
+        setTick((t) => t + 1)
+        timer = window.setTimeout(advance, dur)
+      }
+      pre.onload = go
+      pre.onerror = go // niet blijven hangen op een kapotte foto
+      pre.src = url(next)
+    }
+    timer = window.setTimeout(advance, dur)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [order.length, dur])
 
-  // Sluiten: uitsluitend met Escape (capture + stop, zodat niets eronder navigeert).
+  // Sluiten: alleen Escape (capture + stop, geen onderliggende navigatie).
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') {
@@ -86,33 +100,30 @@ export function Screensaver({ photoIds, thumb, speedMs, onClose }: Props) {
   }, [onClose])
 
   if (order.length === 0) return null
-  const url = (i: number): string => {
-    const id = order[i]
-    return (id ? thumb(id, 2048).url : '') ?? ''
-  }
+  const kb = KB[tick % KB.length]!
+  const kenburns = mode === 'kenburns'
+  const curAnim = kenburns
+    ? `ml-kb ${kbDur}ms linear both, ml-fade ${fadeMs}ms ease-out both`
+    : `ml-fade ${fadeMs}ms ease-out both`
 
   return (
     <div style={overlay}>
-      {slides.map((s, i) => {
-        const kb = KB[s.kb] ?? KB[0]!
-        return (
-          <img
-            key={s.id}
-            src={url(s.idx)}
-            alt=""
-            onError={(e) => {
-              e.currentTarget.style.visibility = 'hidden'
-            }}
-            style={{
-              ...imgBase,
-              zIndex: i, // nieuwste bovenop → fadet over de vorige
-              animation: `ml-kb ${kbDur}ms linear both, ml-fade ${fadeMs}ms ease-out both`,
-              ['--kb-from' as string]: kb.from,
-              ['--kb-to' as string]: kb.to,
-            }}
-          />
-        )
-      })}
+      {prev !== null && <img key={`p${tick}`} src={url(prev)} alt="" style={{ ...imgBase, zIndex: 0 }} />}
+      <img
+        key={`c${tick}`}
+        src={url(cur)}
+        alt=""
+        onError={(e) => {
+          e.currentTarget.style.visibility = 'hidden'
+        }}
+        style={{
+          ...imgBase,
+          zIndex: 1,
+          animation: curAnim,
+          ['--kb-from' as string]: kb.from,
+          ['--kb-to' as string]: kb.to,
+        }}
+      />
       <div style={hint}>Esc om te sluiten</div>
       <style>{`
         @keyframes ml-kb { from { transform: var(--kb-from); } to { transform: var(--kb-to); } }

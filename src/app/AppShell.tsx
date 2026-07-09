@@ -66,6 +66,10 @@ interface Settings {
   /** Bij een detailfoto: toon de caption als titel (indien aanwezig; anders de
    * eventnaam). Uit = altijd de eventnaam. */
   photoTitleFromCaption: boolean
+  /** Weergave van de diavoorstelling: 'kenburns' (zoom/pan) of 'crossfade' (stil). */
+  diaMode: 'kenburns' | 'crossfade'
+  /** Seconden per foto in de diavoorstelling. */
+  diaSpeed: number
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -82,6 +86,8 @@ const DEFAULT_SETTINGS: Settings = {
   scatterRotate: true,
   showTitle: true,
   photoTitleFromCaption: false,
+  diaMode: 'kenburns',
+  diaSpeed: 7,
 }
 const SETTINGS_KEY = 'memorylane-settings'
 
@@ -1262,7 +1268,8 @@ export function AppShell() {
         <Screensaver
           photoIds={screensaverIds}
           thumb={(id, size) => backendRef.current!.thumb(id, size)}
-          speedMs={7000}
+          speedMs={settings.diaSpeed * 1000}
+          mode={settings.diaMode}
           onClose={() => setScreensaverIds(null)}
         />
       )}
@@ -1641,6 +1648,33 @@ function SettingsPanel({
             </div>
           </>
         )}
+
+        <div style={{ height: 1, background: '#2c3650', margin: '18px 0' }} />
+        <div style={{ fontSize: 14, color: '#fff', marginBottom: 8 }}>Diavoorstelling</div>
+        <div style={{ fontSize: 13, color: '#8a97b0', marginBottom: 6 }}>Weergave</div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button onClick={() => onChange({ diaMode: 'kenburns' })} style={segOn(settings.diaMode === 'kenburns')}>
+            Ken Burns
+          </button>
+          <button onClick={() => onChange({ diaMode: 'crossfade' })} style={segOn(settings.diaMode === 'crossfade')}>
+            Overvloeien
+          </button>
+        </div>
+        <div style={{ fontSize: 12, color: '#6a7690', marginTop: 6 }}>
+          'Ken Burns' zoomt/pant langzaam; 'Overvloeien' toont een stilstaande foto die overvloeit.
+        </div>
+        <div style={{ fontSize: 13, color: '#8a97b0', margin: '12px 0 4px' }}>
+          Snelheid: {settings.diaSpeed}s per foto
+        </div>
+        <input
+          type="range"
+          min={2}
+          max={20}
+          step={1}
+          value={settings.diaSpeed}
+          onChange={(e) => onChange({ diaSpeed: Number(e.target.value) })}
+          style={{ width: '100%' }}
+        />
 
         <div style={{ height: 1, background: '#2c3650', margin: '18px 0' }} />
         <div style={{ fontSize: 14, color: '#fff', marginBottom: 8 }}>Diavoorstelling-tagfilter</div>
