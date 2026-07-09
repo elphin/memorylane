@@ -313,6 +313,7 @@ impl VaultService {
         title: &str,
         start_at: &str,
         end_at: Option<&str>,
+        size: Option<i64>,
     ) -> Result<String, String> {
         let vault = self.current_vault()?;
         let year_folder = {
@@ -321,10 +322,25 @@ impl VaultService {
                 .map_err(|e| e.to_string())?
                 .ok_or_else(|| format!("jaar {year_id} niet gevonden"))?
         };
-        let (id, _folder) = writer::create_event(&vault, &year_folder, title, start_at, end_at)
-            .map_err(|e| e.to_string())?;
+        let (id, _folder) =
+            writer::create_event(&vault, &year_folder, title, start_at, end_at, size)
+                .map_err(|e| e.to_string())?;
         self.rescan()?;
         Ok(id)
+    }
+
+    /// Zet (of wist bij `None`) het `size`-veld (belang, 1–100) van een event.
+    pub fn set_event_size(&self, event_id: &str, size: Option<i64>) -> Result<(), String> {
+        let vault = self.current_vault()?;
+        let folder = {
+            let conn = self.conn.lock().map_err(lock_err)?;
+            index::event_folder(&conn, event_id)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("event {event_id} niet gevonden"))?
+        };
+        writer::set_event_size(&vault, &folder, size).map_err(|e| e.to_string())?;
+        self.rescan()?;
+        Ok(())
     }
 
     /// Werkt titel/begin-/einddatum van een bestaand event bij (file first, dan
@@ -609,8 +625,19 @@ pub fn create_event(
     title: String,
     start_at: String,
     end_at: Option<String>,
+    size: Option<i64>,
 ) -> Result<String, String> {
-    state.create_event(&year_id, &title, &start_at, end_at.as_deref())
+    state.create_event(&year_id, &title, &start_at, end_at.as_deref(), size)
+}
+
+/// Zet (of wist) het belang/`size`-veld (1–100) van een event.
+#[tauri::command]
+pub fn set_event_size(
+    state: State<VaultService>,
+    event_id: String,
+    size: Option<i64>,
+) -> Result<(), String> {
+    state.set_event_size(&event_id, size)
 }
 
 #[tauri::command]

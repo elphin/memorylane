@@ -121,6 +121,9 @@ pub struct Event {
     pub featured_photo: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
+    /// Belang/grootte van het event op de jaar-tijdlijn (1–100). None = standaard (50).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<i64>,
     /// Id van het jaar waaronder dit event valt.
     pub year_id: String,
     /// Vault-relatief pad naar de eventmap (forward slashes).

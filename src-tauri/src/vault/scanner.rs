@@ -165,6 +165,10 @@ fn scan_event(root: &Path, event_path: &Path, year: &Year, model: &mut VaultMode
             .and_then(|p| p.get("tags"))
             .map(|y| y.as_string_list())
             .unwrap_or_default(),
+        size: parsed
+            .as_ref()
+            .and_then(|p| p.get_str("size"))
+            .and_then(|s| s.trim().parse::<i64>().ok()),
         year_id: year.id.clone(),
         folder_path: folder_path.clone(),
     };
