@@ -44,6 +44,8 @@ interface Settings {
   slideshowSpeed: number
   /** Vergrendel verticaal pannen op het overzicht (L0) en de jaar-tijdlijn (L1). */
   lockVerticalPan: boolean
+  /** View-modus: verberg alle knoppen voor een schone weergave (toets E schakelt). */
+  viewMode: boolean
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -51,6 +53,7 @@ const DEFAULT_SETTINGS: Settings = {
   slideshow: true,
   slideshowSpeed: 5,
   lockVerticalPan: false,
+  viewMode: false,
 }
 const SETTINGS_KEY = 'memorylane-settings'
 
@@ -99,6 +102,7 @@ export function AppShell() {
   const [layoutMode, setLayoutMode] = useState<'custom' | 'grid' | 'scatter'>('custom')
   const [settings, setSettings] = useState<Settings>(loadSettings)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [viewHint, setViewHint] = useState(false)
   // Ref-spiegel zodat de (één keer opgezette) engine-closures de actuele
   // voorkeuren lezen zonder stale closure.
   const settingsRef = useRef(settings)
@@ -111,6 +115,41 @@ export function AppShell() {
     saveSettings(next)
     applyPanLockRef.current() // pan-lock meteen toepassen op het huidige niveau
   }
+
+  // Toets E schakelt tussen bewerk- en view-modus (alle knoppen tonen/verbergen).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      // Alleen de kale 'e' (geen Ctrl/Alt/Meta): Ctrl is al een modus-toets
+      // (dag-picker/uitlichten) en Ctrl/Cmd+E zijn browser-/OS-sneltoetsen.
+      if (e.ctrlKey || e.metaKey || e.altKey) return
+      const el = document.activeElement
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) return
+      // Niet stil op de achtergrond togglen terwijl er een dialog/overlay open
+      // staat (focus kan dan op een knop staan → INPUT/TEXTAREA-guard mist 'm).
+      if (dialogOpenRef.current || overlayOpenRef.current) return
+      if (e.key === 'e' || e.key === 'E') {
+        e.preventDefault()
+        updateSettings({ viewMode: !settingsRef.current.viewMode })
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Toon kort een hint (hoe je terugschakelt) zodra de view-modus actief is én er
+  // geen instellingen-paneel meer overheen staat. Zo verschijnt de reminder ook
+  // wanneer je view-modus via het paneel aanzet: pas ná "Klaar" (paneel dicht)
+  // toont de hint — anders was hij al vervaagd voordat je 'm kon lezen.
+  useEffect(() => {
+    if (!settings.viewMode || settingsOpen) {
+      setViewHint(false)
+      return
+    }
+    setViewHint(true)
+    const t = window.setTimeout(() => setViewHint(false), 2600)
+    return () => window.clearTimeout(t)
+  }, [settings.viewMode, settingsOpen])
   const [draft, setDraft] = useState('')
   const [busy, setBusy] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
@@ -801,12 +840,31 @@ export function AppShell() {
     <div style={{ position: 'fixed', inset: 0 }}>
       <div ref={hostRef} style={{ position: 'absolute', inset: 0 }} />
       {phase !== 'ready' && <Overlay phase={phase} message={message} onPick={() => void pickVault()} />}
-      {phase === 'ready' && !modal && !editing && !eventForm && !metaForm && !searchOpen && !settingsOpen && (
+      {viewHint && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 16,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            padding: '8px 16px',
+            borderRadius: 20,
+            background: 'rgba(22,28,40,0.9)',
+            border: '1px solid #2c3650',
+            color: '#cfd6e4',
+            font: '13px sans-serif',
+            pointerEvents: 'none',
+          }}
+        >
+          View-modus — druk op <b>E</b> voor de knoppen
+        </div>
+      )}
+      {phase === 'ready' && !modal && !editing && !eventForm && !metaForm && !searchOpen && !settingsOpen && !settings.viewMode && (
         <button onClick={() => setSearchOpen(true)} style={searchBtn} title="Zoeken">
           Zoeken…
         </button>
       )}
-      {phase === 'ready' && !modal && !editing && !eventForm && !metaForm && !searchOpen && !settingsOpen && (
+      {phase === 'ready' && !modal && !editing && !eventForm && !metaForm && !searchOpen && !settingsOpen && !settings.viewMode && (
         <button onClick={() => setSettingsOpen(true)} style={gearBtn} title="Instellingen">
           ⚙
         </button>
@@ -827,7 +885,7 @@ export function AppShell() {
           onClose={() => setSettingsOpen(false)}
         />
       )}
-      {phase === 'ready' && !modal && !editing && !eventForm && !metaForm && !searchOpen && !settingsOpen && (
+      {phase === 'ready' && !modal && !editing && !eventForm && !metaForm && !searchOpen && !settingsOpen && !settings.viewMode && (
         <Fab
           uiLevel={uiLevel}
           layoutMode={layoutMode}
@@ -1067,6 +1125,19 @@ function SettingsPanel({
         </label>
         <div style={{ fontSize: 12, color: '#6a7690', marginTop: 6 }}>
           Houdt de horizontale niveaus verticaal gecentreerd; je scrollt/zoomt alleen zijwaarts.
+        </div>
+
+        <div style={{ height: 1, background: '#2c3650', margin: '18px 0' }} />
+        <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
+          <input
+            type="checkbox"
+            checked={settings.viewMode}
+            onChange={(e) => onChange({ viewMode: e.target.checked })}
+          />
+          <span style={{ fontSize: 14, color: '#fff' }}>View-modus (alle knoppen verbergen)</span>
+        </label>
+        <div style={{ fontSize: 12, color: '#6a7690', marginTop: 6 }}>
+          Een schone weergave zonder knoppen. Druk op <b>E</b> om te wisselen.
         </div>
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 18 }}>
