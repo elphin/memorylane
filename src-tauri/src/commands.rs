@@ -677,6 +677,20 @@ pub fn search(state: State<VaultService>, query: String) -> Result<Vec<SearchRes
     state.with_conn(|c| index::search(c, &query))
 }
 
+/// Foto-item-ids voor de screensaver: scope ("all"/"year"/"event") + tag-filter.
+#[tauri::command]
+pub fn get_screensaver_photos(
+    state: State<VaultService>,
+    scope_kind: String,
+    scope_id: Option<String>,
+    include: Vec<String>,
+    exclude: Vec<String>,
+) -> Result<Vec<String>, String> {
+    state.with_conn(|c| {
+        index::list_screensaver_photos(c, &scope_kind, scope_id.as_deref(), &include, &exclude)
+    })
+}
+
 #[tauri::command]
 pub fn get_index_errors(state: State<VaultService>) -> Result<Vec<IndexError>, String> {
     state.with_conn(index::get_index_errors)

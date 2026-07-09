@@ -474,6 +474,62 @@ pub fn list_year_photos(conn: &Connection, year_id: &str) -> rusqlite::Result<Ve
     rows.collect()
 }
 
+/// Foto-item-ids voor de screensaver, binnen een scope en optioneel op tags
+/// gefilterd. `scope_kind`: "year" (→ `scope_id` = year_id), "event" (→ event_id),
+/// anders alle foto's. `include` = minstens één van die tags; `exclude` = geen van
+/// die tags. Bij "year"/"event" zonder id → lege lijst (geen panic). Alleen echte
+/// (niet-synthetische) foto's, chronologisch.
+pub fn list_screensaver_photos(
+    conn: &Connection,
+    scope_kind: &str,
+    scope_id: Option<&str>,
+    include: &[String],
+    exclude: &[String],
+) -> rusqlite::Result<Vec<String>> {
+    use rusqlite::types::Value;
+    let mut sql = String::from(
+        "SELECT i.id FROM items i JOIN events e ON i.event_id = e.id \
+         WHERE i.item_type = 'photo' AND i.synthetic = 0",
+    );
+    // Bind-volgorde volgt exact de SQL-opbouw: [scope_id?] [include...] [exclude...].
+    let mut binds: Vec<Value> = Vec::new();
+    match scope_kind {
+        "year" => match scope_id {
+            Some(id) => {
+                sql.push_str(" AND e.year_id = ?");
+                binds.push(Value::Text(id.to_string()));
+            }
+            None => return Ok(Vec::new()),
+        },
+        "event" => match scope_id {
+            Some(id) => {
+                sql.push_str(" AND i.event_id = ?");
+                binds.push(Value::Text(id.to_string()));
+            }
+            None => return Ok(Vec::new()),
+        },
+        _ => {} // "all" (of onbekend) → geen scope-filter
+    }
+    if !include.is_empty() {
+        let ph = vec!["?"; include.len()].join(",");
+        sql.push_str(&format!(
+            " AND EXISTS (SELECT 1 FROM json_each(i.tags) WHERE value IN ({ph}))"
+        ));
+        binds.extend(include.iter().map(|t| Value::Text(t.clone())));
+    }
+    if !exclude.is_empty() {
+        let ph = vec!["?"; exclude.len()].join(",");
+        sql.push_str(&format!(
+            " AND NOT EXISTS (SELECT 1 FROM json_each(i.tags) WHERE value IN ({ph}))"
+        ));
+        binds.extend(exclude.iter().map(|t| Value::Text(t.clone())));
+    }
+    sql.push_str(" ORDER BY (i.timestamp_ms IS NULL), i.timestamp_ms, i.slug");
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(rusqlite::params_from_iter(binds), |r| r.get::<_, String>(0))?;
+    rows.collect()
+}
+
 /// Bestandsinfo van een item voor verwijderen: (event_id, folder_path, slug, media).
 pub type ItemFiles = (String, String, Option<String>, Option<String>);
 
@@ -869,6 +925,94 @@ mod tests {
         let photos = list_year_photos(&conn, "y2024").unwrap();
         assert_eq!(photos.len(), 2);
         assert!(photos.iter().any(|p| p.item_id == "it2"));
+    }
+
+    /// Bouwt een model met getagde foto's over twee jaren + een synthetische foto.
+    fn screensaver_model() -> VaultModel {
+        let mut m = VaultModel::default();
+        let photo = |id: &str, event_id: &str, tags: &[&str], synthetic: bool, ts: i64| Item {
+            id: id.into(),
+            event_id: event_id.into(),
+            item_type: ItemType::Photo,
+            media: Some(format!("{id}.jpg")),
+            url: None,
+            caption: None,
+            happened_at: None,
+            timestamp_ms: Some(ts),
+            place: None,
+            people: vec![],
+            tags: tags.iter().map(|t| (*t).into()).collect(),
+            category: None,
+            body_text: None,
+            slug: Some(id.into()),
+            synthetic,
+        };
+        for (yid, year, eid) in [("y2024", 2024, "ev1"), ("y2023", 2023, "ev2")] {
+            m.years.push(Year {
+                id: yid.into(),
+                year,
+                title: year.to_string(),
+                start_at: format!("{year}-01-01"),
+                end_at: None,
+                folder_name: year.to_string(),
+            });
+            m.events.push(Event {
+                id: eid.into(),
+                kind: EventKind::Event,
+                title: None,
+                description: None,
+                start_at: format!("{year}-06-01"),
+                end_at: None,
+                location: None,
+                featured_photo: None,
+                tags: vec![],
+                year_id: yid.into(),
+                folder_path: format!("{year}/e"),
+            });
+        }
+        m.items.push(photo("it1", "ev1", &[], false, 1)); // geen tags
+        m.items.push(photo("ita", "ev1", &["vakantie", "strand"], false, 2));
+        m.items.push(photo("itb", "ev1", &["familie"], false, 3));
+        m.items.push(photo("itsyn", "ev1", &["vakantie"], true, 4)); // synthetisch → uit
+        m.items.push(photo("itc", "ev2", &["vakantie"], false, 5));
+        m
+    }
+
+    #[test]
+    fn screensaver_scope_and_synthetic() {
+        let mut conn = open_in_memory().unwrap();
+        load(&mut conn, &screensaver_model()).unwrap();
+        let all = list_screensaver_photos(&conn, "all", None, &[], &[]).unwrap();
+        assert_eq!(all, vec!["it1", "ita", "itb", "itc"]); // synthetisch weggelaten, chronologisch
+        let y = list_screensaver_photos(&conn, "year", Some("y2024"), &[], &[]).unwrap();
+        assert_eq!(y, vec!["it1", "ita", "itb"]);
+        let e = list_screensaver_photos(&conn, "event", Some("ev2"), &[], &[]).unwrap();
+        assert_eq!(e, vec!["itc"]);
+    }
+
+    #[test]
+    fn screensaver_tag_include_exclude() {
+        let mut conn = open_in_memory().unwrap();
+        load(&mut conn, &screensaver_model()).unwrap();
+        let inc = |t: &[&str]| t.iter().map(|s| (*s).into()).collect::<Vec<String>>();
+        // include any-of "vakantie" → ita + itc (it1 leeg, itb familie, syn uit).
+        let v = list_screensaver_photos(&conn, "all", None, &inc(&["vakantie"]), &[]).unwrap();
+        assert_eq!(v, vec!["ita", "itc"]);
+        // exclude "familie" binnen y2024 → it1 + ita (itb valt af).
+        let v = list_screensaver_photos(&conn, "year", Some("y2024"), &[], &inc(&["familie"])).unwrap();
+        assert_eq!(v, vec!["it1", "ita"]);
+        // volgorde-kritisch: scope + include + exclude samen → itc (ita heeft 'strand').
+        let v = list_screensaver_photos(&conn, "all", None, &inc(&["vakantie"]), &inc(&["strand"]))
+            .unwrap();
+        assert_eq!(v, vec!["itc"]);
+    }
+
+    #[test]
+    fn screensaver_scope_without_id_is_empty() {
+        let mut conn = open_in_memory().unwrap();
+        load(&mut conn, &screensaver_model()).unwrap();
+        assert!(list_screensaver_photos(&conn, "year", None, &[], &[]).unwrap().is_empty());
+        assert!(list_screensaver_photos(&conn, "event", None, &[], &[]).unwrap().is_empty());
     }
 
     #[test]

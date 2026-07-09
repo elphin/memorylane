@@ -9,6 +9,7 @@ import { createBackend } from '../lib/backend'
 import { RenderEngine } from '../render/core/engine'
 import { EventScene } from '../render/scenes/event'
 import type { NodePosition } from '../render/scenes/scene'
+import { Screensaver } from './Screensaver'
 import { FocusScene } from '../render/scenes/focus'
 import { LifelineScene } from '../render/scenes/lifeline'
 import type { Scene } from '../render/scenes/scene'
@@ -47,6 +48,10 @@ interface Settings {
   lockVerticalPan: boolean
   /** View-modus: verberg alle knoppen voor een schone weergave (toets E schakelt). */
   viewMode: boolean
+  /** Screensaver-tagfilter: alleen foto's met minstens één van deze tags (komma-gescheiden). */
+  screensaverInclude: string
+  /** Screensaver-tagfilter: foto's met een van deze tags uitsluiten (komma-gescheiden). */
+  screensaverExclude: string
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -55,6 +60,8 @@ const DEFAULT_SETTINGS: Settings = {
   slideshowSpeed: 5,
   lockVerticalPan: false,
   viewMode: false,
+  screensaverInclude: '',
+  screensaverExclude: '',
 }
 const SETTINGS_KEY = 'memorylane-settings'
 
@@ -171,6 +178,9 @@ export function AppShell() {
   const [settings, setSettings] = useState<Settings>(loadSettings)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [viewHint, setViewHint] = useState(false)
+  // Screensaver: null = dicht, anders de (context-afhankelijke) foto-ids.
+  const [screensaverIds, setScreensaverIds] = useState<string[] | null>(null)
+  const [toast, setToast] = useState<string | null>(null)
   // Ref-spiegel zodat de (één keer opgezette) engine-closures de actuele
   // voorkeuren lezen zonder stale closure.
   const settingsRef = useRef(settings)
@@ -688,10 +698,19 @@ export function AppShell() {
     dialogOpenRef.current = !!(modal || editing || eventForm || metaForm)
   }, [modal, editing, eventForm, metaForm])
 
-  // Houd de key-closure op de hoogte of een invoerloze overlay open staat.
+  // Houd de key-closure op de hoogte of een invoerloze overlay open staat. De
+  // screensaver hoort hier ook bij: dan slaan de globale Esc/'e'-handlers zichzelf
+  // over en navigeert er niets onder de screensaver.
   useEffect(() => {
-    overlayOpenRef.current = settingsOpen || searchOpen
-  }, [settingsOpen, searchOpen])
+    overlayOpenRef.current = settingsOpen || searchOpen || screensaverIds !== null
+  }, [settingsOpen, searchOpen, screensaverIds])
+
+  // Korte toast (bijv. "geen foto's gevonden") die vanzelf verdwijnt.
+  useEffect(() => {
+    if (!toast) return
+    const t = window.setTimeout(() => setToast(null), 2600)
+    return () => window.clearTimeout(t)
+  }, [toast])
 
   const pickVault = async (): Promise<void> => {
     const backend = backendRef.current
@@ -750,6 +769,38 @@ export function AppShell() {
 
   // Wissel de canvas-layout (Eigen/Grid/Scatter). Scatter opnieuw aanroepen =
   // een nieuwe worp (dobbelsteen).
+  // Start de screensaver met een context-afhankelijke foto-set: op het overzicht
+  // alle foto's, in een jaar die van dat jaar, in een event alleen die van het
+  // event. Tag-filter (include/exclude) uit de instellingen.
+  const startScreensaver = async (): Promise<void> => {
+    const backend = backendRef.current
+    if (!backend) return
+    const lvl = levelRef.current
+    let scopeKind: 'all' | 'year' | 'event' = 'all'
+    let scopeId: string | null = null
+    if (lvl === 'year') {
+      scopeKind = 'year'
+      scopeId = currentYearRef.current
+    } else if (lvl === 'event' || lvl === 'focus') {
+      scopeKind = 'event'
+      scopeId = currentEventRef.current
+    }
+    const parse = (s: string): string[] => s.split(',').map((t) => t.trim()).filter(Boolean)
+    const include = parse(settingsRef.current.screensaverInclude)
+    const exclude = parse(settingsRef.current.screensaverExclude)
+    try {
+      const ids = await backend.getScreensaverPhotos(scopeKind, scopeId, include, exclude)
+      if (ids.length === 0) {
+        setToast('Geen foto’s voor de screensaver (check eventueel de tag-filters).')
+        return
+      }
+      setSettingsOpen(false)
+      setScreensaverIds(ids)
+    } catch (e) {
+      setToast(String(e))
+    }
+  }
+
   const changeLayout = (mode: 'custom' | 'grid' | 'scatter'): void => {
     setLayoutMode(mode)
     const scene = sceneRef.current
@@ -995,6 +1046,15 @@ export function AppShell() {
         </button>
       )}
       {phase === 'ready' && !modal && !editing && !eventForm && !metaForm && !searchOpen && !settingsOpen && !settings.viewMode && (
+        <button
+          onClick={() => void startScreensaver()}
+          style={screensaverBtn}
+          title="Screensaver (diavoorstelling)"
+        >
+          ▶
+        </button>
+      )}
+      {phase === 'ready' && !modal && !editing && !eventForm && !metaForm && !searchOpen && !settingsOpen && !settings.viewMode && (
         <button onClick={() => setSettingsOpen(true)} style={gearBtn} title="Instellingen">
           ⚙
         </button>
@@ -1015,6 +1075,15 @@ export function AppShell() {
           onClose={() => setSettingsOpen(false)}
         />
       )}
+      {screensaverIds && (
+        <Screensaver
+          photoIds={screensaverIds}
+          thumb={(id, size) => backendRef.current!.thumb(id, size)}
+          speedMs={7000}
+          onClose={() => setScreensaverIds(null)}
+        />
+      )}
+      {toast && <div style={toastStyle}>{toast}</div>}
       {phase === 'ready' && !modal && !editing && !eventForm && !metaForm && !searchOpen && !settingsOpen && !settings.viewMode && (
         <Fab
           uiLevel={uiLevel}
@@ -1268,6 +1337,33 @@ function SettingsPanel({
         </label>
         <div style={{ fontSize: 12, color: '#6a7690', marginTop: 6 }}>
           Een schone weergave zonder knoppen. Druk op <b>E</b> om te wisselen.
+        </div>
+
+        <div style={{ height: 1, background: '#2c3650', margin: '18px 0' }} />
+        <div style={{ fontSize: 14, color: '#fff', marginBottom: 8 }}>Screensaver-tagfilter</div>
+        <label style={{ display: 'block', fontSize: 12, color: '#9aa6c0', marginBottom: 4 }}>
+          Alleen deze tags (komma-gescheiden)
+        </label>
+        <input
+          type="text"
+          value={settings.screensaverInclude}
+          onChange={(e) => onChange({ screensaverInclude: e.target.value })}
+          placeholder="bijv. vakantie, familie"
+          style={tagInput}
+        />
+        <label style={{ display: 'block', fontSize: 12, color: '#9aa6c0', margin: '10px 0 4px' }}>
+          Zonder deze tags (komma-gescheiden)
+        </label>
+        <input
+          type="text"
+          value={settings.screensaverExclude}
+          onChange={(e) => onChange({ screensaverExclude: e.target.value })}
+          placeholder="bijv. werk"
+          style={tagInput}
+        />
+        <div style={{ fontSize: 12, color: '#6a7690', marginTop: 6 }}>
+          De screensaver toont foto's afhankelijk van waar je bent (overzicht = alles, jaar = dat
+          jaar, event = dat event). Start 'm met ▶ linksboven.
         </div>
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 18 }}>
@@ -1605,6 +1701,37 @@ const searchBtn: React.CSSProperties = {
   cursor: 'pointer',
 }
 
+const screensaverBtn: React.CSSProperties = {
+  position: 'absolute',
+  top: 16,
+  left: 108,
+  width: 38,
+  height: 38,
+  borderRadius: 19,
+  border: '1px solid #2c3650',
+  background: 'rgba(22,28,40,0.85)',
+  color: '#cfd6e4',
+  fontSize: 13,
+  lineHeight: '1',
+  cursor: 'pointer',
+}
+
+const toastStyle: React.CSSProperties = {
+  position: 'absolute',
+  bottom: 24,
+  left: '50%',
+  transform: 'translateX(-50%)',
+  padding: '10px 18px',
+  borderRadius: 12,
+  background: 'rgba(22,28,40,0.95)',
+  border: '1px solid #2c3650',
+  color: '#e6eaf2',
+  font: '13px sans-serif',
+  boxShadow: '0 6px 20px rgba(0,0,0,0.5)',
+  zIndex: 1100,
+  pointerEvents: 'none',
+}
+
 const gearBtn: React.CSSProperties = {
   position: 'absolute',
   top: 16,
@@ -1733,4 +1860,15 @@ const primaryBtn: React.CSSProperties = {
   color: '#fff',
   font: '15px sans-serif',
   cursor: 'pointer',
+}
+
+const tagInput: React.CSSProperties = {
+  width: '100%',
+  boxSizing: 'border-box',
+  padding: '8px 10px',
+  borderRadius: 8,
+  border: '1px solid #2c3650',
+  background: 'rgba(12,16,24,0.6)',
+  color: '#e6eaf2',
+  font: '13px sans-serif',
 }

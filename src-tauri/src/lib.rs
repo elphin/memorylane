@@ -114,6 +114,7 @@ pub fn run() {
             commands::update_item_metadata,
             commands::import_photos,
             commands::search,
+            commands::get_screensaver_photos,
             commands::get_index_errors,
         ])
         .run(tauri::generate_context!())

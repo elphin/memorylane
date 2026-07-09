@@ -183,6 +183,15 @@ export interface Backend {
     tags: string[],
   ): Promise<void>
   search(query: string): Promise<SearchResult[]>
+  /** Foto-item-ids voor de screensaver. `scopeKind`: 'all' | 'year' | 'event'
+   * (met bijbehorend `scopeId`); `include` = minstens één van die tags, `exclude`
+   * = geen van die tags (lege arrays = geen filter). */
+  getScreensaverPhotos(
+    scopeKind: 'all' | 'year' | 'event',
+    scopeId: string | null,
+    include: string[],
+    exclude: string[],
+  ): Promise<string[]>
   thumb(itemId: string, size: 64 | 128 | 256 | 1024 | 2048): ThumbSource
 }
 
@@ -249,6 +258,21 @@ class TauriBackend implements Backend {
   async getYearPhotos(yearId: string): Promise<YearPhoto[]> {
     const invoke = await this.api()
     return await invoke<YearPhoto[]>('get_year_photos', { yearId })
+  }
+
+  async getScreensaverPhotos(
+    scopeKind: 'all' | 'year' | 'event',
+    scopeId: string | null,
+    include: string[],
+    exclude: string[],
+  ): Promise<string[]> {
+    const invoke = await this.api()
+    return await invoke<string[]>('get_screensaver_photos', {
+      scopeKind,
+      scopeId,
+      include,
+      exclude,
+    })
   }
 
   async getEvent(eventId: string): Promise<EventDetail | null> {
@@ -453,6 +477,39 @@ class MockBackend implements Backend {
       itemType: 'photo' as const,
       eventId: p.eventId,
     }))
+  }
+  async getScreensaverPhotos(
+    scopeKind: 'all' | 'year' | 'event',
+    scopeId: string | null,
+    include: string[],
+    exclude: string[],
+  ): Promise<string[]> {
+    // Deterministische synthetische tags per foto, zodat include/exclude testbaar is.
+    const photoTags = (photoId: string): string[] => {
+      const h = hueFor(photoId)
+      const tags: string[] = []
+      if (h % 3 === 0) tags.push('vakantie')
+      if (h % 3 === 1) tags.push('familie')
+      if (h % 5 === 0) tags.push('werk')
+      return tags
+    }
+    const eventPhotos = (eventId: string): string[] => {
+      const n = 6 + (hueFor(eventId) % 7)
+      return Array.from({ length: Math.max(0, n - 1) }, (_, k) => `${eventId}-i${k + 1}`)
+    }
+    let ids: string[] = []
+    if (scopeKind === 'event' && scopeId) {
+      ids = eventPhotos(scopeId)
+    } else if (scopeKind === 'year' && scopeId) {
+      ids = (this.details.get(scopeId)?.events ?? []).flatMap((ev) => eventPhotos(ev.id))
+    } else if (scopeKind === 'all') {
+      for (const d of this.details.values()) {
+        ids = ids.concat(d.events.flatMap((ev) => eventPhotos(ev.id)))
+      }
+    }
+    if (include.length) ids = ids.filter((id) => photoTags(id).some((t) => include.includes(t)))
+    if (exclude.length) ids = ids.filter((id) => !photoTags(id).some((t) => exclude.includes(t)))
+    return ids
   }
   async getEvent(eventId: string): Promise<EventDetail | null> {
     const summary = this.findEvent(eventId)
