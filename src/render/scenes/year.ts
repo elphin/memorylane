@@ -46,6 +46,32 @@ interface Node {
   fade: number // 0 = niet aan het faden; >0 = crossfade-voortgang
 }
 
+/** HSL → 0xRRGGBB. */
+function hslToInt(h: number, s: number, l: number): number {
+  h /= 360
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s
+  const p = 2 * l - q
+  const c = (t: number): number => {
+    if (t < 0) t += 1
+    if (t > 1) t -= 1
+    if (t < 1 / 6) return p + (q - p) * 6 * t
+    if (t < 1 / 2) return q
+    if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6
+    return p
+  }
+  const r = Math.round(c(h + 1 / 3) * 255)
+  const g = Math.round(c(h) * 255)
+  const b = Math.round(c(h - 1 / 3) * 255)
+  return (r << 16) | (g << 8) | b
+}
+
+/** Een stabiele, gedimde kleur per (event-)id — voor het meerdaagse-event-blokje. */
+function dimColor(seed: string): number {
+  let h = 0
+  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) % 360
+  return hslToInt(h, 0.42, 0.46)
+}
+
 /** Cover-fit een sprite op een thumbnail-kaart (vult, behoudt aspect). */
 function fitCover(sprite: Sprite, tex: Texture): void {
   const s = Math.max(THUMB_W / tex.width, THUMB_H / tex.height)
@@ -124,7 +150,8 @@ export class YearScene implements Scene {
       if (ev.endAt) {
         const endX = dateToX(parseLocalDate(ev.endAt))
         if (endX - startX > 4) {
-          spans.roundRect(startX, -7, endX - startX, 14, 7).fill({ color: 0x4a5570, alpha: 0.9 })
+          // Rechthoekig blokje (lichte afronding), gedimde kleur per event.
+          spans.roundRect(startX, -9, endX - startX, 18, 3).fill({ color: dimColor(ev.id), alpha: 0.9 })
           return (startX + endX) / 2
         }
       }
