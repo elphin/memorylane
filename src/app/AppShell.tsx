@@ -42,9 +42,16 @@ interface Settings {
   slideshow: boolean
   /** Seconden per foto in de slideshow. */
   slideshowSpeed: number
+  /** Vergrendel verticaal pannen op het overzicht (L0) en de jaar-tijdlijn (L1). */
+  lockVerticalPan: boolean
 }
 
-const DEFAULT_SETTINGS: Settings = { defaultLayout: 'custom', slideshow: true, slideshowSpeed: 5 }
+const DEFAULT_SETTINGS: Settings = {
+  defaultLayout: 'custom',
+  slideshow: true,
+  slideshowSpeed: 5,
+  lockVerticalPan: false,
+}
 const SETTINGS_KEY = 'memorylane-settings'
 
 function loadSettings(): Settings {
@@ -102,6 +109,7 @@ export function AppShell() {
     settingsRef.current = next
     setSettings(next)
     saveSettings(next)
+    applyPanLockRef.current() // pan-lock meteen toepassen op het huidige niveau
   }
   const [draft, setDraft] = useState('')
   const [busy, setBusy] = useState(false)
@@ -137,6 +145,7 @@ export function AppShell() {
   const entryZoomRef = useRef(1)
   const enterSeqRef = useRef(0)
   const enteringRef = useRef(false)
+  const applyPanLockRef = useRef<() => void>(() => {})
 
   useEffect(() => {
     let engine: RenderEngine | null = null
@@ -161,6 +170,7 @@ export function AppShell() {
       engine.revealScene(scene.root, 'out')
       levelRef.current = 'lifeline'
       setUiLevel('lifeline')
+      applyPanLock()
     }
 
     const enterYear = async (yearId: string, dir: 'in' | 'out' = 'in'): Promise<void> => {
@@ -184,6 +194,7 @@ export function AppShell() {
         revealScene(engine, scene, dir)
         levelRef.current = 'year'
         setUiLevel('year')
+        applyPanLock()
         currentYearRef.current = yearId
         entryZoomRef.current = engine.pendingZoom
       } catch (e) {
@@ -226,6 +237,7 @@ export function AppShell() {
         revealScene(engine, scene, dir)
         levelRef.current = 'event'
         setUiLevel('event')
+        applyPanLock()
         currentEventRef.current = eventId
         currentEventInfoRef.current = detail.event
         currentItemsRef.current = detail.items
@@ -255,11 +267,22 @@ export function AppShell() {
       revealScene(engine, scene, 'in')
       levelRef.current = 'focus'
       setUiLevel('focus')
+      applyPanLock()
       entryZoomRef.current = engine.pendingZoom
     }
 
     enterYearRef.current = (id) => void enterYear(id)
     enterEventRef.current = (id) => void enterEvent(id)
+
+    // Verticale-pan-lock toepassen op basis van niveau + instelling (alleen de
+    // horizontale niveaus L0/L1).
+    const applyPanLock = (): void => {
+      if (!engine) return
+      const lvl = levelRef.current
+      engine.camera.lockY =
+        settingsRef.current.lockVerticalPan && (lvl === 'lifeline' || lvl === 'year')
+    }
+    applyPanLockRef.current = applyPanLock
 
     // Eén niveau terug (Esc / uitzoomen).
     const goBack = (): void => {
@@ -1031,6 +1054,19 @@ function SettingsPanel({
         )}
         <div style={{ fontSize: 12, color: '#6a7690', marginTop: 6 }}>
           Wijzigingen gelden bij het (opnieuw) openen van een jaar.
+        </div>
+
+        <div style={{ height: 1, background: '#2c3650', margin: '18px 0' }} />
+        <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
+          <input
+            type="checkbox"
+            checked={settings.lockVerticalPan}
+            onChange={(e) => onChange({ lockVerticalPan: e.target.checked })}
+          />
+          <span style={{ fontSize: 14, color: '#fff' }}>Verticaal pannen vergrendelen (overzicht + jaar-tijdlijn)</span>
+        </label>
+        <div style={{ fontSize: 12, color: '#6a7690', marginTop: 6 }}>
+          Houdt de horizontale niveaus verticaal gecentreerd; je scrollt/zoomt alleen zijwaarts.
         </div>
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 18 }}>

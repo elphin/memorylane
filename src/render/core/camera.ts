@@ -17,6 +17,9 @@ export class Camera {
   zoom = 1
   minZoom = 0.01
   maxZoom = 40
+  // Vergrendel verticaal pannen (voor de horizontale L0/L1-niveaus): `y` blijft
+  // op de fit-waarde; pan/zoom laten 'm ongemoeid.
+  lockY = false
 
   screenToWorld(sx: number, sy: number, vp: Viewport): { x: number; y: number } {
     return {
@@ -38,13 +41,13 @@ export class Camera {
     this.zoom = clamp(this.zoom * factor, this.minZoom, this.maxZoom)
     const after = this.screenToWorld(sx, sy, vp)
     this.x += before.x - after.x
-    this.y += before.y - after.y
+    if (!this.lockY) this.y += before.y - after.y
   }
 
   /** Verplaats de camera met een scherm-delta in pixels (camera beweegt mee). */
   panScreen(dx: number, dy: number): void {
     this.x += dx / this.zoom
-    this.y += dy / this.zoom
+    if (!this.lockY) this.y += dy / this.zoom
   }
 
   /** Zichtbare wereld-rechthoek voor viewport-culling. */
