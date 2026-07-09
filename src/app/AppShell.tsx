@@ -54,6 +54,11 @@ interface Settings {
   screensaverExclude: string
   /** Toon de zoekknop linksboven. Uit? Zoeken kan altijd nog met Ctrl+K. */
   showSearchButton: boolean
+  /** Laat de jaar-tegels op het overzicht als slideshow door foto's rouleren. */
+  yearTileSlideshow: boolean
+  /** Bron voor de jaar-tegel-cover: 'featured' = de uitgelichte foto's van dat
+   * jaar, 'random' = alle foto's. */
+  yearCoverMode: 'featured' | 'random'
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -65,6 +70,8 @@ const DEFAULT_SETTINGS: Settings = {
   screensaverInclude: '',
   screensaverExclude: '',
   showSearchButton: true,
+  yearTileSlideshow: false,
+  yearCoverMode: 'featured',
 }
 const SETTINGS_KEY = 'memorylane-settings'
 
@@ -200,6 +207,15 @@ export function AppShell() {
     setSettings(next)
     saveSettings(next)
     applyPanLockRef.current() // pan-lock meteen toepassen op het huidige niveau
+    // Jaar-tegel-slideshow leeft in de scene → herbouw de lifeline als die zichtbaar is.
+    if (
+      (patch.yearTileSlideshow !== undefined ||
+        patch.yearCoverMode !== undefined ||
+        patch.slideshowSpeed !== undefined) &&
+      levelRef.current === 'lifeline'
+    ) {
+      setupLifelineRef.current()
+    }
   }
 
   // Toets E schakelt tussen bewerk- en view-modus (alle knoppen tonen/verbergen).
@@ -271,6 +287,12 @@ export function AppShell() {
   const enterSeqRef = useRef(0)
   const enteringRef = useRef(false)
   const applyPanLockRef = useRef<() => void>(() => {})
+  // Zodat instellingen (jaar-tegel-slideshow) de lifeline live kunnen herbouwen.
+  const setupLifelineRef = useRef<() => void>(() => {})
+  // Zodat de tap-handler (in de mount-closure) de screensaver kan starten.
+  const startScreensaverRef = useRef<
+    (o?: { scopeKind: 'all' | 'year' | 'event'; scopeId: string | null }) => void
+  >(() => {})
 
   useEffect(() => {
     let engine: RenderEngine | null = null
@@ -290,13 +312,18 @@ export function AppShell() {
       const old = sceneRef.current
       sceneRef.current = null
       if (old) engine.exitScene(old.root, 'out', () => old.destroy())
-      const scene = new LifelineScene(engine, backendRef.current, yearsRef.current)
+      const scene = new LifelineScene(engine, backendRef.current, yearsRef.current, {
+        enabled: settingsRef.current.yearTileSlideshow,
+        mode: settingsRef.current.yearCoverMode,
+        speedMs: settingsRef.current.slideshowSpeed * 1000,
+      })
       sceneRef.current = scene
       engine.revealScene(scene.root, 'out')
       levelRef.current = 'lifeline'
       setUiLevel('lifeline')
       applyPanLock()
     }
+    setupLifelineRef.current = setupLifeline
 
     const enterYear = async (yearId: string, dir: 'in' | 'out' = 'in'): Promise<void> => {
       if (!engine || !backendRef.current || enteringRef.current) return
@@ -651,6 +678,15 @@ export function AppShell() {
         }
         if (level === 'year' && ctrlDown) return
 
+        // ▶-knop op een jaartegel (L0): start de screensaver voor dat jaar.
+        if (level === 'lifeline') {
+          const playYear = scene?.playButtonAt?.(wx, wy)
+          if (playYear) {
+            startScreensaverRef.current({ scopeKind: 'year', scopeId: playYear })
+            return
+          }
+        }
+
         const hit = scene?.hitTest?.(wx, wy) ?? null
 
         // L3-focus: klik óp de foto = vorige/volgende (linker-/rechterhelft),
@@ -770,7 +806,11 @@ export function AppShell() {
       const engine = engineRef.current
       if (engine && years.length > 0) {
         sceneRef.current?.destroy()
-        sceneRef.current = new LifelineScene(engine, backend, years)
+        sceneRef.current = new LifelineScene(engine, backend, years, {
+          enabled: settingsRef.current.yearTileSlideshow,
+          mode: settingsRef.current.yearCoverMode,
+          speedMs: settingsRef.current.slideshowSpeed * 1000,
+        })
         levelRef.current = 'lifeline'
         setPhase('ready')
       } else {
@@ -815,18 +855,25 @@ export function AppShell() {
   // Start de screensaver met een context-afhankelijke foto-set: op het overzicht
   // alle foto's, in een jaar die van dat jaar, in een event alleen die van het
   // event. Tag-filter (include/exclude) uit de instellingen.
-  const startScreensaver = async (): Promise<void> => {
+  const startScreensaver = async (
+    override?: { scopeKind: 'all' | 'year' | 'event'; scopeId: string | null },
+  ): Promise<void> => {
     const backend = backendRef.current
     if (!backend) return
-    const lvl = levelRef.current
     let scopeKind: 'all' | 'year' | 'event' = 'all'
     let scopeId: string | null = null
-    if (lvl === 'year') {
-      scopeKind = 'year'
-      scopeId = currentYearRef.current
-    } else if (lvl === 'event' || lvl === 'focus') {
-      scopeKind = 'event'
-      scopeId = currentEventRef.current
+    if (override) {
+      scopeKind = override.scopeKind
+      scopeId = override.scopeId
+    } else {
+      const lvl = levelRef.current
+      if (lvl === 'year') {
+        scopeKind = 'year'
+        scopeId = currentYearRef.current
+      } else if (lvl === 'event' || lvl === 'focus') {
+        scopeKind = 'event'
+        scopeId = currentEventRef.current
+      }
     }
     const parse = (s: string): string[] => s.split(',').map((t) => t.trim()).filter(Boolean)
     const include = parse(settingsRef.current.screensaverInclude)
@@ -843,6 +890,7 @@ export function AppShell() {
       setToast(String(e))
     }
   }
+  startScreensaverRef.current = (o) => void startScreensaver(o)
 
   const changeLayout = (mode: 'custom' | 'grid' | 'scatter'): void => {
     setLayoutMode(mode)
@@ -1300,6 +1348,12 @@ function SettingsPanel({
     borderColor: settings.defaultLayout === m ? '#3b82f6' : '#2c3650',
     color: '#fff',
   })
+  const segOn = (active: boolean): React.CSSProperties => ({
+    ...ghostBtn,
+    background: active ? '#3b82f6' : 'transparent',
+    borderColor: active ? '#3b82f6' : '#2c3650',
+    color: '#fff',
+  })
   return (
     <div
       onClick={onClose}
@@ -1354,6 +1408,39 @@ function SettingsPanel({
         )}
         <div style={{ fontSize: 12, color: '#6a7690', marginTop: 6 }}>
           Wijzigingen gelden bij het (opnieuw) openen van een jaar.
+        </div>
+
+        <div style={{ height: 1, background: '#2c3650', margin: '18px 0' }} />
+        <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
+          <input
+            type="checkbox"
+            checked={settings.yearTileSlideshow}
+            onChange={(e) => onChange({ yearTileSlideshow: e.target.checked })}
+          />
+          <span style={{ fontSize: 14, color: '#fff' }}>Jaartegels als slideshow (covers rouleren)</span>
+        </label>
+        {settings.yearTileSlideshow && (
+          <div style={{ marginTop: 10 }}>
+            <div style={{ fontSize: 13, color: '#8a97b0', marginBottom: 6 }}>Cover-bron</div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                onClick={() => onChange({ yearCoverMode: 'featured' })}
+                style={segOn(settings.yearCoverMode === 'featured')}
+              >
+                Uitgelicht
+              </button>
+              <button
+                onClick={() => onChange({ yearCoverMode: 'random' })}
+                style={segOn(settings.yearCoverMode === 'random')}
+              >
+                Willekeurig
+              </button>
+            </div>
+          </div>
+        )}
+        <div style={{ fontSize: 12, color: '#6a7690', marginTop: 6 }}>
+          'Uitgelicht' rouleert door de uitgelichte foto's van dat jaar (geen uitgelicht → alle
+          foto's); 'willekeurig' door alle foto's. Snelheid volgt de slideshow hierboven.
         </div>
 
         <div style={{ height: 1, background: '#2c3650', margin: '18px 0' }} />

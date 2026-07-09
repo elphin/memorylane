@@ -1,6 +1,7 @@
 // L0 — Lifeline: alle jaren als tegels naast elkaar, elk met een cover-foto en
 // jaartal. Tik (of zoom) op een jaar → naar L1. Bewust simpel: weinig tegels,
-// dus geen zware virtualisatie nodig.
+// dus geen zware virtualisatie nodig. Optioneel rouleren de covers als slideshow
+// (door de uitgelichte of alle foto's van dat jaar).
 
 import { Container, Graphics, Sprite, Text, Texture } from 'pixi.js'
 import type { Backend, YearSummary } from '../../lib/backend'
@@ -11,27 +12,56 @@ const TILE_W = 320
 const TILE_H = 240
 const GAP = 80
 const COVER_H = TILE_H - 56
+const COVER_W = TILE_W - 16
+const BADGE_INSET = 26 // afstand van de ▶-knop tot de tegelrand
+const BADGE_R = 18 // straal van de ▶-knop
 
 interface Tile {
   year: YearSummary
   worldX: number
   cover: Sprite
+  cover2: Sprite // crossfade-overlay voor de slideshow
   bg: Graphics
   container: Container
   scale: number
-  key: string
+  // Slideshow: rouleer de cover door `pool` (crossfade). `pool` is leeg → statisch.
+  pool: string[]
+  idx: number
+  curKey: string // texture-key die nu in `cover` zit (warm houden)
+  pendingKey: string // texture-key die nu in `cover2` zit tijdens een fade
+  pendingIdx: number
+  nextAt: number // wereldklok-tijd (ms) waarop de volgende foto komt
+  fade: number // 0 = niet aan het faden; >0 = crossfade-voortgang
+  loaded: boolean
+}
+
+/** Cover-fit: vul het coverkader met behoud van aspect (mogelijk bijgesneden). */
+function fitCover(sprite: Sprite, tex: Texture): void {
+  const s = Math.max(COVER_W / tex.width, COVER_H / tex.height)
+  sprite.setSize(tex.width * s, tex.height * s)
+  sprite.position.set(COVER_W / 2 - (tex.width * s) / 2, COVER_H / 2 - (tex.height * s) / 2)
 }
 
 export class LifelineScene implements Scene {
   readonly root = new Container()
   private tiles: Tile[] = []
   private hoveredId: string | null = null
+  private slideEnabled: boolean
+  private slideMs: number
 
   constructor(
     private engine: RenderEngine,
     private backend: Backend,
     years: YearSummary[],
+    slideshow: { enabled: boolean; mode: 'featured' | 'random'; speedMs: number } = {
+      enabled: false,
+      mode: 'featured',
+      speedMs: 5000,
+    },
   ) {
+    this.slideEnabled = slideshow.enabled
+    this.slideMs = Math.max(1500, slideshow.speedMs)
+
     years.forEach((year, i) => {
       const worldX = i * (TILE_W + GAP)
       const tile = new Container()
@@ -43,17 +73,21 @@ export class LifelineScene implements Scene {
       bg.roundRect(0, 0, TILE_W, TILE_H, 12).fill(0x1a2030).stroke({ width: 2, color: 0x2c3650 })
       tile.addChild(bg)
 
-      // Cover met afgeronde mask; cover-fit (vult het vlak, behoudt aspect).
+      // Cover + crossfade-overlay in een geklipte container (afgeronde hoeken).
       const coverArea = new Container()
       coverArea.position.set(8, 8)
       const mask = new Graphics()
-      mask.roundRect(0, 0, TILE_W - 16, COVER_H, 8).fill(0xffffff)
+      mask.roundRect(0, 0, COVER_W, COVER_H, 8).fill(0xffffff)
       const cover = new Sprite(Texture.WHITE)
       cover.tint = 0x0e1420
-      cover.setSize(TILE_W - 16, COVER_H)
+      cover.setSize(COVER_W, COVER_H)
+      const cover2 = new Sprite(Texture.WHITE)
+      cover2.setSize(COVER_W, COVER_H)
+      cover2.alpha = 0
       coverArea.addChild(cover)
+      coverArea.addChild(cover2)
       coverArea.addChild(mask)
-      cover.mask = mask
+      coverArea.mask = mask
       tile.addChild(coverArea)
 
       const label = new Text({
@@ -79,8 +113,50 @@ export class LifelineScene implements Scene {
       sub.position.set(TILE_W / 2, COVER_H + 40)
       tile.addChild(sub)
 
+      // ▶-knop rechtsboven op de cover: start de screensaver van dit jaar.
+      const badge = new Container()
+      badge.position.set(TILE_W - BADGE_INSET, BADGE_INSET)
+      const circle = new Graphics()
+      circle
+        .circle(0, 0, BADGE_R)
+        .fill({ color: 0x000000, alpha: 0.45 })
+        .stroke({ width: 1.5, color: 0xffffff, alpha: 0.8 })
+      const tri = new Graphics()
+      tri.poly([-4, -7, -4, 7, 8, 0]).fill({ color: 0xffffff, alpha: 0.95 })
+      badge.addChild(circle)
+      badge.addChild(tri)
+      tile.addChild(badge)
+
       this.root.addChild(tile)
-      this.tiles.push({ year, worldX, cover, bg, container: tile, scale: 1, key: `cover-${year.id}` })
+
+      // Pool voor de slideshow: 'uitgelicht' → de uitgelichte foto's (val terug op
+      // alle foto's als er geen zijn), 'willekeurig' → alle foto's.
+      const pool =
+        slideshow.mode === 'featured'
+          ? year.featuredIds.length
+            ? year.featuredIds
+            : year.photoIds
+          : year.photoIds
+      // Basis-cover: bij een actieve slideshow starten we op de eerste pool-foto,
+      // anders de representatieve cover uit de index.
+      const baseId = this.slideEnabled && pool.length ? pool[0] : year.coverItemId
+      this.tiles.push({
+        year,
+        worldX,
+        cover,
+        cover2,
+        bg,
+        container: tile,
+        scale: 1,
+        pool,
+        idx: 0,
+        curKey: baseId ? `cover-${baseId}` : '',
+        pendingKey: '',
+        pendingIdx: 0,
+        nextAt: 0,
+        fade: 0,
+        loaded: false,
+      })
     })
 
     engine.world.addChild(this.root)
@@ -102,32 +178,93 @@ export class LifelineScene implements Scene {
   }
 
   update(ctx: FrameContext): void {
-    const { engine, frame } = ctx
+    const { engine, frame, dtMS } = ctx
+    const now = performance.now()
+    const dt = Math.min(dtMS, 100)
     for (const tile of this.tiles) {
       // Vloeiende hover-schaal (lerp naar doel).
       const target = tile.year.id === this.hoveredId ? 1.05 : 1
       tile.scale += (target - tile.scale) * 0.2
       tile.container.scale.set(tile.scale)
 
-      if (!tile.year.coverItemId) continue
-      const tex = engine.textures.get(tile.key, frame)
-      if (tex) {
-        if (tile.cover.texture !== tex) {
+      // Basis-cover laden.
+      const baseId = tile.curKey.slice('cover-'.length)
+      if (!tile.loaded && baseId) {
+        const tex = engine.textures.get(tile.curKey, frame)
+        if (tex) {
           tile.cover.texture = tex
           tile.cover.tint = 0xffffff
-          // Cover-fit: vul het vlak met behoud van aspect.
-          const s = Math.max((TILE_W - 16) / tex.width, COVER_H / tex.height)
-          tile.cover.setSize(tex.width * s, tex.height * s)
-          tile.cover.position.set(
-            (TILE_W - 16) / 2 - (tex.width * s) / 2,
-            COVER_H / 2 - (tex.height * s) / 2,
-          )
+          fitCover(tile.cover, tex)
+          tile.loaded = true
+          // Versprongen start zodat niet alle tegels tegelijk wisselen.
+          if (tile.nextAt === 0) tile.nextAt = now + this.slideMs * (0.3 + Math.random())
+        } else {
+          const src = this.backend.thumb(baseId, 256)
+          engine.textures.request({ key: tile.curKey, url: src.url, hue: src.hue, size: 256 })
         }
-      } else {
-        const src = this.backend.thumb(tile.year.coverItemId, 256)
-        engine.textures.request({ key: tile.key, url: src.url, hue: src.hue, size: 256 })
+        continue
+      }
+
+      // Houd de actieve textures warm (voorkom eviction die de cover zwart maakt).
+      if (tile.curKey) engine.textures.get(tile.curKey, frame)
+      if (tile.fade > 0 && tile.pendingKey) engine.textures.get(tile.pendingKey, frame)
+
+      // Slideshow: rouleer de cover door de pool (crossfade).
+      if (this.slideEnabled && tile.loaded && tile.pool.length > 1) {
+        this.tickSlideshow(tile, engine, frame, now, dt)
       }
     }
+  }
+
+  /** Eén slideshow-stap: volgende foto voorbereiden en crossfaden; bij voltooien
+   * wordt de overlay de nieuwe basis. */
+  private tickSlideshow(t: Tile, engine: RenderEngine, frame: number, now: number, dt: number): void {
+    if (t.fade > 0) {
+      t.fade += dt / 300 // ~0.3s crossfade
+      t.cover2.alpha = Math.min(1, t.fade)
+      if (t.fade >= 1) {
+        t.cover.texture = t.cover2.texture
+        t.cover.setSize(t.cover2.width, t.cover2.height)
+        t.cover.position.copyFrom(t.cover2.position)
+        t.cover2.alpha = 0
+        t.idx = t.pendingIdx
+        t.curKey = t.pendingKey
+        t.pendingKey = ''
+        t.fade = 0
+        // Versprongen volgende beurt (licht random in tijd).
+        t.nextAt = now + this.slideMs * (0.7 + Math.random() * 0.6)
+      }
+      return
+    }
+    if (now < t.nextAt) return
+    const nextIdx = (t.idx + 1) % t.pool.length
+    const key = `cover-${t.pool[nextIdx]}`
+    const tex = engine.textures.get(key, frame)
+    if (tex) {
+      t.cover2.texture = tex
+      t.cover2.tint = 0xffffff
+      fitCover(t.cover2, tex)
+      t.cover2.alpha = 0
+      t.pendingIdx = nextIdx
+      t.pendingKey = key
+      t.fade = 0.001 // start crossfade
+    } else {
+      const src = this.backend.thumb(t.pool[nextIdx], 256)
+      engine.textures.request({ key, url: src.url, hue: src.hue, size: 256 })
+    }
+  }
+
+  /** Jaar-id als het punt op de ▶-knop van een tegel valt (met wat marge voor de
+   * hover-schaal), anders null. Checkt vóór hitTest zodat de knop vóór navigatie gaat. */
+  playButtonAt(worldX: number, worldY: number): string | null {
+    for (const tile of this.tiles) {
+      const bx = tile.worldX + TILE_W - BADGE_INSET
+      const by = -TILE_H / 2 + BADGE_INSET
+      if (Math.hypot(worldX - bx, worldY - by) <= BADGE_R + 4) {
+        return tile.year.id
+      }
+    }
+    return null
   }
 
   hitTest(worldX: number, worldY: number): string | null {

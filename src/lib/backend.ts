@@ -14,6 +14,10 @@ export interface YearSummary {
   eventCount: number
   itemCount: number
   coverItemId?: string
+  /** Foto-id's van dit jaar (voor de willekeurige jaar-tegel-slideshow). */
+  photoIds: string[]
+  /** Uitgelichte foto-id's van dit jaar (voor de 'uitgelicht'-slideshow). */
+  featuredIds: string[]
 }
 
 export interface EventSummary {
@@ -439,7 +443,18 @@ class MockBackend implements Backend {
       }
       this.details.set(id, { year: { id, year: y, title: String(y), startAt: `${y}-01-01`, folderName: String(y) }, events })
       this.density.set(id, points)
-      return { id, year: y, title: String(y), startAt: `${y}-01-01`, endAt: `${y}-12-31`, eventCount, itemCount, coverItemId: `${id}-i0` }
+      // Pools voor de jaar-tegel-slideshow: alle foto's, en (mock) elke 2e event
+      // als 'uitgelicht'.
+      const eventPhotos = (eventId: string): string[] => {
+        const nn = 6 + (hueFor(eventId) % 7)
+        return Array.from({ length: Math.max(0, nn - 1) }, (_, k) => `${eventId}-i${k + 1}`)
+      }
+      const photoIds = events.flatMap((ev) => eventPhotos(ev.id)).slice(0, 48)
+      const featuredIds = events
+        .filter((_, e) => e % 2 === 0)
+        .map((ev) => eventPhotos(ev.id)[0])
+        .filter((x): x is string => !!x)
+      return { id, year: y, title: String(y), startAt: `${y}-01-01`, endAt: `${y}-12-31`, eventCount, itemCount, coverItemId: `${id}-i0`, photoIds, featuredIds }
     })
   }
 

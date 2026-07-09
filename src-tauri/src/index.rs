@@ -193,6 +193,12 @@ pub struct YearSummary {
     pub item_count: i64,
     /// Representatieve foto voor de lifeline-tegel (eerste gedateerde foto).
     pub cover_item_id: Option<String>,
+    /// Foto-id's van dit jaar (chronologisch, max ~48) — voor de willekeurige
+    /// jaar-tegel-slideshow.
+    pub photo_ids: Vec<String>,
+    /// Uitgelichte foto-id's van dit jaar (de event-omslagen) — voor de
+    /// 'uitgelicht'-slideshow. Leeg → val terug op `photo_ids`.
+    pub featured_ids: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -270,7 +276,17 @@ pub fn list_years(conn: &Connection) -> rusqlite::Result<Vec<YearSummary>> {
              (SELECT count(*) FROM items i JOIN events e ON i.event_id = e.id WHERE e.year_id = y.id),
              (SELECT i.id FROM items i JOIN events e ON i.event_id = e.id
                  WHERE e.year_id = y.id AND i.item_type = 'photo'
-                 ORDER BY (i.timestamp_ms IS NULL), i.timestamp_ms LIMIT 1)
+                 ORDER BY (i.timestamp_ms IS NULL), i.timestamp_ms LIMIT 1),
+             (SELECT group_concat(id) FROM
+               (SELECT i.id FROM items i JOIN events e ON i.event_id = e.id
+                    WHERE e.year_id = y.id AND i.item_type = 'photo'
+                    ORDER BY (i.timestamp_ms IS NULL), i.timestamp_ms LIMIT 48)),
+             (SELECT group_concat(fid) FROM
+               (SELECT (SELECT i.id FROM items i WHERE i.event_id = e.id AND i.item_type = 'photo'
+                            AND (i.slug = e.featured_photo OR i.id = e.featured_photo) LIMIT 1) AS fid
+                    FROM events e
+                    WHERE e.year_id = y.id AND e.featured_photo IS NOT NULL)
+               WHERE fid IS NOT NULL)
          FROM years y ORDER BY y.year",
     )?;
     let rows = stmt.query_map([], |r| {
@@ -283,6 +299,8 @@ pub fn list_years(conn: &Connection) -> rusqlite::Result<Vec<YearSummary>> {
             event_count: r.get(5)?,
             item_count: r.get(6)?,
             cover_item_id: r.get(7)?,
+            photo_ids: split_ids(r.get(8)?),
+            featured_ids: split_ids(r.get(9)?),
         })
     })?;
     rows.collect()
@@ -1062,6 +1080,25 @@ mod tests {
         assert!(search(&conn, "   ").unwrap().is_empty());
         // Speciale tekens breken de FTS-parser niet.
         assert!(search(&conn, "\"'(*)").unwrap().is_empty());
+    }
+
+    #[test]
+    fn list_years_cover_pools() {
+        // Zonder uitgelichte foto's: featured_ids leeg, photo_ids bevat de foto.
+        let mut conn = open_in_memory().unwrap();
+        load(&mut conn, &sample_model()).unwrap();
+        let y = &list_years(&conn).unwrap()[0];
+        assert!(y.photo_ids.contains(&"it1".to_string()));
+        assert!(y.featured_ids.is_empty());
+
+        // Met een uitgelichte foto (op slug): featured_ids resolveert naar het id.
+        let mut m = sample_model();
+        m.events[0].featured_photo = Some("strand".into());
+        let mut conn = open_in_memory().unwrap();
+        load(&mut conn, &m).unwrap();
+        let y = &list_years(&conn).unwrap()[0];
+        assert_eq!(y.featured_ids, vec!["it1"]);
+        assert!(y.photo_ids.contains(&"it1".to_string()));
     }
 
     #[test]
