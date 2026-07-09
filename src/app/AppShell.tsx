@@ -52,6 +52,8 @@ interface Settings {
   screensaverInclude: string
   /** Screensaver-tagfilter: foto's met een van deze tags uitsluiten (komma-gescheiden). */
   screensaverExclude: string
+  /** Toon de zoekknop linksboven. Uit? Zoeken kan altijd nog met Ctrl+K. */
+  showSearchButton: boolean
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -62,6 +64,7 @@ const DEFAULT_SETTINGS: Settings = {
   viewMode: false,
   screensaverInclude: '',
   screensaverExclude: '',
+  showSearchButton: true,
 }
 const SETTINGS_KEY = 'memorylane-settings'
 
@@ -181,10 +184,15 @@ export function AppShell() {
   // Screensaver: null = dicht, anders de (context-afhankelijke) foto-ids.
   const [screensaverIds, setScreensaverIds] = useState<string[] | null>(null)
   const [toast, setToast] = useState<string | null>(null)
+  // Top-chrome (Zoeken/▶/⚙) verbergt na muis-inactiviteit; muisbeweging toont 'm.
+  const [chromeVisible, setChromeVisible] = useState(true)
   // Ref-spiegel zodat de (één keer opgezette) engine-closures de actuele
   // voorkeuren lezen zonder stale closure.
   const settingsRef = useRef(settings)
   settingsRef.current = settings
+  // Zelfde truc voor `phase`: de globale key-closure (Ctrl+K) leest de actuele fase.
+  const phaseRef = useRef(phase)
+  phaseRef.current = phase
 
   const updateSettings = (patch: Partial<Settings>): void => {
     const next = { ...settingsRef.current, ...patch }
@@ -712,6 +720,41 @@ export function AppShell() {
     return () => window.clearTimeout(t)
   }, [toast])
 
+  // Ctrl/Cmd+K opent altijd zoeken — ook als de zoekknop verborgen is.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
+        e.preventDefault()
+        if (dialogOpenRef.current || overlayOpenRef.current) return
+        if (phaseRef.current === 'ready') setSearchOpen(true)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
+  // Verberg de top-chrome na ~4s zonder muisbeweging; muisbeweging toont 'm weer.
+  // Tijdens de screensaver niet actief (die vangt mousemove zelf af om te sluiten).
+  useEffect(() => {
+    if (screensaverIds !== null) return
+    setChromeVisible(true)
+    let timer = 0
+    const schedule = (): void => {
+      window.clearTimeout(timer)
+      timer = window.setTimeout(() => setChromeVisible(false), 4000)
+    }
+    const onMove = (): void => {
+      setChromeVisible(true) // React bailt uit als de waarde al true is
+      schedule()
+    }
+    window.addEventListener('mousemove', onMove)
+    schedule()
+    return () => {
+      window.clearTimeout(timer)
+      window.removeEventListener('mousemove', onMove)
+    }
+  }, [screensaverIds])
+
   const pickVault = async (): Promise<void> => {
     const backend = backendRef.current
     if (!backend) return
@@ -1040,21 +1083,21 @@ export function AppShell() {
           View-modus — druk op <b>E</b> voor de knoppen
         </div>
       )}
-      {phase === 'ready' && !modal && !editing && !eventForm && !metaForm && !searchOpen && !settingsOpen && !settings.viewMode && (
-        <button onClick={() => setSearchOpen(true)} style={searchBtn} title="Zoeken">
+      {phase === 'ready' && !modal && !editing && !eventForm && !metaForm && !searchOpen && !settingsOpen && !settings.viewMode && chromeVisible && settings.showSearchButton && (
+        <button onClick={() => setSearchOpen(true)} style={searchBtn} title="Zoeken (Ctrl+K)">
           Zoeken…
         </button>
       )}
-      {phase === 'ready' && !modal && !editing && !eventForm && !metaForm && !searchOpen && !settingsOpen && !settings.viewMode && (
+      {phase === 'ready' && !modal && !editing && !eventForm && !metaForm && !searchOpen && !settingsOpen && !settings.viewMode && chromeVisible && (
         <button
           onClick={() => void startScreensaver()}
-          style={screensaverBtn}
+          style={settings.showSearchButton ? screensaverBtn : screensaverBtnLeft}
           title="Screensaver (diavoorstelling)"
         >
           ▶
         </button>
       )}
-      {phase === 'ready' && !modal && !editing && !eventForm && !metaForm && !searchOpen && !settingsOpen && !settings.viewMode && (
+      {phase === 'ready' && !modal && !editing && !eventForm && !metaForm && !searchOpen && !settingsOpen && !settings.viewMode && chromeVisible && (
         <button onClick={() => setSettingsOpen(true)} style={gearBtn} title="Instellingen">
           ⚙
         </button>
@@ -1337,6 +1380,20 @@ function SettingsPanel({
         </label>
         <div style={{ fontSize: 12, color: '#6a7690', marginTop: 6 }}>
           Een schone weergave zonder knoppen. Druk op <b>E</b> om te wisselen.
+        </div>
+
+        <div style={{ height: 1, background: '#2c3650', margin: '18px 0' }} />
+        <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
+          <input
+            type="checkbox"
+            checked={settings.showSearchButton}
+            onChange={(e) => onChange({ showSearchButton: e.target.checked })}
+          />
+          <span style={{ fontSize: 14, color: '#fff' }}>Zoekknop tonen</span>
+        </label>
+        <div style={{ fontSize: 12, color: '#6a7690', marginTop: 6 }}>
+          Uit? Zoeken kan altijd nog met <b>Ctrl+K</b>. De knoppen verdwijnen sowieso na een paar
+          seconden zonder muisbeweging.
         </div>
 
         <div style={{ height: 1, background: '#2c3650', margin: '18px 0' }} />
@@ -1715,6 +1772,9 @@ const screensaverBtn: React.CSSProperties = {
   lineHeight: '1',
   cursor: 'pointer',
 }
+
+// Zonder zoekknop schuift de screensaver-knop naar de plek van die knop.
+const screensaverBtnLeft: React.CSSProperties = { ...screensaverBtn, left: 16 }
 
 const toastStyle: React.CSSProperties = {
   position: 'absolute',
