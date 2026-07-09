@@ -1368,9 +1368,19 @@ function SettingsPanel({
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        style={{ width: 460, maxWidth: '90%', background: '#161c28', borderRadius: 12, padding: 20 }}
+        style={{
+          width: 460,
+          maxWidth: '90%',
+          maxHeight: '88vh',
+          background: '#161c28',
+          borderRadius: 12,
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+        }}
       >
-        <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 16 }}>Instellingen</div>
+        <div style={{ fontSize: 18, fontWeight: 700, padding: '20px 20px 12px' }}>Instellingen</div>
+        <div style={{ overflowY: 'auto', padding: '0 20px 4px', flex: '1 1 auto' }}>
         <div style={{ fontSize: 13, color: '#8a97b0', marginBottom: 6 }}>Standaard canvas-weergave</div>
         <div style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
           <button onClick={() => onChange({ defaultLayout: 'custom' })} style={seg('custom')}>Eigen</button>
@@ -1510,7 +1520,15 @@ function SettingsPanel({
           dat jaar, event = dat event). Start 'm met ▶ linksboven. Sluiten met Esc.
         </div>
 
-        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 18 }}>
+        </div>
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'flex-end',
+            padding: '12px 20px',
+            borderTop: '1px solid #2c3650',
+          }}
+        >
           <button onClick={onClose} style={primaryBtn}>Klaar</button>
         </div>
       </div>
