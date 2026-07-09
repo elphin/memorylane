@@ -13,7 +13,8 @@ const AXIS_W = 2400 // wereldbreedte van de jaar-as (Jan..Dec)
 const THUMB_W = 168
 const THUMB_H = 126
 const BORDER = 8
-const AXIS_GAP = 104 // afstand as → midden van de eerste lane-kaart
+const AXIS_GAP = 118 // afstand as → midden van de eerste lane-kaart
+const LABEL_CLEARANCE = 46 // extra ruimte onder de as (voor de maandnamen)
 const LANE_GAP = 22 // verticale ruimte tussen lanes
 const CARD_GAP = 26 // min. horizontale ruimte tussen kaarten in dezelfde lane
 const DOT_R = 9 // marker voor events zonder cover
@@ -181,14 +182,16 @@ export class YearScene implements Scene {
 
     const laneRight: Record<string, number> = {}
     let maxAbsY = 0
+    // Speelse verticale variatie: meer events → meer verschil (met een ruime
+    // minimum-marge). De jitter duwt kaarten alleen NAAR BUITEN (weg van de as),
+    // zodat de marge onder de maandnamen altijd behouden blijft.
+    const jyAmp = Math.min(120, 30 + withCover.length * 2)
 
     withCover.forEach((ev, j) => {
       const anchorX = anchorFor(ev)
-      // "Vrije" plaatsing: nudge de kaart wat naast zijn exacte datum (deterministisch
-      // per event) zodat het speelser oogt; de gebogen leader verbindt 'm met de datum.
       const seed = hashId(ev.id)
-      const jx = ((seed % 1000) / 1000 - 0.5) * 64 // ±32
-      const jy = (((seed >>> 10) % 1000) / 1000 - 0.5) * 28 // ±14
+      const jx = ((seed % 1000) / 1000 - 0.5) * 64 // ±32 (speels zijwaarts)
+      const jy = (((seed >>> 10) % 1000) / 1000) * jyAmp // 0..jyAmp, altijd naar buiten
       const cardX = anchorX + jx
       // Wissel de voorkeurszijde per event → gebalanceerd boven/onder.
       const prefer = j % 2 === 0 ? -1 : 1 // -1 = boven (neg. y), 1 = onder
@@ -209,18 +212,20 @@ export class YearScene implements Scene {
         }
       }
       laneRight[`${side}:${level}`] = cardX + THUMB_W / 2
-      const cardY = side * (AXIS_GAP + level * (THUMB_H + LANE_GAP)) + jy
+      // Onder de as extra ruimte voor de maandnamen; jitter alleen naar buiten.
+      const gap = AXIS_GAP + (side === 1 ? LABEL_CLEARANCE : 0)
+      const cardY = side * (gap + level * (THUMB_H + LANE_GAP) + jy)
       maxAbsY = Math.max(maxAbsY, Math.abs(cardY) + THUMB_H / 2)
 
-      // Gebogen leader: van de RAND van het blokje (meerdaags) of de as-lijn, in een
-      // vloeiende S-curve naar de binnenrand van de kaart. 1px, ongeacht de zoom.
+      // Gebogen leader (2px): van de RAND van het blokje (meerdaags) of de as-lijn,
+      // in een vloeiende S-curve naar de binnenrand van de kaart.
       const innerY = cardY - side * (THUMB_H / 2)
       const startY = spanColor.has(ev.id) ? side * 9 : 0
       const midY = (startY + innerY) / 2
       leaders
         .moveTo(anchorX, startY)
         .bezierCurveTo(anchorX, midY, cardX, midY, cardX, innerY)
-        .stroke({ width: 1, color: 0x3a4256, alpha: 0.7, pixelLine: true })
+        .stroke({ width: 2, color: 0x3a4256, alpha: 0.7, pixelLine: true })
 
       this.nodes.push(this.buildCard(ev, cardX, cardY))
     })
