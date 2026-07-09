@@ -174,7 +174,7 @@ export class EventScene implements Scene {
   /** Herschik het canvas. 'custom' herstelt de eigen posities; 'grid' zet ze
    * chronologisch in een vierkant raster; 'scatter' verspreidt ze speels
    * (kriskras + scheef, elke aanroep opnieuw). Grid/scatter persisteren NIET. */
-  applyLayout(mode: 'custom' | 'grid' | 'scatter', snap = false): void {
+  applyLayout(mode: 'custom' | 'grid' | 'scatter', snap = false, scatterRotate = true): void {
     this.mode = mode
     // Zet alleen de DOEL-posities/-rotatie; `update()` animeert de nodes ernaartoe.
     // z-order snapt wel meteen (anders "kruipen" de kaarten door elkaar).
@@ -214,7 +214,7 @@ export class EventScene implements Scene {
         const jy = (Math.random() - 0.5) * S * 0.75
         n.tx = (i % cols) * S - ((cols - 1) * S) / 2 + jx
         n.ty = Math.floor(i / cols) * S + jy
-        n.trot = (Math.random() - 0.5) * 0.5 // ±0.25 rad
+        n.trot = scatterRotate ? (Math.random() - 0.5) * 0.5 : 0 // ±0.25 rad, of recht
         n.z = Math.floor(Math.random() * 1000)
         n.container.zIndex = n.z
       })
@@ -296,6 +296,14 @@ export class EventScene implements Scene {
     if (snap) this.snapAll()
     this.refit()
     return { matched, total: this.nodes.length }
+  }
+
+  /** Zet alle kaarten recht (false) of licht scheef (true) zónder de posities te
+   * wijzigen — voor de scatter-rotatie-toggle. `update()` animeert de rotatie. */
+  setScatterRotation(rotate: boolean): void {
+    for (const n of this.nodes) {
+      n.trot = rotate ? (Math.random() - 0.5) * 0.5 : 0
+    }
   }
 
   /** Legt de HUIDIGE opstelling (posities + rotaties, bijv. een scatter of

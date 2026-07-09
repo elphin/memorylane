@@ -43,7 +43,7 @@ export interface Scene {
   /** Herschik het event-canvas: 'custom' (eigen posities), 'grid' (chronologisch,
    * vierkant) of 'scatter' (speels kriskras — elke aanroep opnieuw). `snap` zet de
    * kaarten meteen op hun plek (geen animatie), voor de eerste opbouw. Alleen L2. */
-  applyLayout?(mode: 'custom' | 'grid' | 'scatter', snap?: boolean): void
+  applyLayout?(mode: 'custom' | 'grid' | 'scatter', snap?: boolean, scatterRotate?: boolean): void
   /** Herstel expliciete posities (een onthouden scatter/grid per event). Items
    * zonder opgeslagen positie (later toegevoegd) worden bij het zwaartepunt
    * geplaatst. Geeft terug hoeveel er matchten en het totaal. Alleen L2. */
@@ -54,6 +54,8 @@ export interface Scene {
   ): { matched: number; total: number }
   /** Huidige layout-stand + doelposities (voor het onthouden per event). Alleen L2. */
   layoutState?(): { mode: 'custom' | 'grid' | 'scatter'; positions: NodePosition[] }
+  /** Zet de scatter-kaarten recht of licht scheef, posities ongemoeid (alleen L2). */
+  setScatterRotation?(rotate: boolean): void
   /** Leg de huidige opstelling vast als de eigen layout (alleen L2). */
   saveAsCustom?(): void
   /** Laatst gefitte zoom (alleen L3): referentie voor de terug-uitzoom-drempel,

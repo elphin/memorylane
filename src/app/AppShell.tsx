@@ -59,6 +59,8 @@ interface Settings {
   /** Bron voor de jaar-tegel-cover: 'featured' = de uitgelichte foto's van dat
    * jaar, 'random' = alle foto's. */
   yearCoverMode: 'featured' | 'random'
+  /** Legt scatter de foto's licht scheef (geroteerd) of recht? */
+  scatterRotate: boolean
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -72,6 +74,7 @@ const DEFAULT_SETTINGS: Settings = {
   showSearchButton: true,
   yearTileSlideshow: false,
   yearCoverMode: 'featured',
+  scatterRotate: true,
 }
 const SETTINGS_KEY = 'memorylane-settings'
 
@@ -360,7 +363,7 @@ export function AppShell() {
     const applyDefaultView = (scene: EventScene, eventId: string): void => {
       const dl = settingsRef.current.defaultLayout
       if (dl !== 'custom') {
-        scene.applyLayout(dl, true) // snap: geen inklap-animatie bij binnenkomst
+        scene.applyLayout(dl, true, settingsRef.current.scatterRotate) // snap: geen inklap-animatie bij binnenkomst
         setLayoutMode(dl)
         saveEventView(eventId, { mode: dl, positions: scene.layoutState().positions })
       } else {
@@ -872,12 +875,25 @@ export function AppShell() {
   const changeLayout = (mode: 'custom' | 'grid' | 'scatter'): void => {
     setLayoutMode(mode)
     const scene = sceneRef.current
-    scene?.applyLayout?.(mode)
+    scene?.applyLayout?.(mode, false, settingsRef.current.scatterRotate)
     // Onthoud de view per event. Grid/scatter: de zojuist gezette doelposities.
     const id = currentEventRef.current
     const state = scene?.layoutState?.()
     if (id && state) {
       saveEventView(id, mode === 'custom' ? { mode: 'custom' } : { mode, positions: state.positions })
+    }
+  }
+
+  // Toggle of scatter foto's licht scheef legt. Zit je nu in scatter, pas het dan
+  // meteen toe (posities blijven, alleen de rotatie wijzigt) en onthoud de view.
+  const toggleScatterRotate = (): void => {
+    const next = !settingsRef.current.scatterRotate
+    updateSettings({ scatterRotate: next })
+    if (layoutMode === 'scatter') {
+      sceneRef.current?.setScatterRotation?.(next)
+      const id = currentEventRef.current
+      const state = sceneRef.current?.layoutState?.()
+      if (id && state) saveEventView(id, { mode: 'scatter', positions: state.positions })
     }
   }
 
@@ -1164,6 +1180,8 @@ export function AppShell() {
           onSaveLayout={saveLayoutAsCustom}
           onEdit={startEdit}
           onDelete={() => void deleteCurrent()}
+          scatterRotate={settings.scatterRotate}
+          onToggleScatterRotate={toggleScatterRotate}
         />
       )}
       {modal && (
@@ -1524,6 +1542,8 @@ function Fab({
   onSaveLayout,
   onEdit,
   onDelete,
+  scatterRotate,
+  onToggleScatterRotate,
 }: {
   uiLevel: 'lifeline' | 'year' | 'event' | 'focus'
   layoutMode: 'custom' | 'grid' | 'scatter'
@@ -1535,6 +1555,8 @@ function Fab({
   onSaveLayout: () => void
   onEdit: () => void
   onDelete: () => void
+  scatterRotate: boolean
+  onToggleScatterRotate: () => void
 }) {
   const wrap: React.CSSProperties = { position: 'absolute', right: 20, bottom: 20, display: 'flex', gap: 10 }
   if (uiLevel === 'year') {
@@ -1555,6 +1577,13 @@ function Fab({
         <button onClick={() => onLayout('grid')} style={seg('grid')}>Grid</button>
         <button onClick={() => onLayout('scatter')} style={seg('scatter')} title="Elke klik een nieuwe worp">
           Scatter 🎲
+        </button>
+        <button
+          onClick={onToggleScatterRotate}
+          style={{ ...fabBtn, background: scatterRotate ? '#3b82f6' : '#1f2734', width: 42, paddingLeft: 0, paddingRight: 0 }}
+          title={scatterRotate ? 'Scatter legt foto’s scheef (klik = recht)' : 'Scatter legt foto’s recht (klik = scheef)'}
+        >
+          {scatterRotate ? '⟲' : '▭'}
         </button>
         {layoutMode !== 'custom' && (
           <button onClick={onSaveLayout} style={{ ...fabBtn, background: '#166534' }} title="Deze opstelling vastleggen als je eigen layout">
