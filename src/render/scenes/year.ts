@@ -7,6 +7,7 @@
 import { Container, Graphics, Sprite, Text, Texture } from 'pixi.js'
 import type { Backend, EventSummary, YearDetail } from '../../lib/backend'
 import type { FrameContext, RenderEngine } from '../core/engine'
+import type { DragHandle } from '../core/gestures'
 import type { Scene } from './scene'
 
 const AXIS_W = 2400 // wereldbreedte van de jaar-as (Jan..Dec)
@@ -47,6 +48,7 @@ interface Node {
   loaded: boolean
   scale: number
   baseScale: number // vaste grootte-schaal (belang); apart van de hover-animatie
+  size: number // belang 1–100 (bron van baseScale); leeft mee met Shift-resize
   wasVisible: boolean // vorige frame in beeld? (voor nextAt-reset bij herintrede)
   // Slideshow-roulatie (alleen cover-kaarten met >1 foto).
   photoIds: string[]
@@ -382,6 +384,7 @@ export class YearScene implements Scene {
       loaded: false,
       scale: 1,
       baseScale,
+      size: ev.size ?? 50,
       wasVisible: false,
       photoIds,
       photoIdx: startIdx,
@@ -434,6 +437,7 @@ export class YearScene implements Scene {
       loaded: false,
       scale: 1,
       baseScale: 1,
+      size: ev.size ?? 50,
       wasVisible: false,
       photoIds: [],
       photoIdx: 0,
@@ -570,6 +574,40 @@ export class YearScene implements Scene {
       const n = this.nodes[i]
       if (Math.abs(worldX - n.cardX) <= n.halfW && Math.abs(worldY - n.cardY) <= n.halfH) {
         return n.eventId
+      }
+    }
+    return null
+  }
+
+  /** Shift-slepen op een cover-kaart wijzigt het belang (grootte): de schaal
+   * volgt live de sleepafstand vanaf het kaartmidden, bij loslaten persisteren
+   * we de nieuwe `size` naar de vault. Niets geraakt → null (dan pant de camera). */
+  beginResize(worldX: number, worldY: number): DragHandle | null {
+    for (let i = this.nodes.length - 1; i >= 0; i--) {
+      const n = this.nodes[i]
+      if (!n.hasCover) continue
+      if (Math.abs(worldX - n.cardX) > n.halfW || Math.abs(worldY - n.cardY) > n.halfH) continue
+      // Afstand-tot-midden bij pointerdown als referentie (net als de foto-schaal
+      // op het event-canvas); een ondergrens houdt het rond het midden rustig.
+      const startDist = Math.max(20, Math.hypot(worldX - n.cardX, worldY - n.cardY))
+      const startSize = n.size
+      let changed = false
+      const apply = (size: number): void => {
+        n.size = Math.max(1, Math.min(100, Math.round(size)))
+        n.baseScale = cardScale(n.size)
+        n.halfW = (THUMB_W / 2 + BORDER) * n.baseScale
+        n.halfH = (THUMB_H / 2 + BORDER) * n.baseScale
+        n.container.scale.set(n.scale * n.baseScale)
+      }
+      return {
+        moveTo: (mx, my) => {
+          const f = Math.hypot(mx - n.cardX, my - n.cardY) / startDist
+          apply(startSize * f)
+          changed = true
+        },
+        end: () => {
+          if (changed) void this.backend.setEventSize(n.eventId, n.size)
+        },
       }
     }
     return null

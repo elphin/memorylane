@@ -788,6 +788,25 @@ export function AppShell() {
             }
           }
         }
+        // Shift-slepen op de jaar-tijdlijn = het belang (grootte) van een event
+        // bijstellen. Valt terug op een camera-pan als er geen kaart geraakt is.
+        if (levelRef.current === 'year' && mods.shift && scene?.beginResize) {
+          const h = scene.beginResize(wx, wy)
+          if (h) {
+            return {
+              moveTo: h.moveTo,
+              // Onderdruk de naloop-tap (→L2) na een resize, ook bij een mini-beweging.
+              end: () => {
+                rangeJustEnded = true
+                h.end()
+              },
+              cancel: () => {
+                rangeJustEnded = true
+                h.cancel?.()
+              },
+            }
+          }
+        }
         return scene?.beginDrag?.(wx, wy) ?? null
       }
       engine.onTap = (wx, wy) => {

@@ -39,6 +39,9 @@ export interface Scene {
   /** Roteer/schaal de foto onder het wereldpunt (Alt-/Shift-slepen, alleen L2 in de
    * eigen layout). Geeft een DragHandle of null als er niets te pakken is. */
   beginTransform?(worldX: number, worldY: number, kind: 'rotate' | 'scale'): DragHandle | null
+  /** Shift-slepen op een event-kaart wijzigt zijn belang/grootte (alleen L1-jaar).
+   * Geeft een DragHandle of null als er geen kaart onder het punt zit. */
+  beginResize?(worldX: number, worldY: number): DragHandle | null
   /** Zet de uitgelichte foto (op ref) en werk de markering bij (alleen L2). */
   setFeatured?(ref: string | null): void
   /** Zet de vaste jaar-cover (op item-id) en werk de blauwe rand bij (alleen L2). */
