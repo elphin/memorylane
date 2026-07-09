@@ -26,7 +26,8 @@ interface Node {
   ref: string
   container: Container
   sprite: Sprite | null
-  ring: Graphics | null // gekleurde rand als deze foto de uitgelichte is
+  ring: Graphics | null // gouden rand als deze foto de event-omslag (featured) is
+  yearRing: Graphics | null // blauwe rand als deze foto de vaste jaar-cover is
   x: number
   y: number
   // Doel-positie/-rotatie; `update()` lerpt de node hier vloeiend naartoe (voor
@@ -60,6 +61,7 @@ export class EventScene implements Scene {
   private zTop = 0
   private hoveredId: string | null = null
   private featuredRef: string | null
+  private yearCoverId: string | null
   private mode: 'custom' | 'grid' | 'scatter' = 'custom'
 
   constructor(
@@ -72,6 +74,7 @@ export class EventScene implements Scene {
     private onViewChange?: (state: LayoutState) => void,
   ) {
     this.featuredRef = detail.event.featuredPhoto ?? null
+    this.yearCoverId = detail.yearCover ?? null
     const layout = new Map(detail.canvas.map((c) => [c.itemRef, c]))
     const cols = Math.max(1, Math.ceil(Math.sqrt(detail.items.length)))
 
@@ -83,10 +86,13 @@ export class EventScene implements Scene {
 
       let sprite: Sprite | null = null
       let ring: Graphics | null = null
+      let yearRing: Graphics | null = null
       if (isText) {
         this.buildTextCard(container, item)
       } else {
         sprite = this.buildPhotoCard(container)
+        yearRing = this.buildYearRing(container) // onder de gouden ring
+        yearRing.visible = item.id === this.yearCoverId
         ring = this.buildFeaturedRing(container)
         ring.visible = ref === this.featuredRef
       }
@@ -109,6 +115,7 @@ export class EventScene implements Scene {
         container,
         sprite,
         ring,
+        yearRing,
         x,
         y,
         tx: x,
@@ -163,11 +170,29 @@ export class EventScene implements Scene {
     return ring
   }
 
+  /** Blauwe rand (net buiten de gouden) die de vaste jaar-cover markeert. */
+  private buildYearRing(container: Container): Graphics {
+    const r = PHOTO / 2 + BORDER + 8
+    const ring = new Graphics()
+    ring.roundRect(-r, -r, r * 2, r * 2, 8).stroke({ width: 4, color: 0x4b9bff, alignment: 0 })
+    ring.visible = false
+    container.addChild(ring)
+    return ring
+  }
+
   /** Zet de uitgelichte foto (op ref) — werkt de rand in-place bij. */
   setFeatured(ref: string | null): void {
     this.featuredRef = ref
     for (const n of this.nodes) {
       if (n.ring) n.ring.visible = n.ref === ref
+    }
+  }
+
+  /** Zet de vaste jaar-cover (op item-id) — werkt de blauwe rand in-place bij. */
+  setYearFeatured(itemId: string | null): void {
+    this.yearCoverId = itemId
+    for (const n of this.nodes) {
+      if (n.yearRing) n.yearRing.visible = n.item.id === itemId
     }
   }
 

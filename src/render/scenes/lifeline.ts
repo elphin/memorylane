@@ -113,17 +113,20 @@ export class LifelineScene implements Scene {
 
       this.root.addChild(tile)
 
-      // Pool voor de slideshow: 'uitgelicht' → de uitgelichte foto's (val terug op
-      // alle foto's als er geen zijn), 'willekeurig' → alle foto's.
-      const pool =
-        slideshow.mode === 'featured'
+      // Vaste jaar-cover (geprikt) wint altijd: geen slideshow, één vaste foto.
+      // Anders: pool voor de slideshow — 'uitgelicht' (val terug op alle foto's) of
+      // 'willekeurig' (alle foto's).
+      const pinned = year.pinnedCover
+      const pool = pinned
+        ? []
+        : slideshow.mode === 'featured'
           ? year.featuredIds.length
             ? year.featuredIds
             : year.photoIds
           : year.photoIds
-      // Basis-cover: bij een actieve slideshow starten we op de eerste pool-foto,
+      // Basis-cover: de pin, anders bij een actieve slideshow de eerste pool-foto,
       // anders de representatieve cover uit de index.
-      const baseId = this.slideEnabled && pool.length ? pool[0] : year.coverItemId
+      const baseId = pinned ?? (this.slideEnabled && pool.length ? pool[0] : year.coverItemId)
       this.tiles.push({
         year,
         worldX,

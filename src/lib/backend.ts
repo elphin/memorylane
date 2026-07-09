@@ -18,6 +18,8 @@ export interface YearSummary {
   photoIds: string[]
   /** Uitgelichte foto-id's van dit jaar (voor de 'uitgelicht'-slideshow). */
   featuredIds: string[]
+  /** Vaste jaar-cover (item-id) indien geprikt — tegel is dan statisch. */
+  pinnedCover?: string
 }
 
 export interface EventSummary {
@@ -93,6 +95,8 @@ export interface EventInfo {
   startAt: string
   endAt?: string
   folderPath: string
+  /** Id van het jaar waaronder dit event valt. */
+  yearId: string
   /** Slug of id van de uitgelichte foto (jaar-omslag), indien gekozen. */
   featuredPhoto?: string
 }
@@ -101,6 +105,8 @@ export interface EventDetail {
   event: EventInfo
   items: Item[]
   canvas: CanvasItem[]
+  /** Vaste jaar-cover (item-id) van dit jaar, of undefined — voor de 2e ring op L2. */
+  yearCover?: string
 }
 
 export interface ExifEntry {
@@ -165,6 +171,8 @@ export interface Backend {
   createTextItem(eventId: string, caption: string | null, body: string): Promise<string>
   /** Zet (of wist bij `null`) de uitgelichte foto van een event (jaar-omslag). */
   setFeatured(eventId: string, itemRef: string | null): Promise<void>
+  /** Zet (of wist bij `null`) de vaste jaar-cover (item-id) van een jaar. */
+  setYearCover(yearId: string, itemRef: string | null): Promise<void>
   createEvent(yearId: string, title: string, startAt: string, endAt: string | null): Promise<string>
   /** Werkt titel/begin-/einddatum van een event bij. `endAt = null` verwijdert
    * de einddatum. */
@@ -319,6 +327,11 @@ class TauriBackend implements Backend {
     await invoke('set_featured', { eventId, itemRef })
   }
 
+  async setYearCover(yearId: string, itemRef: string | null): Promise<void> {
+    const invoke = await this.api()
+    await invoke('set_year_cover', { yearId, itemRef })
+  }
+
   async importPhotos(eventId: string): Promise<number> {
     const dialog = await import('@tauri-apps/plugin-dialog')
     const picked = await dialog.open({
@@ -398,6 +411,7 @@ class MockBackend implements Backend {
   private edits = new Map<string, { caption: string | null; body: string | null }>()
   private meta = new Map<string, ItemMetadata>()
   private featured = new Map<string, string>() // eventId → item-ref
+  private yearCovers = new Map<string, string>() // yearId → item-id (vaste jaar-cover)
   private newEventSeq = 0
   private thumbCache = new Map<string, string>()
 
@@ -465,7 +479,15 @@ class MockBackend implements Backend {
     return { yearCount: this.years.length, eventCount: 12, itemCount: 200, errorCount: 0 }
   }
   async listYears(): Promise<YearSummary[]> {
-    return this.years
+    // pinnedCover dynamisch: kan tijdens de sessie via setYearCover wijzigen.
+    return this.years.map((y) => {
+      const pin = this.yearCovers.get(y.id)
+      return pin ? { ...y, pinnedCover: pin, coverItemId: pin } : { ...y, pinnedCover: undefined }
+    })
+  }
+  async setYearCover(yearId: string, itemRef: string | null): Promise<void> {
+    if (itemRef) this.yearCovers.set(yearId, itemRef)
+    else this.yearCovers.delete(yearId)
   }
   async getYear(yearId: string): Promise<YearDetail | null> {
     const detail = this.details.get(yearId)
@@ -554,6 +576,7 @@ class MockBackend implements Backend {
           bodyText: e.body !== null ? e.body : it.bodyText,
         }
       })
+    const yearId = eventId.split('-')[0] ?? ''
     return {
       event: {
         id: eventId,
@@ -562,10 +585,12 @@ class MockBackend implements Backend {
         startAt: summary?.startAt ?? '2024-06-15',
         endAt: summary?.endAt,
         folderPath: 'mock',
+        yearId,
         featuredPhoto: this.featured.get(eventId),
       },
       items,
       canvas: [],
+      yearCover: this.yearCovers.get(yearId),
     }
   }
   async saveCanvasLayout(): Promise<void> {

@@ -301,6 +301,7 @@ export function AppShell() {
   const currentYearRef = useRef<string | null>(null)
   const currentEventRef = useRef<string | null>(null)
   const currentEventInfoRef = useRef<EventInfo | null>(null)
+  const currentYearCoverRef = useRef<string | null>(null) // item-id van de jaar-cover
   const currentItemsRef = useRef<Item[]>([])
   const entryZoomRef = useRef(1)
   const enterSeqRef = useRef(0)
@@ -463,6 +464,7 @@ export function AppShell() {
         applyPanLock()
         currentEventRef.current = eventId
         currentEventInfoRef.current = detail.event
+        currentYearCoverRef.current = detail.yearCover ?? null
         currentItemsRef.current = detail.items
         entryZoomRef.current = engine.pendingZoom
       } catch (e) {
@@ -536,6 +538,29 @@ export function AppShell() {
         setMessage(String(e))
         setPhase('error')
       })
+    }
+
+    // Ctrl+Shift-klik: prik/loskoppel de VASTE jaar-cover (max één per jaar). De pin
+    // gebeurt op item-id; het jaar komt betrouwbaar uit het event zelf (yearId).
+    const toggleYearCover = (ref: string): void => {
+      const backend = backendRef.current
+      const info = currentEventInfoRef.current
+      if (!backend || !info) return
+      const item = currentItemsRef.current.find((it) => (it.slug ?? it.id) === ref)
+      if (!item) return
+      const next = currentYearCoverRef.current === item.id ? null : item.id
+      currentYearCoverRef.current = next
+      sceneRef.current?.setYearFeatured?.(next)
+      void backend
+        .setYearCover(info.yearId, next)
+        .then(async () => {
+          // Zodat de lifeline-tegel bij terugkeer de nieuwe cover toont.
+          yearsRef.current = await backend.listYears()
+        })
+        .catch((e) => {
+          setMessage(String(e))
+          setPhase('error')
+        })
     }
 
     const onKeyDown = (e: KeyboardEvent): void => {
@@ -688,11 +713,15 @@ export function AppShell() {
         // item-drag start. `end()` togglet en onderdrukt de naloop-tap→L3.
         if (levelRef.current === 'event' && ctrlDown && scene?.refAt) {
           const ref = scene.refAt(wx, wy)
+          const yearPin = mods.shift // Ctrl+Shift = vaste jaar-cover i.p.v. event-cover
           return {
             moveTo: () => {},
             end: () => {
               rangeJustEnded = true
-              if (ref) toggleFeatured(ref)
+              if (ref) {
+                if (yearPin) toggleYearCover(ref)
+                else toggleFeatured(ref)
+              }
             },
             cancel: () => {
               rangeJustEnded = true

@@ -41,6 +41,8 @@ export interface Scene {
   beginTransform?(worldX: number, worldY: number, kind: 'rotate' | 'scale'): DragHandle | null
   /** Zet de uitgelichte foto (op ref) en werk de markering bij (alleen L2). */
   setFeatured?(ref: string | null): void
+  /** Zet de vaste jaar-cover (op item-id) en werk de blauwe rand bij (alleen L2). */
+  setYearFeatured?(itemId: string | null): void
   /** Ref (slug/id) van de foto onder een wereldpunt, of null (alleen L2). */
   refAt?(worldX: number, worldY: number): string | null
   /** Herschik het event-canvas: 'custom' (eigen posities), 'grid' (chronologisch,
