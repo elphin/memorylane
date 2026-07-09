@@ -193,8 +193,12 @@ export function AppShell() {
   const [layoutMode, setLayoutMode] = useState<'custom' | 'grid' | 'scatter'>('custom')
   const [settings, setSettings] = useState<Settings>(loadSettings)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  // Titel bovenin: "Memory Lane" (overzicht), het jaar, of de eventnaam.
-  const [headerTitle, setHeaderTitle] = useState('Memory Lane')
+  // Titel bovenin: "Memory Lane" (overzicht), het jaar, of de eventnaam. `dir`
+  // bepaalt de richting van de zoom/crossfade (in = dieper, out = terug).
+  const [header, setHeader] = useState<{ text: string; dir: 'in' | 'out' }>({
+    text: 'Memory Lane',
+    dir: 'out',
+  })
   // Screensaver: null = dicht, anders de (context-afhankelijke) foto-ids.
   const [screensaverIds, setScreensaverIds] = useState<string[] | null>(null)
   const [toast, setToast] = useState<string | null>(null)
@@ -318,7 +322,7 @@ export function AppShell() {
       engine.revealScene(scene.root, 'out')
       levelRef.current = 'lifeline'
       setUiLevel('lifeline')
-      setHeaderTitle('Memory Lane')
+      setHeader({ text: 'Memory Lane', dir: 'out' })
       applyPanLock()
     }
     setupLifelineRef.current = setupLifeline
@@ -344,7 +348,7 @@ export function AppShell() {
         revealScene(engine, scene, dir)
         levelRef.current = 'year'
         setUiLevel('year')
-        setHeaderTitle(detail.year.title)
+        setHeader({ text: detail.year.title, dir })
         applyPanLock()
         currentYearRef.current = yearId
         entryZoomRef.current = engine.pendingZoom
@@ -441,7 +445,7 @@ export function AppShell() {
         revealScene(engine, scene, dir)
         levelRef.current = 'event'
         setUiLevel('event')
-        setHeaderTitle(detail.event.title || detail.event.startAt)
+        setHeader({ text: detail.event.title || detail.event.startAt, dir })
         applyPanLock()
         currentEventRef.current = eventId
         currentEventInfoRef.current = detail.event
@@ -1146,7 +1150,9 @@ export function AppShell() {
     <div style={{ position: 'fixed', inset: 0 }}>
       <div ref={hostRef} style={{ position: 'absolute', inset: 0 }} />
       {phase !== 'ready' && <Overlay phase={phase} message={message} onPick={() => void pickVault()} />}
-      {phase === 'ready' && settings.showTitle && !screensaverIds && <div style={titleStyle}>{headerTitle}</div>}
+      {phase === 'ready' && settings.showTitle && !screensaverIds && (
+        <TitleBar text={header.text} dir={header.dir} />
+      )}
       {phase === 'ready' && !modal && !editing && !eventForm && !metaForm && !searchOpen && !settingsOpen && !settings.viewMode && chromeVisible && settings.showSearchButton && (
         <button onClick={() => setSearchOpen(true)} style={searchBtn} title="Zoeken (Ctrl+K)">
           Zoeken…
@@ -1933,6 +1939,59 @@ const fitBtn: React.CSSProperties = {
   font: '13px sans-serif',
   cursor: 'pointer',
   backdropFilter: 'blur(4px)',
+}
+
+/** Titel bovenin die bij een niveau-wissel zoomt + crossfadet, in dezelfde richting
+ * als de scene-transitie: 'in' (dieper) = de nieuwe titel groeit uit het klein en de
+ * oude zwelt weg; 'out' (terug) = de nieuwe komt uit het groot en de oude krimpt weg. */
+function TitleBar({ text, dir }: { text: string; dir: 'in' | 'out' }) {
+  const idRef = useRef(0)
+  const prev = useRef(text)
+  const [entries, setEntries] = useState<{ id: number; text: string; dir: 'in' | 'out' }[]>([
+    { id: 0, text, dir },
+  ])
+  useEffect(() => {
+    if (text === prev.current) return
+    prev.current = text
+    idRef.current += 1
+    setEntries((e) => [...e, { id: idRef.current, text, dir }].slice(-2))
+  }, [text, dir])
+
+  const curDir = entries[entries.length - 1]!.dir
+  const enterFrom = curDir === 'in' ? 0.55 : 1.4
+  const exitTo = curDir === 'in' ? 1.4 : 0.55
+  return (
+    <>
+      {entries.map((en, i) => {
+        const isNew = i === entries.length - 1
+        return (
+          <div
+            key={en.id}
+            style={{
+              ...titleStyle,
+              animation: isNew
+                ? 'ml-title-enter 380ms ease-out both'
+                : 'ml-title-exit 340ms ease-in both',
+              ['--from' as string]: String(enterFrom),
+              ['--to' as string]: String(exitTo),
+            }}
+          >
+            {en.text}
+          </div>
+        )
+      })}
+      <style>{`
+        @keyframes ml-title-enter {
+          from { opacity: 0; transform: translateX(-50%) scale(var(--from)); }
+          to   { opacity: 1; transform: translateX(-50%) scale(1); }
+        }
+        @keyframes ml-title-exit {
+          from { opacity: 1; transform: translateX(-50%) scale(1); }
+          to   { opacity: 0; transform: translateX(-50%) scale(var(--to)); }
+        }
+      `}</style>
+    </>
+  )
 }
 
 const titleStyle: React.CSSProperties = {
