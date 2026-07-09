@@ -34,6 +34,32 @@ interface MetaForm {
   exif: ExifEntry[]
 }
 
+/** App-voorkeuren (UI, geen vault-data) — bewaard in localStorage. */
+interface Settings {
+  /** Weergave waarin een event-canvas standaard opent. */
+  defaultLayout: 'custom' | 'grid' | 'scatter'
+}
+
+const DEFAULT_SETTINGS: Settings = { defaultLayout: 'custom' }
+const SETTINGS_KEY = 'memorylane-settings'
+
+function loadSettings(): Settings {
+  try {
+    const raw = localStorage.getItem(SETTINGS_KEY)
+    return raw ? { ...DEFAULT_SETTINGS, ...(JSON.parse(raw) as Partial<Settings>) } : DEFAULT_SETTINGS
+  } catch {
+    return DEFAULT_SETTINGS
+  }
+}
+
+function saveSettings(s: Settings): void {
+  try {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(s))
+  } catch {
+    /* localStorage niet beschikbaar → voorkeuren gelden alleen deze sessie */
+  }
+}
+
 /** Lokale datum als `YYYY-MM-DD` (niet UTC — voorkomt dag-/jaarverschuiving). */
 function todayISO(): string {
   const d = new Date()
@@ -60,6 +86,19 @@ export function AppShell() {
   const [eventForm, setEventForm] = useState<null | EventForm>(null)
   const [metaForm, setMetaForm] = useState<null | MetaForm>(null)
   const [layoutMode, setLayoutMode] = useState<'custom' | 'grid' | 'scatter'>('custom')
+  const [settings, setSettings] = useState<Settings>(loadSettings)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  // Ref-spiegel zodat de (één keer opgezette) engine-closures de actuele
+  // voorkeuren lezen zonder stale closure.
+  const settingsRef = useRef(settings)
+  settingsRef.current = settings
+
+  const updateSettings = (patch: Partial<Settings>): void => {
+    const next = { ...settingsRef.current, ...patch }
+    settingsRef.current = next
+    setSettings(next)
+    saveSettings(next)
+  }
   const [draft, setDraft] = useState('')
   const [busy, setBusy] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
@@ -76,6 +115,11 @@ export function AppShell() {
   // die maar één keer draait) kunnen de React-state niet stale-vrij lezen; deze
   // ref wel. Voorkomt dat een Ctrl-sleep een half-ingevulde dialog stil overschrijft.
   const dialogOpenRef = useRef(false)
+  // Staat er een DOM-overlay zónder eigen invoerveld open (instellingen/zoeken)?
+  // De globale key-handler (Esc/Backspace → goBack) draait in de mount-closure en
+  // moet dan niets navigeren onder de overlay. De INPUT/TEXTAREA-guard dekt dit
+  // niet: het instellingen-paneel heeft geen invoerveld, dus focus zit op een knop.
+  const overlayOpenRef = useRef(false)
 
   const engineRef = useRef<RenderEngine | null>(null)
   const backendRef = useRef<Backend | null>(null)
@@ -167,6 +211,11 @@ export function AppShell() {
           })
         })
         sceneRef.current = scene
+        // Open in de ingestelde standaard-weergave (vóór de reveal, zodat de
+        // camera-fit meteen klopt). 'custom' = de eigen posities.
+        const dl = settingsRef.current.defaultLayout
+        if (dl !== 'custom') scene.applyLayout(dl)
+        setLayoutMode(dl)
         revealScene(engine, scene, dir)
         levelRef.current = 'event'
         setUiLevel('event')
@@ -174,7 +223,6 @@ export function AppShell() {
         currentEventInfoRef.current = detail.event
         currentItemsRef.current = detail.items
         entryZoomRef.current = engine.pendingZoom
-        setLayoutMode('custom') // elk event opent in de eigen layout
       } catch (e) {
         if (!disposed) {
           setMessage(String(e))
@@ -236,6 +284,9 @@ export function AppShell() {
       // Laat invoervelden (composer/zoeken) hun eigen toetsen afhandelen.
       const el = document.activeElement
       if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) return
+      // Een open DOM-overlay (instellingen/zoeken) vangt Esc/Backspace zelf af —
+      // niet navigeren onder de overlay.
+      if (overlayOpenRef.current) return
       if (e.key === 'Escape' || e.key === 'Backspace') {
         e.preventDefault()
         goBack()
@@ -446,6 +497,11 @@ export function AppShell() {
   useEffect(() => {
     dialogOpenRef.current = !!(modal || editing || eventForm || metaForm)
   }, [modal, editing, eventForm, metaForm])
+
+  // Houd de key-closure op de hoogte of een invoerloze overlay open staat.
+  useEffect(() => {
+    overlayOpenRef.current = settingsOpen || searchOpen
+  }, [settingsOpen, searchOpen])
 
   const pickVault = async (): Promise<void> => {
     const backend = backendRef.current
@@ -709,9 +765,14 @@ export function AppShell() {
     <div style={{ position: 'fixed', inset: 0 }}>
       <div ref={hostRef} style={{ position: 'absolute', inset: 0 }} />
       {phase !== 'ready' && <Overlay phase={phase} message={message} onPick={() => void pickVault()} />}
-      {phase === 'ready' && !modal && !editing && !eventForm && !metaForm && !searchOpen && (
+      {phase === 'ready' && !modal && !editing && !eventForm && !metaForm && !searchOpen && !settingsOpen && (
         <button onClick={() => setSearchOpen(true)} style={searchBtn} title="Zoeken">
           Zoeken…
+        </button>
+      )}
+      {phase === 'ready' && !modal && !editing && !eventForm && !metaForm && !searchOpen && !settingsOpen && (
+        <button onClick={() => setSettingsOpen(true)} style={gearBtn} title="Instellingen">
+          ⚙
         </button>
       )}
       {searchOpen && (
@@ -723,7 +784,14 @@ export function AppShell() {
           onClose={closeSearch}
         />
       )}
-      {phase === 'ready' && !modal && !editing && !eventForm && !metaForm && (
+      {settingsOpen && (
+        <SettingsPanel
+          settings={settings}
+          onChange={updateSettings}
+          onClose={() => setSettingsOpen(false)}
+        />
+      )}
+      {phase === 'ready' && !modal && !editing && !eventForm && !metaForm && !searchOpen && !settingsOpen && (
         <Fab
           uiLevel={uiLevel}
           layoutMode={layoutMode}
@@ -874,6 +942,55 @@ function MetaPanel({
           <button onClick={onSubmit} disabled={busy} style={primaryBtn}>
             {busy ? 'Bezig…' : 'Opslaan'}
           </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function SettingsPanel({
+  settings,
+  onChange,
+  onClose,
+}: {
+  settings: Settings
+  onChange: (patch: Partial<Settings>) => void
+  onClose: () => void
+}) {
+  const seg = (m: 'custom' | 'grid' | 'scatter'): React.CSSProperties => ({
+    ...ghostBtn,
+    background: settings.defaultLayout === m ? '#3b82f6' : 'transparent',
+    borderColor: settings.defaultLayout === m ? '#3b82f6' : '#2c3650',
+    color: '#fff',
+  })
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'absolute',
+        inset: 0,
+        background: 'rgba(0,0,0,0.55)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{ width: 460, maxWidth: '90%', background: '#161c28', borderRadius: 12, padding: 20 }}
+      >
+        <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 16 }}>Instellingen</div>
+        <div style={{ fontSize: 13, color: '#8a97b0', marginBottom: 6 }}>Standaard canvas-weergave</div>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
+          <button onClick={() => onChange({ defaultLayout: 'custom' })} style={seg('custom')}>Eigen</button>
+          <button onClick={() => onChange({ defaultLayout: 'grid' })} style={seg('grid')}>Grid</button>
+          <button onClick={() => onChange({ defaultLayout: 'scatter' })} style={seg('scatter')}>Scatter</button>
+        </div>
+        <div style={{ fontSize: 12, color: '#6a7690' }}>
+          Hoe een event opent. Je eigen posities blijven altijd bewaard onder “Eigen”.
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 18 }}>
+          <button onClick={onClose} style={primaryBtn}>Klaar</button>
         </div>
       </div>
     </div>
@@ -1197,6 +1314,21 @@ const searchBtn: React.CSSProperties = {
   background: 'rgba(22,28,40,0.85)',
   color: '#cfd6e4',
   font: '13px sans-serif',
+  cursor: 'pointer',
+}
+
+const gearBtn: React.CSSProperties = {
+  position: 'absolute',
+  top: 16,
+  right: 16,
+  width: 38,
+  height: 38,
+  borderRadius: 19,
+  border: '1px solid #2c3650',
+  background: 'rgba(22,28,40,0.85)',
+  color: '#cfd6e4',
+  fontSize: 18,
+  lineHeight: '1',
   cursor: 'pointer',
 }
 
