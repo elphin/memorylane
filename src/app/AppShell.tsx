@@ -246,18 +246,27 @@ export function AppShell() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Toon kort een hint (hoe je terugschakelt) zodra de view-modus actief is én er
-  // geen instellingen-paneel meer overheen staat. Zo verschijnt de reminder ook
-  // wanneer je view-modus via het paneel aanzet: pas ná "Klaar" (paneel dicht)
-  // toont de hint — anders was hij al vervaagd voordat je 'm kon lezen.
+  // Toon de hint (hoe je terugschakelt) zodra de view-modus actief is, én telkens
+  // als je de muis beweegt — anders zit je "vast" in view-modus zonder zichtbare
+  // uitweg. De hint vervaagt 2,6s na de laatste beweging. Niet tonen zolang het
+  // instellingen-paneel eroverheen staat.
   useEffect(() => {
     if (!settings.viewMode || settingsOpen) {
       setViewHint(false)
       return
     }
     setViewHint(true)
-    const t = window.setTimeout(() => setViewHint(false), 2600)
-    return () => window.clearTimeout(t)
+    let t = window.setTimeout(() => setViewHint(false), 2600)
+    const onMove = (): void => {
+      setViewHint(true) // React bailt uit als de hint al zichtbaar is
+      window.clearTimeout(t)
+      t = window.setTimeout(() => setViewHint(false), 2600)
+    }
+    window.addEventListener('mousemove', onMove)
+    return () => {
+      window.clearTimeout(t)
+      window.removeEventListener('mousemove', onMove)
+    }
   }, [settings.viewMode, settingsOpen])
   const [draft, setDraft] = useState('')
   const [busy, setBusy] = useState(false)
