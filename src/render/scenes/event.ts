@@ -45,6 +45,7 @@ interface Node {
   baseZ: number
   key: string
   loaded: boolean
+  tier: number // huidige geladen bron-resolutie (256/1024/2048) — LOD
   // Layout-eigenschappen uit `_canvas.json` die deze fase (nog) niet visueel
   // toegepast worden maar WEL behouden moeten blijven bij het terugschrijven —
   // anders wist de eerste drag bestaande curatie (schaal/rotatie/afmeting).
@@ -129,6 +130,7 @@ export class EventScene implements Scene {
         baseZ: z,
         key: `item-${item.id}`,
         loaded: false,
+        tier: 0,
         scale: saved?.scale ?? 1,
         rotation: rot,
         textScale: saved?.textScale,
@@ -613,17 +615,42 @@ export class EventScene implements Scene {
       const s = n.container.scale.x + (target - n.container.scale.x) * 0.2
       n.container.scale.set(s)
 
-      if (!n.sprite || n.loaded || !n.item.media) continue
-      const tex = engine.textures.get(n.key, frame)
-      if (tex) {
-        n.sprite.texture = tex
-        n.sprite.tint = 0xffffff
-        const s = Math.max(PHOTO / tex.width, PHOTO / tex.height)
-        n.sprite.setSize(tex.width * s, tex.height * s)
-        n.loaded = true
-      } else {
-        const src = this.backend.thumb(n.item.id, 256)
-        engine.textures.request({ key: n.key, url: src.url, hue: src.hue, size: 256 })
+      if (!n.sprite || !n.item.media) continue
+
+      // Basis-thumbnail (256) laden.
+      if (!n.loaded) {
+        const tex = engine.textures.get(n.key, frame)
+        if (tex) {
+          n.sprite.texture = tex
+          n.sprite.tint = 0xffffff
+          const s = Math.max(PHOTO / tex.width, PHOTO / tex.height)
+          n.sprite.setSize(tex.width * s, tex.height * s)
+          n.loaded = true
+          n.tier = 256
+        } else {
+          const src = this.backend.thumb(n.item.id, 256)
+          engine.textures.request({ key: n.key, url: src.url, hue: src.hue, size: 256 })
+        }
+        continue
+      }
+
+      // LOD-upgrade: staat de foto groot in beeld (opgeschaald én/of ingezoomd),
+      // laad dan een scherpere bron zodat 'ie niet wazig wordt.
+      const onScreen = PHOTO * n.scale * engine.camera.zoom
+      const need = onScreen > 620 ? 2048 : onScreen > 300 ? 1024 : 256
+      if (need > n.tier) {
+        const key = `${n.key}@${need}`
+        const tex = engine.textures.get(key, frame)
+        if (tex) {
+          n.sprite.texture = tex
+          n.sprite.tint = 0xffffff
+          const s = Math.max(PHOTO / tex.width, PHOTO / tex.height)
+          n.sprite.setSize(tex.width * s, tex.height * s)
+          n.tier = need
+        } else {
+          const src = this.backend.thumb(n.item.id, need as 1024 | 2048)
+          engine.textures.request({ key, url: src.url, hue: src.hue, size: need })
+        }
       }
     }
   }

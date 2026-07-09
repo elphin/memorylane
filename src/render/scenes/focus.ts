@@ -159,8 +159,9 @@ export class FocusScene implements Scene {
       this.sprite.setSize(tex.width * s, tex.height * s)
       this.loaded = true
     } else {
-      const src = this.backend.thumb(item.id, 1024)
-      engine.textures.request({ key: this.currentKey, url: src.url, hue: src.hue, size: 1024 })
+      // L3 = het detailniveau: laad de scherpe 2048-bron (niet de 1024-thumbnail).
+      const src = this.backend.thumb(item.id, 2048)
+      engine.textures.request({ key: this.currentKey, url: src.url, hue: src.hue, size: 2048 })
     }
   }
 
