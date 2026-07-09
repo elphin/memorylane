@@ -32,6 +32,8 @@ export interface EventSummary {
   coverItemId?: string
   /** Foto-id's van dit event (voor de slideshow-roulatie op de tijdlijn). */
   photoIds: string[]
+  /** Belang/grootte op de jaar-tijdlijn (1–100). Afwezig = standaard (50). */
+  size?: number
 }
 
 export interface Year {
@@ -175,7 +177,15 @@ export interface Backend {
   setFeatured(eventId: string, itemRef: string | null): Promise<void>
   /** Zet (of wist bij `null`) de vaste jaar-cover (item-id) van een jaar. */
   setYearCover(yearId: string, itemRef: string | null): Promise<void>
-  createEvent(yearId: string, title: string, startAt: string, endAt: string | null): Promise<string>
+  /** Zet (of wist bij `null`) het belang/grootte (1–100) van een event. */
+  setEventSize(eventId: string, size: number | null): Promise<void>
+  createEvent(
+    yearId: string,
+    title: string,
+    startAt: string,
+    endAt: string | null,
+    size?: number | null,
+  ): Promise<string>
   /** Werkt titel/begin-/einddatum van een event bij. `endAt = null` verwijdert
    * de einddatum. */
   updateEvent(eventId: string, title: string, startAt: string, endAt: string | null): Promise<void>
@@ -314,9 +324,16 @@ class TauriBackend implements Backend {
     title: string,
     startAt: string,
     endAt: string | null,
+    size?: number | null,
   ): Promise<string> {
     const invoke = await this.api()
-    return await invoke<string>('create_event', { yearId, title, startAt, endAt })
+    return await invoke<string>('create_event', {
+      yearId,
+      title,
+      startAt,
+      endAt,
+      size: size ?? null,
+    })
   }
 
   async updateEvent(
@@ -337,6 +354,11 @@ class TauriBackend implements Backend {
   async setYearCover(yearId: string, itemRef: string | null): Promise<void> {
     const invoke = await this.api()
     await invoke('set_year_cover', { yearId, itemRef })
+  }
+
+  async setEventSize(eventId: string, size: number | null): Promise<void> {
+    const invoke = await this.api()
+    await invoke('set_event_size', { eventId, size })
   }
 
   async importPhotos(eventId: string): Promise<number> {
@@ -448,6 +470,8 @@ class MockBackend implements Backend {
           // Af en toe een event zonder cover → test het stip-pad in de tijdlijn.
           coverItemId: e % 7 === 6 ? undefined : `${id}-e${e}-i0`,
           photoIds: [], // door getYear gevuld (mock)
+          // Gevarieerde groottes → test de dynamische kaartschaling in het jaar.
+          size: e % 5 === 0 ? 75 : e % 5 === 2 ? 30 : undefined,
         }
       })
       const points: DensityPoint[] = []
@@ -625,6 +649,7 @@ class MockBackend implements Backend {
     title: string,
     startAt: string,
     endAt: string | null,
+    size?: number | null,
   ): Promise<string> {
     const id = `${yearId}-new${this.newEventSeq++}`
     const detail = this.details.get(yearId)
@@ -638,9 +663,15 @@ class MockBackend implements Backend {
         itemCount: 0,
         coverItemId: undefined,
         photoIds: [],
+        size: size ?? undefined,
       })
     }
     return id
+  }
+
+  async setEventSize(eventId: string, size: number | null): Promise<void> {
+    const ev = this.findEvent(eventId)
+    if (ev) ev.size = size == null ? undefined : Math.max(1, Math.min(100, Math.round(size)))
   }
   async updateEvent(
     eventId: string,

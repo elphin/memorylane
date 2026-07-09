@@ -19,6 +19,16 @@ const LANE_GAP = 22 // verticale ruimte tussen lanes
 const CARD_GAP = 26 // min. horizontale ruimte tussen kaarten in dezelfde lane
 const DOT_R = 9 // marker voor events zonder cover
 
+// Belang → kaartschaal. size 50 = standaard (1.0); geklemd zodat kleine events
+// leesbaar blijven en grote niet de tijdlijn overheersen.
+const CARD_MIN_SCALE = 0.6
+const CARD_MAX_SCALE = 1.8
+/** Visuele schaal van een event-kaart op basis van zijn `size` (1–100). */
+function cardScale(size?: number): number {
+  const s = size == null ? 50 : size
+  return Math.max(CARD_MIN_SCALE, Math.min(CARD_MAX_SCALE, s / 50))
+}
+
 const MONTHS = ['jan', 'feb', 'mrt', 'apr', 'mei', 'jun', 'jul', 'aug', 'sep', 'okt', 'nov', 'dec']
 
 interface Node {
@@ -36,6 +46,7 @@ interface Node {
   key: string
   loaded: boolean
   scale: number
+  baseScale: number // vaste grootte-schaal (belang); apart van de hover-animatie
   wasVisible: boolean // vorige frame in beeld? (voor nextAt-reset bij herintrede)
   // Slideshow-roulatie (alleen cover-kaarten met >1 foto).
   photoIds: string[]
@@ -187,8 +198,16 @@ export class YearScene implements Scene {
     // zodat de marge onder de maandnamen altijd behouden blijft.
     const jyAmp = Math.min(120, 30 + withCover.length * 2)
 
+    // Constante vrije ruimte tussen de as en de binnenrand van een lane-0-kaart,
+    // ongeacht de kaartgrootte. Rijafstand op de grootst mogelijke kaart, zodat
+    // grote en kleine kaarten nooit tussen lanes overlappen.
+    const INNER_CLEAR = AXIS_GAP - THUMB_H / 2
+    const LANE_PITCH = THUMB_H * CARD_MAX_SCALE + LANE_GAP
     withCover.forEach((ev, j) => {
       const anchorX = anchorFor(ev)
+      const bs = cardScale(ev.size)
+      const cw = THUMB_W * bs
+      const ch = THUMB_H * bs
       const seed = hashId(ev.id)
       const jx = ((seed % 1000) / 1000 - 0.5) * 64 // ±32 (speels zijwaarts)
       const jy = (((seed >>> 10) % 1000) / 1000) * jyAmp // 0..jyAmp, altijd naar buiten
@@ -200,26 +219,27 @@ export class YearScene implements Scene {
       for (let lvl = 0; lvl < 64; lvl++) {
         const kPref = `${prefer}:${lvl}`
         const kOther = `${-prefer}:${lvl}`
-        if (cardX - THUMB_W / 2 > (laneRight[kPref] ?? -1e9) + CARD_GAP) {
+        if (cardX - cw / 2 > (laneRight[kPref] ?? -1e9) + CARD_GAP) {
           side = prefer
           level = lvl
           break
         }
-        if (cardX - THUMB_W / 2 > (laneRight[kOther] ?? -1e9) + CARD_GAP) {
+        if (cardX - cw / 2 > (laneRight[kOther] ?? -1e9) + CARD_GAP) {
           side = -prefer
           level = lvl
           break
         }
       }
-      laneRight[`${side}:${level}`] = cardX + THUMB_W / 2
-      // Onder de as extra ruimte voor de maandnamen; jitter alleen naar buiten.
-      const gap = AXIS_GAP + (side === 1 ? LABEL_CLEARANCE : 0)
-      const cardY = side * (gap + level * (THUMB_H + LANE_GAP) + jy)
-      maxAbsY = Math.max(maxAbsY, Math.abs(cardY) + THUMB_H / 2)
+      laneRight[`${side}:${level}`] = cardX + cw / 2
+      // Vaste binnenrand-marge + halve kaarthoogte → grote kaarten schuiven naar
+      // buiten i.p.v. over de as/maandnamen. Onder de as extra label-ruimte.
+      const gap = INNER_CLEAR + ch / 2 + (side === 1 ? LABEL_CLEARANCE : 0)
+      const cardY = side * (gap + level * LANE_PITCH + jy)
+      maxAbsY = Math.max(maxAbsY, Math.abs(cardY) + ch / 2)
 
       // Gebogen leader (2px): van de RAND van het blokje (meerdaags) of de as-lijn,
       // in een vloeiende S-curve naar de binnenrand van de kaart.
-      const innerY = cardY - side * (THUMB_H / 2)
+      const innerY = cardY - side * (ch / 2)
       const startY = spanColor.has(ev.id) ? side * 9 : 0
       const midY = (startY + innerY) / 2
       leaders
@@ -227,7 +247,7 @@ export class YearScene implements Scene {
         .bezierCurveTo(anchorX, midY, cardX, midY, cardX, innerY)
         .stroke({ width: 2, color: 0x3a4256, alpha: 0.7, pixelLine: true })
 
-      this.nodes.push(this.buildCard(ev, cardX, cardY))
+      this.nodes.push(this.buildCard(ev, cardX, cardY, bs))
     })
 
     // Events zonder cover: een stip + titel op de as.
@@ -312,9 +332,12 @@ export class YearScene implements Scene {
     this.dayLabel.position.set(x, -h - 6)
   }
 
-  private buildCard(ev: EventSummary, anchorX: number, cardY: number): Node {
+  private buildCard(ev: EventSummary, anchorX: number, cardY: number, baseScale: number): Node {
     const container = new Container()
     container.position.set(anchorX, cardY)
+    // De kaart wordt in nominale THUMB-eenheden getekend; de grootte-schaal zit
+    // op de container (zo blijven fitCover/mask/rand simpel en proportioneel).
+    container.scale.set(baseScale)
 
     const frame = new Graphics()
     frame
@@ -353,11 +376,12 @@ export class YearScene implements Scene {
       container,
       sprite,
       sprite2,
-      halfW: THUMB_W / 2 + BORDER,
-      halfH: THUMB_H / 2 + BORDER,
+      halfW: (THUMB_W / 2 + BORDER) * baseScale,
+      halfH: (THUMB_H / 2 + BORDER) * baseScale,
       key: `cover-${ev.coverItemId}`,
       loaded: false,
       scale: 1,
+      baseScale,
       wasVisible: false,
       photoIds,
       photoIdx: startIdx,
@@ -409,6 +433,7 @@ export class YearScene implements Scene {
       key: '',
       loaded: false,
       scale: 1,
+      baseScale: 1,
       wasVisible: false,
       photoIds: [],
       photoIdx: 0,
@@ -422,7 +447,7 @@ export class YearScene implements Scene {
 
   private fitCamera(maxAbsY: number): void {
     const vp = this.engine.viewport()
-    const contentW = AXIS_W + THUMB_W + 120
+    const contentW = AXIS_W + THUMB_W * CARD_MAX_SCALE + 120
     const contentH = Math.max(2 * maxAbsY, 320) + 120
     const zoom = Math.min(vp.width / contentW, vp.height / contentH)
     this.engine.jumpCamera(0, 0, Math.max(this.engine.camera.minZoom, Math.min(zoom, 1)))
@@ -465,7 +490,7 @@ export class YearScene implements Scene {
       // Micro-animatie: vloeiende hover-schaal.
       const target = n.eventId === this.hoveredId ? 1.05 : 1
       n.scale += (target - n.scale) * 0.2
-      n.container.scale.set(n.scale)
+      n.container.scale.set(n.scale * n.baseScale)
 
       // Basis-cover laden.
       if (n.sprite && !n.loaded && n.coverItemId) {
