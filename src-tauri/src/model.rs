@@ -99,6 +99,11 @@ pub struct Year {
     /// Vaste cover-foto voor de jaartegel (item-id) — override op willekeurig/featured.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cover: Option<String>,
+    /// Globale schaalfactor voor álle event-kaarten in dit jaar (proportioneel
+    /// "passend maken"). None = 1.0 (geen schaling). Laat de individuele
+    /// event-`size`-ratings intact.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size_factor: Option<f64>,
 }
 
 /// Een gebeurtenis (`_event.md`).

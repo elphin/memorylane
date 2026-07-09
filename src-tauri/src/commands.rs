@@ -273,6 +273,20 @@ impl VaultService {
         Ok(())
     }
 
+    /// Zet (of wist bij `None`/≈1.0) de globale event-kaartschaal van een jaar.
+    pub fn set_year_size_factor(&self, year_id: &str, factor: Option<f64>) -> Result<(), String> {
+        let vault = self.current_vault()?;
+        let folder = {
+            let conn = self.conn.lock().map_err(lock_err)?;
+            index::year_folder(&conn, year_id)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("jaar {year_id} niet gevonden"))?
+        };
+        writer::set_year_size_factor(&vault, &folder, factor).map_err(|e| e.to_string())?;
+        self.rescan()?;
+        Ok(())
+    }
+
     /// Importeert foto's (bronpaden van de bestandskiezer) in een event.
     pub fn import_photos(&self, event_id: &str, sources: &[String]) -> Result<usize, String> {
         let vault = self.current_vault()?;
@@ -668,6 +682,16 @@ pub fn set_year_cover(
     item_ref: Option<String>,
 ) -> Result<(), String> {
     state.set_year_cover(&year_id, item_ref.as_deref())
+}
+
+/// Zet (of wist) de globale event-kaartschaal (proportioneel "passend maken") van een jaar.
+#[tauri::command]
+pub fn set_year_size_factor(
+    state: State<VaultService>,
+    year_id: String,
+    factor: Option<f64>,
+) -> Result<(), String> {
+    state.set_year_size_factor(&year_id, factor)
 }
 
 #[tauri::command]

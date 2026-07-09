@@ -76,6 +76,10 @@ fn scan_year(root: &Path, year_path: &Path, folder_name: &str, model: &mut Vault
         .or_else(|| Some(format!("{folder_name}-12-31")));
 
     let cover = parsed.as_ref().and_then(|p| p.get_str("cover"));
+    let size_factor = parsed
+        .as_ref()
+        .and_then(|p| p.get_str("sizeFactor"))
+        .and_then(|s| s.trim().parse::<f64>().ok());
     let year = Year {
         id: id.clone(),
         year: year_num,
@@ -84,6 +88,7 @@ fn scan_year(root: &Path, year_path: &Path, folder_name: &str, model: &mut Vault
         end_at,
         folder_name: folder_name.to_string(),
         cover,
+        size_factor,
     };
 
     let entries = match sorted_dir(year_path) {

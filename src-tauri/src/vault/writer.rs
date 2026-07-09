@@ -666,6 +666,64 @@ pub fn set_year_cover(
     write_atomic(&path, &out)
 }
 
+/// Zet (of wist bij `None`/≈1.0) de globale schaalfactor voor de event-kaarten
+/// van een jaar in `<folder>/_year.md`. Zelfde `_year.md`-aanmaaklogica als
+/// [`set_year_cover`] (bewust ZONDER `id` → jaar-id blijft stabiel). Een factor
+/// vlak bij 1.0 wist het veld (dat is de standaard, geen clutter in de vault).
+pub fn set_year_size_factor(
+    vault_root: &Path,
+    folder_name: &str,
+    factor: Option<f64>,
+) -> std::io::Result<()> {
+    let path = vault_root.join(folder_name).join("_year.md");
+    let original = std::fs::read_to_string(&path).ok();
+    // Normaliseer: None of ≈1.0 betekent "geen factor" → veld weglaten/wissen.
+    let value = factor
+        .filter(|f| f.is_finite() && (*f - 1.0).abs() > 0.001)
+        .map(|f| format!("{:.4}", f.clamp(0.1, 5.0)));
+    if value.is_none() && original.is_none() {
+        return Ok(()); // niets te wissen, geen loos bestand aanmaken
+    }
+    let fenced = original.as_ref().and_then(|c| {
+        let n = c.replace("\r\n", "\n");
+        let lines: Vec<String> = n.split('\n').map(|s| s.to_string()).collect();
+        let open = lines.iter().position(|l| l.trim() == "---")?;
+        let close = lines
+            .iter()
+            .enumerate()
+            .skip(open + 1)
+            .find(|(_, l)| l.trim() == "---")
+            .map(|(i, _)| i)?;
+        Some((lines, open, close))
+    });
+    let (mut fm, body): (Vec<String>, String) = if let Some((lines, open, close)) = fenced {
+        (
+            lines[open + 1..close].iter().map(|s| s.to_string()).collect(),
+            lines[close + 1..].join("\n").trim().to_string(),
+        )
+    } else {
+        (
+            vec![
+                "type: year".to_string(),
+                format!("title: \"{folder_name}\""),
+                format!("startAt: {folder_name}-01-01"),
+            ],
+            original.as_deref().unwrap_or("").trim().to_string(),
+        )
+    };
+    set_fm_field(&mut fm, "sizeFactor", value.as_deref());
+
+    let mut out = String::from("---\n");
+    out.push_str(&fm.join("\n"));
+    out.push_str("\n---\n");
+    if !body.is_empty() {
+        out.push('\n');
+        out.push_str(&body);
+        out.push('\n');
+    }
+    write_atomic(&path, &out)
+}
+
 /// Maakt een event in een jaarmap. Geeft (id, folder_path) terug.
 ///
 /// De mapnaam wordt uniek gemaakt: twee events met dezelfde titel én datum
@@ -1245,6 +1303,64 @@ mod tests {
         set_event_size(root, &folder, None).unwrap();
         let c2 = std::fs::read_to_string(root.join(&folder).join("_event.md")).unwrap();
         assert!(crate::vault::frontmatter::parse(&c2).get_str("size").is_none());
+    }
+
+    #[test]
+    fn set_year_size_factor_writes_clamps_and_clears() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("2024")).unwrap();
+
+        // Schrijft de factor; maakt `_year.md` ZONDER id (jaar-id blijft stabiel).
+        set_year_size_factor(root, "2024", Some(0.75)).unwrap();
+        let c1 = std::fs::read_to_string(root.join("2024/_year.md")).unwrap();
+        let p1 = crate::vault::frontmatter::parse(&c1);
+        assert_eq!(p1.get_str("sizeFactor").unwrap(), "0.7500");
+        assert!(p1.get_str("id").is_none(), "geen id → scanner leidt stable_id af");
+
+        // Buiten bereik → geklemd op [0.1, 5.0].
+        set_year_size_factor(root, "2024", Some(99.0)).unwrap();
+        let c2 = std::fs::read_to_string(root.join("2024/_year.md")).unwrap();
+        assert_eq!(
+            crate::vault::frontmatter::parse(&c2).get_str("sizeFactor").unwrap(),
+            "5.0000"
+        );
+
+        // ≈1.0 (de standaard) wist het veld — geen clutter in de vault.
+        set_year_size_factor(root, "2024", Some(1.0)).unwrap();
+        let c3 = std::fs::read_to_string(root.join("2024/_year.md")).unwrap();
+        assert!(crate::vault::frontmatter::parse(&c3).get_str("sizeFactor").is_none());
+    }
+
+    #[test]
+    fn set_year_size_factor_preserves_existing_id_and_cover() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("2024")).unwrap();
+        // Bestaand `_year.md` MÉT id en cover → die moeten behouden blijven.
+        std::fs::write(
+            root.join("2024/_year.md"),
+            "---\nid: vast-jaar-id\ntype: year\ntitle: \"2024\"\ncover: mooie-foto\n---\n",
+        )
+        .unwrap();
+        set_year_size_factor(root, "2024", Some(1.4)).unwrap();
+        let c = std::fs::read_to_string(root.join("2024/_year.md")).unwrap();
+        let p = crate::vault::frontmatter::parse(&c);
+        assert_eq!(p.get_str("id").unwrap(), "vast-jaar-id");
+        assert_eq!(p.get_str("cover").unwrap(), "mooie-foto");
+        assert_eq!(p.get_str("sizeFactor").unwrap(), "1.4000");
+    }
+
+    #[test]
+    fn set_year_size_factor_no_file_and_default_is_noop() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("2024")).unwrap();
+        // Geen `_year.md` + standaardfactor → geen loos bestand aanmaken.
+        set_year_size_factor(root, "2024", Some(1.0)).unwrap();
+        assert!(!root.join("2024/_year.md").exists());
+        set_year_size_factor(root, "2024", None).unwrap();
+        assert!(!root.join("2024/_year.md").exists());
     }
 
     #[test]

@@ -14,7 +14,8 @@ use crate::model::{
 const SCHEMA: &str = r#"
 CREATE TABLE years (
     id TEXT PRIMARY KEY, year INTEGER NOT NULL, title TEXT NOT NULL,
-    start_at TEXT NOT NULL, end_at TEXT, folder_name TEXT NOT NULL, cover_photo TEXT
+    start_at TEXT NOT NULL, end_at TEXT, folder_name TEXT NOT NULL, cover_photo TEXT,
+    size_factor REAL
 );
 CREATE TABLE events (
     id TEXT PRIMARY KEY, year_id TEXT NOT NULL, kind TEXT NOT NULL,
@@ -67,9 +68,9 @@ pub fn load(conn: &mut Connection, model: &VaultModel) -> rusqlite::Result<()> {
 
     for y in &model.years {
         tx.execute(
-            "INSERT INTO years (id, year, title, start_at, end_at, folder_name, cover_photo)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![y.id, y.year, y.title, y.start_at, y.end_at, y.folder_name, y.cover],
+            "INSERT INTO years (id, year, title, start_at, end_at, folder_name, cover_photo, size_factor)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![y.id, y.year, y.title, y.start_at, y.end_at, y.folder_name, y.cover, y.size_factor],
         )?;
     }
 
@@ -324,7 +325,7 @@ pub fn list_years(conn: &Connection) -> rusqlite::Result<Vec<YearSummary>> {
 pub fn get_year(conn: &Connection, year_id: &str) -> rusqlite::Result<Option<YearDetail>> {
     let year = conn
         .query_row(
-            "SELECT id, year, title, start_at, end_at, folder_name, cover_photo FROM years WHERE id = ?1",
+            "SELECT id, year, title, start_at, end_at, folder_name, cover_photo, size_factor FROM years WHERE id = ?1",
             params![year_id],
             |r| {
                 Ok(Year {
@@ -335,6 +336,7 @@ pub fn get_year(conn: &Connection, year_id: &str) -> rusqlite::Result<Option<Yea
                     end_at: r.get(4)?,
                     folder_name: r.get(5)?,
                     cover: r.get(6)?,
+                    size_factor: r.get(7)?,
                 })
             },
         )
@@ -865,6 +867,7 @@ mod tests {
             end_at: Some("2024-12-31".into()),
             folder_name: "2024".into(),
             cover: None,
+            size_factor: None,
         });
         m.events.push(Event {
             id: "ev1".into(),
@@ -1038,6 +1041,7 @@ mod tests {
                 end_at: None,
                 folder_name: year.to_string(),
                 cover: None,
+                size_factor: None,
             });
             m.events.push(Event {
                 id: eid.into(),
@@ -1212,6 +1216,7 @@ mod tests {
             end_at: None,
             folder_name: "2024".into(),
             cover: None,
+            size_factor: None,
         });
         m.events.push(Event {
             id: "ev1".into(),
@@ -1338,6 +1343,7 @@ mod tests {
             end_at: None,
             folder_name: "2024".into(),
             cover: None,
+            size_factor: None,
         });
         // A: featured wijst naar een bestaande foto-slug → die exact.
         m.events.push(event("evA", Some("mooi")));

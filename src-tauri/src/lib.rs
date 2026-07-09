@@ -110,6 +110,7 @@ pub fn run() {
             commands::set_featured,
             commands::set_event_size,
             commands::set_year_cover,
+            commands::set_year_size_factor,
             commands::delete_item,
             commands::update_item,
             commands::get_item_metadata,
