@@ -44,7 +44,7 @@ CREATE INDEX idx_events_year ON events(year_id);
 CREATE INDEX idx_items_event ON items(event_id);
 CREATE INDEX idx_items_ts ON items(timestamp_ms);
 CREATE INDEX idx_canvas_event ON canvas_items(event_id);
-CREATE VIRTUAL TABLE items_fts USING fts5(item_id UNINDEXED, caption, body_text, tokenize='unicode61');
+CREATE VIRTUAL TABLE items_fts USING fts5(item_id UNINDEXED, caption, body_text, tags, people, place, tokenize='unicode61');
 "#;
 
 /// Maakt een in-memory database met het volledige schema (voor tests én als
@@ -104,8 +104,10 @@ pub fn load(conn: &mut Connection, model: &VaultModel) -> rusqlite::Result<()> {
                  body_text, slug, synthetic)
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
         )?;
-        let mut fts_stmt =
-            tx.prepare("INSERT INTO items_fts (item_id, caption, body_text) VALUES (?1, ?2, ?3)")?;
+        let mut fts_stmt = tx.prepare(
+            "INSERT INTO items_fts (item_id, caption, body_text, tags, people, place)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        )?;
         for it in &model.items {
             let (lat, lng, label) = split_location(&it.place);
             item_stmt.execute(params![
@@ -127,9 +129,23 @@ pub fn load(conn: &mut Connection, model: &VaultModel) -> rusqlite::Result<()> {
                 it.slug,
                 it.synthetic as i64,
             ])?;
-            // Alleen indexeren als er doorzoekbare tekst is (geen lege rijen).
-            if it.caption.is_some() || it.body_text.is_some() {
-                fts_stmt.execute(params![it.id, it.caption, it.body_text])?;
+            // Indexeer zodra er íets doorzoekbaars is — ook een foto met alleen
+            // tags/people/place (anders is die onvindbaar). Tags/people als spatie-
+            // gescheiden tekst zodat FTS elk woord als token indexeert.
+            let has_text = it.caption.is_some()
+                || it.body_text.is_some()
+                || !it.tags.is_empty()
+                || !it.people.is_empty()
+                || label.is_some();
+            if has_text {
+                fts_stmt.execute(params![
+                    it.id,
+                    it.caption,
+                    it.body_text,
+                    it.tags.join(" "),
+                    it.people.join(" "),
+                    label,
+                ])?;
             }
         }
 
@@ -636,13 +652,15 @@ fn fts_query(input: &str) -> Option<String> {
     }
 }
 
-/// Full-text zoeken op caption + body. Geeft resultaten met navigatie-context.
+/// Full-text zoeken op caption, body, tags, people en plaats. Geeft resultaten
+/// met navigatie-context.
 pub fn search(conn: &Connection, input: &str) -> rusqlite::Result<Vec<SearchResult>> {
     let Some(query) = fts_query(input) else {
         return Ok(Vec::new());
     };
     let mut stmt = conn.prepare(
-        "SELECT f.item_id, i.event_id, e.year_id, e.title, i.caption, i.body_text
+        "SELECT f.item_id, i.event_id, e.year_id, e.title, i.caption, i.body_text,
+                i.place_label, i.tags, i.people
          FROM items_fts f
          JOIN items i ON i.id = f.item_id
          JOIN events e ON i.event_id = e.id
@@ -650,13 +668,26 @@ pub fn search(conn: &Connection, input: &str) -> rusqlite::Result<Vec<SearchResu
          LIMIT 50",
     )?;
     let rows = stmt.query_map(params![query], |r| {
-        let caption: Option<String> = r.get(4)?;
-        let body: Option<String> = r.get(5)?;
+        let nonempty = |s: Option<String>| s.filter(|v| !v.is_empty());
+        let caption = nonempty(r.get(4)?);
+        let body = nonempty(r.get(5)?);
+        let place = nonempty(r.get(6)?);
+        let tags: String = r.get(7)?;
+        let people: String = r.get(8)?;
+        // Toon de meest betekenisvolle tekst; een tag-/plaats-/persoon-match zonder
+        // caption toont zo tóch iets leesbaars (nooit ruwe JSON).
+        let tags_readable = || {
+            let t = parse_json_vec(&tags).join(", ");
+            let p = parse_json_vec(&people).join(", ");
+            [t, p].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · ")
+        };
         let snippet = caption
-            .clone()
             .or(body)
-            .map(|s| s.chars().take(140).collect::<String>())
-            .unwrap_or_default();
+            .or(place)
+            .unwrap_or_else(tags_readable)
+            .chars()
+            .take(140)
+            .collect::<String>();
         Ok(SearchResult {
             item_id: r.get(0)?,
             event_id: r.get(1)?,
@@ -1031,6 +1062,48 @@ mod tests {
         assert!(search(&conn, "   ").unwrap().is_empty());
         // Speciale tekens breken de FTS-parser niet.
         assert!(search(&conn, "\"'(*)").unwrap().is_empty());
+    }
+
+    #[test]
+    fn search_finds_photo_by_tag_people_place() {
+        let mut m = sample_model();
+        // Een foto zonder caption/body, alleen tags/people/plaats — voorheen
+        // helemaal niet geïndexeerd (de gemelde bug).
+        m.items.push(Item {
+            id: "ph".into(),
+            event_id: "ev1".into(),
+            item_type: ItemType::Photo,
+            media: Some("p.jpg".into()),
+            url: None,
+            caption: None,
+            happened_at: None,
+            timestamp_ms: Some(9),
+            place: Some(Location { lat: 0.0, lng: 0.0, label: Some("Rome".into()) }),
+            people: vec!["Oma".into()],
+            tags: vec!["kerstmis".into()],
+            category: None,
+            body_text: None,
+            slug: Some("ph".into()),
+            synthetic: false,
+        });
+        let mut conn = open_in_memory().unwrap();
+        load(&mut conn, &m).unwrap();
+
+        let found = |q: &str| search(&conn, q).unwrap().into_iter().any(|r| r.item_id == "ph");
+        assert!(found("kerstmis"), "vindbaar op tag");
+        assert!(found("Oma"), "vindbaar op persoon");
+        assert!(found("Rome"), "vindbaar op plaats");
+        // Snippet toont leesbare tekst (geen ruwe JSON) bij een tag-match.
+        let snip = search(&conn, "kerstmis")
+            .unwrap()
+            .into_iter()
+            .find(|r| r.item_id == "ph")
+            .unwrap()
+            .snippet;
+        assert!(snip.contains("Rome") || snip.contains("kerstmis"), "leesbare snippet: {snip}");
+        assert!(!snip.contains('['), "geen ruwe JSON in snippet: {snip}");
+        // De caption-match blijft gewoon werken.
+        assert!(search(&conn, "zonsondergang").unwrap().iter().any(|r| r.item_id == "it1"));
     }
 
     /// De slideshow-query in `get_year`: `photo_ids` bevat alle foto's van het
