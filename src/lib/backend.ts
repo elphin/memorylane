@@ -104,6 +104,8 @@ export interface EventInfo {
   yearId: string
   /** Slug of id van de uitgelichte foto (jaar-omslag), indien gekozen. */
   featuredPhoto?: string
+  /** Belang/grootte op de jaar-tijdlijn (1–100). Afwezig = standaard (50). */
+  size?: number
 }
 
 export interface EventDetail {
@@ -660,6 +662,7 @@ class MockBackend implements Backend {
         folderPath: 'mock',
         yearId,
         featuredPhoto: this.featured.get(eventId),
+        size: summary?.size,
       },
       items,
       canvas: [],

@@ -1137,6 +1137,9 @@ export function AppShell() {
       title: info.title ?? '',
       startAt: info.startAt,
       endAt: info.endAt ?? '',
+      // Seed het huidige belang zodat de rating de juiste bucket voorselecteert
+      // (undefined = standaard 50, tonen we als "Bijzonder").
+      size: info.size,
     })
   }
 
@@ -1164,6 +1167,14 @@ export function AppShell() {
         }
       } else if (f.eventId) {
         await backend.updateEvent(f.eventId, f.title.trim(), f.startAt, end)
+        // Belang is een apart, non-destructief veld: alleen (her)schrijven als de
+        // gebruiker het echt wijzigde t.o.v. het geladen event (undefined = 50).
+        // Zo blijft een fijn-afgestelde (Shift-sleep) size behouden bij een
+        // titel-/datum-edit, en vermijden we een tweede rescan bij geen wijziging.
+        const origSize = currentEventInfoRef.current?.size ?? 50
+        if (f.size != null && f.size !== origSize) {
+          await backend.setEventSize(f.eventId, f.size)
+        }
         // Een datum-edit kan het event naar een ander jaar verplaatsen. Houd
         // `currentYearRef` in de pas met de nieuwe startdatum, anders landt
         // uitzoomen (goBack) op het oude — nu lege — jaar.
@@ -2065,6 +2076,14 @@ function EventDialog({
 }) {
   const endBeforeStart = form.endAt !== '' && form.endAt < form.startAt
   const invalid = !form.title.trim() || !form.startAt || endBeforeStart
+  // Belang-rating: bij bewerken kan de size fijn-afgesteld zijn (Shift-slepen op
+  // de tijdlijn) en dus tussen de buckets in liggen — dan markeren we de
+  // dichtstbijzijnde en tonen "aangepast", zonder de precieze waarde te verliezen.
+  const curSize = form.size ?? 50
+  const nearestBucket = IMPORTANCE_CHOICES.reduce((a, b) =>
+    Math.abs(b.size - curSize) < Math.abs(a.size - curSize) ? b : a,
+  )
+  const isCustomSize = !IMPORTANCE_CHOICES.some((c) => c.size === curSize)
   return (
     <div
       style={{
@@ -2113,37 +2132,40 @@ function EventDialog({
             De einddatum ligt vóór de begindatum.
           </div>
         )}
-        {form.mode === 'create' && (
-          <div style={{ marginTop: 14 }}>
-            <div style={{ fontSize: 13, color: '#9aa6bd', marginBottom: 6 }}>Hoe bijzonder?</div>
-            <div style={{ display: 'flex', gap: 8 }}>
-              {IMPORTANCE_CHOICES.map((c) => {
-                const active = (form.size ?? 50) === c.size
-                return (
-                  <button
-                    key={c.size}
-                    type="button"
-                    onClick={() => onChange({ size: c.size })}
-                    title={c.hint}
-                    style={{
-                      flex: 1,
-                      padding: '10px 8px',
-                      borderRadius: 8,
-                      cursor: 'pointer',
-                      textAlign: 'center',
-                      border: active ? '1px solid #6ea8ff' : '1px solid #2a3345',
-                      background: active ? 'rgba(110,168,255,0.16)' : '#1b2230',
-                      color: active ? '#dfe7f5' : '#aab4c8',
-                    }}
-                  >
-                    <div style={{ fontWeight: 600, fontSize: 14 }}>{c.label}</div>
-                    <div style={{ fontSize: 11, color: '#8794aa', marginTop: 2 }}>{c.hint}</div>
-                  </button>
-                )
-              })}
-            </div>
+        <div style={{ marginTop: 14 }}>
+          <div style={{ fontSize: 13, color: '#9aa6bd', marginBottom: 6 }}>
+            Hoe bijzonder?
+            {isCustomSize && (
+              <span style={{ color: '#8794aa', marginLeft: 8 }}>· aangepast ({curSize})</span>
+            )}
           </div>
-        )}
+          <div style={{ display: 'flex', gap: 8 }}>
+            {IMPORTANCE_CHOICES.map((c) => {
+              const active = isCustomSize ? c.size === nearestBucket.size : curSize === c.size
+              return (
+                <button
+                  key={c.size}
+                  type="button"
+                  onClick={() => onChange({ size: c.size })}
+                  title={c.hint}
+                  style={{
+                    flex: 1,
+                    padding: '10px 8px',
+                    borderRadius: 8,
+                    cursor: 'pointer',
+                    textAlign: 'center',
+                    border: active ? '1px solid #6ea8ff' : '1px solid #2a3345',
+                    background: active ? 'rgba(110,168,255,0.16)' : '#1b2230',
+                    color: active ? '#dfe7f5' : '#aab4c8',
+                  }}
+                >
+                  <div style={{ fontWeight: 600, fontSize: 14 }}>{c.label}</div>
+                  <div style={{ fontSize: 11, color: '#8794aa', marginTop: 2 }}>{c.hint}</div>
+                </button>
+              )
+            })}
+          </div>
+        </div>
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 14 }}>
           <button onClick={onCancel} style={ghostBtn}>Annuleren</button>
           <button onClick={onSubmit} disabled={busy || invalid} style={primaryBtn}>
