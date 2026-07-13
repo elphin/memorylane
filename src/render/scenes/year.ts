@@ -206,6 +206,13 @@ function hashId(s: string): number {
   return h >>> 0
 }
 
+/** Kap een titel af op een maximale lengte (met ellipsis) zodat lange namen de
+ * tijdlijn niet overhoop gooien. */
+function truncateTitle(s: string, n: number): string {
+  const t = s.trim()
+  return t.length > n ? `${t.slice(0, n - 1).trimEnd()}…` : t
+}
+
 /** Cover-fit een sprite op een thumbnail-kaart (vult, behoudt aspect). */
 function fitCover(sprite: Sprite, tex: Texture): void {
   const s = Math.max(THUMB_W / tex.width, THUMB_H / tex.height)
@@ -236,6 +243,7 @@ export class YearScene implements Scene {
   private rangeBand = new Graphics()
   private slideEnabled: boolean
   private slideMs: number
+  private showTitles: boolean
   private yearFactor = 1
   // Bewaard voor de "passend maken"-solver.
   private withCoverSorted: EventSummary[] = []
@@ -246,10 +254,11 @@ export class YearScene implements Scene {
     private engine: RenderEngine,
     private backend: Backend,
     detail: YearDetail,
-    slideshow: { enabled: boolean; speedMs: number } = { enabled: false, speedMs: 5000 },
+    opts: { enabled: boolean; speedMs: number; showTitles?: boolean } = { enabled: false, speedMs: 5000 },
   ) {
-    this.slideEnabled = slideshow.enabled
-    this.slideMs = Math.max(800, slideshow.speedMs)
+    this.slideEnabled = opts.enabled
+    this.slideMs = Math.max(800, opts.speedMs)
+    this.showTitles = opts.showTitles ?? false
     const year = detail.year.year
     const yearStart = new Date(year, 0, 1).getTime()
     const yearEnd = new Date(year, 11, 31, 23, 59, 59).getTime()
@@ -461,6 +470,30 @@ export class YearScene implements Scene {
     photoLayer.addChild(mask)
     photoLayer.mask = mask
     container.addChild(photoLayer)
+
+    // Optionele memory-titel aan de BUITENkant van de kaart (weg van de as), als
+    // child van de container: hij rijst/faadt automatisch mee met de bloom
+    // (container-alpha = presence·bloom) en is bij een marker dus onzichtbaar.
+    if (this.showTitles && ev.title) {
+      const outer = p.side < 0 ? -1 : 1 // -1 = boven de kaart, 1 = eronder
+      const title = new Text({
+        text: truncateTitle(ev.title, 24),
+        style: {
+          fill: 0xe8edf6,
+          fontSize: 14,
+          fontWeight: '600',
+          fontFamily: 'Segoe UI, sans-serif',
+          align: 'center',
+          wordWrap: true,
+          wordWrapWidth: THUMB_W + BORDER * 2,
+        },
+      })
+      title.resolution = 2
+      title.anchor.set(0.5, outer < 0 ? 1 : 0)
+      title.position.set(0, outer * (THUMB_H / 2 + BORDER + 6))
+      container.addChild(title)
+    }
+
     container.visible = false
     this.cardsLayer.addChild(container)
 

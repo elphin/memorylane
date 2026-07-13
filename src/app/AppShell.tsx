@@ -71,6 +71,8 @@ interface Settings {
   yearCoverMode: 'featured' | 'random'
   /** Legt scatter de foto's licht scheef (geroteerd) of recht? */
   scatterRotate: boolean
+  /** Toon de naam van een memory bij zijn kaart in de jaar-view. */
+  showMemoryTitles: boolean
   /** Toon de titel bovenin (Memory Lane / jaar / eventnaam). */
   showTitle: boolean
   /** Bij een detailfoto: toon de caption als titel (indien aanwezig; anders de
@@ -94,6 +96,7 @@ const DEFAULT_SETTINGS: Settings = {
   yearTileSlideshow: false,
   yearCoverMode: 'featured',
   scatterRotate: true,
+  showMemoryTitles: true,
   showTitle: true,
   photoTitleFromCaption: false,
   diaMode: 'kenburns',
@@ -282,6 +285,10 @@ export function AppShell() {
     ) {
       setupLifelineRef.current()
     }
+    // Memory-titels leven in de jaar-scene → herbouw het jaar als het zichtbaar is.
+    if (patch.showMemoryTitles !== undefined && levelRef.current === 'year' && currentYearRef.current) {
+      void enterYearRef.current(currentYearRef.current)
+    }
   }
 
   // Sneltoetsen op een kale letter: E = view-modus (knoppen tonen/verbergen),
@@ -398,6 +405,7 @@ export function AppShell() {
         const scene = new YearScene(engine, backendRef.current, detail, {
           enabled: settingsRef.current.slideshow,
           speedMs: settingsRef.current.slideshowSpeed * 1000,
+          showTitles: settingsRef.current.showMemoryTitles,
         })
         sceneRef.current = scene
         if (ctrlDown) scene.setDayPicker(true)
@@ -1771,6 +1779,14 @@ function SettingsPanel({
                 />
                 {desc("Uit = recht. Ook per memory te wisselen met het ⟲-knopje naast Scatter.")}
               </div>
+
+              <div style={{ height: 1, background: '#2c3650', margin: '16px 0' }} />
+              <Toggle
+                on={settings.showMemoryTitles}
+                set={(v) => onChange({ showMemoryTitles: v })}
+                label="Memory-namen tonen in de jaar-view"
+              />
+              {desc('De naam bij de kaart, zichtbaar zodra je inzoomt op een thumbnail. Lange namen worden afgekapt.')}
 
               <div style={{ height: 1, background: '#2c3650', margin: '16px 0' }} />
               <Toggle
