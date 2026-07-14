@@ -511,7 +511,10 @@ export class YearScene implements Scene {
    * de volle kaarthoogte + titelruimte in de buitenste lane, zodat een grote
    * kaart met titel niet boven/onder buiten beeld valt. */
   private lanesPerSide(vpH: number): number {
-    const TITLE_CLEAR = 30
+    // Ruimte die de buitenste lane vrijhoudt aan de schermrand: de jaar-titel
+    // (bovenaan, ~48px) én het memory-titellabel dat bóven een top-kaart hangt
+    // (~40px). Te krap → top-kaarten (of hun label) lopen door de jaar-titel heen.
+    const TITLE_CLEAR = 92
     return Math.max(1, Math.floor((vpH / 2 - AXIS_CLEAR_PX - CARD_H_MAX - TITLE_CLEAR) / LANE_PITCH) + 1)
   }
 
@@ -544,7 +547,21 @@ export class YearScene implements Scene {
    * schermgrootte) vullen de lanes rond de gecentreerde as. */
   private fitCamera(): void {
     const vp = this.engine.viewport()
-    const zoom = Math.max(this.engine.camera.minZoom, Math.min(vp.width / (AXIS_W + 160), 1))
+    let zoom = Math.max(this.engine.camera.minZoom, Math.min(vp.width / (AXIS_W + 160), 1))
+    // Initiële view altijd 'passend': de kaarten hebben een horizontale scherm-
+    // offset (offX) + breedte die NIET met de zoom meeschaalt, dus de buitenste
+    // kaarten (jan/dec) kunnen bij de axis-fit half buiten beeld vallen. Verlaag
+    // de zoom zonodig tot de breedste kaart-extent binnen de viewport past.
+    const sideMargin = 20 // scherm-px speling per kant
+    for (const n of this.cardNodes) {
+      const off = this.curvedLeaders ? Math.abs(n.offX) : 0
+      const halfExtent = n.cardW / 2 + off // scherm-px (schaalt niet met zoom)
+      const anchorAbs = Math.abs(n.anchorX)
+      if (anchorAbs < 1) continue
+      const maxZoom = (vp.width / 2 - halfExtent - sideMargin) / anchorAbs
+      if (maxZoom < zoom) zoom = maxZoom
+    }
+    zoom = Math.max(this.engine.camera.minZoom, zoom)
     this.engine.jumpCamera(0, 0, zoom)
   }
 
@@ -563,7 +580,10 @@ export class YearScene implements Scene {
       // gesorteerd op nabijheid tot een (hash-)voorkeurslane. Zo verspreiden de
       // kaarten zich over de beschikbare lanes (i.p.v. dicht op de as te clusteren)
       // en wordt de verticale ruimte benut, zeker als er weinig zijn.
-      const prefLevel = Math.min(N - 1, Math.floor((((n.hash >>> 20) % 1000) / 1000) * N))
+      // Voorkeurslane, gebiast NAAR DE AS (kwadratisch): de meeste kaarten blijven
+      // dicht bij de tijdlijn, hogere lanes worden alleen benut als het druk wordt.
+      const rPref = ((n.hash >>> 20) % 1000) / 1000
+      const prefLevel = Math.min(N - 1, Math.floor(rPref * rPref * N))
       const cands: { lane: Lane; sticky: boolean }[] = []
       if (n.lane) cands.push({ lane: n.lane, sticky: true })
       const rest: { lane: Lane; sticky: boolean }[] = []
