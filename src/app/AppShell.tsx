@@ -424,8 +424,12 @@ export function AppShell() {
         const old = sceneRef.current
         sceneRef.current = null
         if (old) {
+          // Jaar-entry/-exit zoomt symmetrisch door het SCHERMMIDDEN (net als het
+          // uitzoomen naar de lifeline), niet vanaf de aangeklikte jaar-tegel.
+          // Dit hoort bij de gecentreerde reveal hieronder: exit `centered=true`
+          // + reveal zonder tap-coördinaten moeten altijd samen wijzigen.
           if (slide) engine.slideOutScene(old.root, -slideDir, () => old.destroy())
-          else engine.exitScene(old.root, dir as 'in' | 'out', () => old.destroy())
+          else engine.exitScene(old.root, dir as 'in' | 'out', () => old.destroy(), undefined, true)
         }
         // Buurjaren (voor de overscroll-preview + jaar-overgang): de jarenlijst is
         // chronologisch oplopend → later jaar = rechts, eerder = links.
@@ -443,8 +447,11 @@ export function AppShell() {
         })
         sceneRef.current = scene
         if (ctrlDown) scene.setDayPicker(true)
+        // Gecentreerde reveal (geen tap-coördinaten → schermmidden): spiegelt de
+        // gecentreerde exit hierboven, zodat een jaar in-/uitzoomen altijd vanuit
+        // het midden gebeurt i.p.v. vanaf de aangeklikte tegel (zie comment boven).
         if (slide) engine.slideInScene(scene.root, slideDir)
-        else revealScene(engine, scene, dir as 'in' | 'out')
+        else engine.revealScene(scene.root, dir as 'in' | 'out')
         levelRef.current = 'year'
         setUiLevel('year')
         setHeader({ text: detail.year.title, dir: slide ? 'in' : (dir as 'in' | 'out') })

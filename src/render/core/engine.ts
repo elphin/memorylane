@@ -66,6 +66,7 @@ export class RenderEngine {
     toY: number
     start: number
     dur: number
+    slide?: boolean
   } | null = null
   // Exit-animatie van het uitgaande niveau (leeft in `overlay`, in schermruimte).
   // `onDone` ruimt de oude scene op zodra de animatie klaar is (of afgebroken).
@@ -79,6 +80,7 @@ export class RenderEngine {
     toY: number
     start: number
     dur: number
+    slide?: boolean
   } | null = null
   private lastTapScreen = { x: 0, y: 0 }
 
@@ -219,8 +221,10 @@ export class RenderEngine {
    * de `overlay` verplaatst (bevroren op zijn huidige scherm-transform) en zoomt
    * in schermruimte door + faadt uit. Mode `in` = door het aangeklikte punt naar
    * voren (alsof je erdoorheen duikt), `out` = terug naar achteren via het
-   * midden. `onDone` vernietigt de oude scene zodra klaar/afgebroken. */
-  exitScene(oldRoot: Container, mode: 'in' | 'out', onDone: () => void, dur = 380): void {
+   * midden. `onDone` vernietigt de oude scene zodra klaar/afgebroken. Met
+   * `centered` gaat óók de `in`-modus door het schermmidden i.p.v. het
+   * aangeklikte punt (voor een symmetrische centrale zoom, bv. jaar-entry). */
+  exitScene(oldRoot: Container, mode: 'in' | 'out', onDone: () => void, dur = 380, centered = false): void {
     // Een lopende exit eerst netjes afronden (snelle dubbele navigatie).
     if (this.exitAnim) this.finishExit()
     // Als deze root nog midden in zijn eigen reveal zat, die eerst op identiteit
@@ -246,8 +250,9 @@ export class RenderEngine {
     // Zoom-naar-punt in schermruimte: bij `in` groeit het door het klikpunt weg,
     // bij `out` krimpt het naar het midden.
     const factor = mode === 'in' ? 2.6 : 0.4
-    const px = mode === 'in' ? this.lastTapScreen.x : vp.width / 2
-    const py = mode === 'in' ? this.lastTapScreen.y : vp.height / 2
+    const tapFocus = mode === 'in' && !centered
+    const px = tapFocus ? this.lastTapScreen.x : vp.width / 2
+    const py = tapFocus ? this.lastTapScreen.y : vp.height / 2
     const toScale = fromScale * factor
     const toX = px - (px - fromX) * factor
     const toY = py - (py - fromY) * factor
@@ -256,8 +261,11 @@ export class RenderEngine {
 
   /** Schuif een nieuwe scene-root horizontaal in beeld vanaf `dir` (+1 = van
    * rechts, -1 = van links) — puur een zijwaartse translatie, geen zoom. Reuse
-   * van het reveal-mechanisme met fromScale=1. */
-  slideInScene(root: Container, dir: number, dur = 460): void {
+   * van het reveal-mechanisme met fromScale=1. NB: het "filmstrip"-effect (oude
+   * scene uit één kant, nieuwe van de andere, als één stijf geheel) klopt alleen
+   * doordat elk jaar op DEZELFDE fit-zoom past (AXIS_W is constant) → gelijke
+   * scherm-delta voor in- en uitschuiven; een per-jaar-zoom zou dit breken. */
+  slideInScene(root: Container, dir: number, dur = 520): void {
     const cx = this.camera.x
     const cy = this.camera.y
     const off = (dir * this.viewport().width) / this.camera.zoom // één viewport in wereld
@@ -265,12 +273,12 @@ export class RenderEngine {
     root.scale.set(1)
     root.position.set(cx + off, cy)
     root.alpha = 0
-    this.reveal = { root, fromScale: 1, fromX: cx + off, fromY: cy, toX: cx, toY: cy, start: performance.now(), dur }
+    this.reveal = { root, fromScale: 1, fromX: cx + off, fromY: cy, toX: cx, toY: cy, start: performance.now(), dur, slide: true }
   }
 
   /** Schuif de oude scene-root horizontaal uit beeld naar `dir` (+1 = naar rechts).
    * De root wordt in de overlay bevroren op zijn huidige scherm-transform. */
-  slideOutScene(oldRoot: Container, dir: number, onDone: () => void, dur = 460): void {
+  slideOutScene(oldRoot: Container, dir: number, onDone: () => void, dur = 520): void {
     if (this.exitAnim) this.finishExit()
     if (this.reveal?.root === oldRoot) this.finishReveal()
     if (oldRoot.destroyed) {
@@ -287,7 +295,7 @@ export class RenderEngine {
     this.overlay.position.set(fromX, fromY)
     this.overlay.alpha = 1
     const toX = fromX + dir * vp.width
-    this.exitAnim = { onDone, fromScale: z, fromX, fromY, toScale: z, toX, toY: fromY, start: performance.now(), dur }
+    this.exitAnim = { onDone, fromScale: z, fromX, fromY, toScale: z, toX, toY: fromY, start: performance.now(), dur, slide: true }
   }
 
   /** Stop een actieve camera-drag (bijv. bij een commit tijdens het slepen), zodat
@@ -308,9 +316,11 @@ export class RenderEngine {
     const e = easeInOutCubic(t)
     this.overlay.scale.set(a.fromScale + (a.toScale - a.fromScale) * e)
     this.overlay.position.set(a.fromX + (a.toX - a.fromX) * e, a.fromY + (a.toY - a.fromY) * e)
-    // Iets sneller uitfaden dan de beweging, zodat het nieuwe niveau tijdig
-    // doorschemert.
-    this.overlay.alpha = Math.max(0, 1 - t * 1.3)
+    // Zijwaartse jaar-overgang: oude tijdlijn blijft ondoorzichtig en schuift als
+    // stijf geheel de ene kant uit (naast de nieuwe, geen overlap → geen crossfade
+    // nodig). Zoom-exit faadt juist iets sneller dan de beweging zodat het nieuwe
+    // niveau tijdig doorschemert.
+    this.overlay.alpha = a.slide ? 1 : Math.max(0, 1 - t * 1.3)
     if (t >= 1) this.finishExit()
   }
 
@@ -376,10 +386,14 @@ export class RenderEngine {
       return
     }
     const t = Math.min(1, (performance.now() - r.start) / r.dur)
-    const e = easeOutCubic(t)
+    // Zijwaartse jaar-overgang: symmetrische easeInOutCubic (gelijk aan de exit)
+    // → oude en nieuwe scene bewegen als één stijve filmstrip; ondoorzichtig,
+    // want de nieuwe start buiten beeld en schuift zichtbaar helemaal in. Een
+    // zoom-reveal gebruikt easeOutCubic + snelle fade-in.
+    const e = r.slide ? easeInOutCubic(t) : easeOutCubic(t)
     r.root.scale.set(r.fromScale + (1 - r.fromScale) * e)
     r.root.position.set(r.fromX + (r.toX - r.fromX) * e, r.fromY + (r.toY - r.fromY) * e)
-    r.root.alpha = Math.min(1, t * 1.6)
+    r.root.alpha = r.slide ? 1 : Math.min(1, t * 1.6)
     if (t >= 1) this.finishReveal()
   }
 
