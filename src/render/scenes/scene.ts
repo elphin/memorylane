@@ -67,6 +67,9 @@ export interface Scene {
   layoutState?(): { mode: 'custom' | 'grid' | 'scatter'; positions: NodePosition[] }
   /** Zet de scatter-kaarten recht of licht scheef, posities ongemoeid (alleen L2). */
   setScatterRotation?(rotate: boolean): void
+  /** Zet de grid-sorteervolgorde (datum/naam/willekeurig) en herpak; 'random'
+   * schudt elke aanroep opnieuw (alleen L2). */
+  setGridSort?(sort: 'date' | 'name' | 'random'): void
   /** Wereldgrenzen van alle inhoud (voor fit-to-view), of null als leeg. Alleen L2. */
   contentBounds?(): { minX: number; minY: number; maxX: number; maxY: number } | null
   /** Zoom/pan de camera zo dat alle inhoud precies past (alleen L2). */

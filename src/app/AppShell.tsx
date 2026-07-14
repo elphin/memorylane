@@ -239,6 +239,7 @@ export function AppShell() {
   const [eventForm, setEventForm] = useState<null | EventForm>(null)
   const [metaForm, setMetaForm] = useState<null | MetaForm>(null)
   const [layoutMode, setLayoutMode] = useState<'custom' | 'grid' | 'scatter'>('custom')
+  const [gridSort, setGridSortMode] = useState<'date' | 'name' | 'random'>('date')
   const [settings, setSettings] = useState<Settings>(loadSettings)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [vaultPath, setVaultPath] = useState<string | null>(null)
@@ -552,6 +553,7 @@ export function AppShell() {
           settingsRef.current.squarePhotos,
         )
         sceneRef.current = scene
+        setGridSortMode('date') // nieuwe scene start op datum-sortering
         // Open in de onthouden weergave van dit event (vóór de reveal, zodat de
         // camera-fit meteen klopt); valt terug op de globale standaard.
         initEventView(scene, eventId)
@@ -1184,6 +1186,17 @@ export function AppShell() {
     }
   }
 
+  // Grid-sorteervolgorde wisselen (alleen zichtbaar in grid-modus). 'random' schudt
+  // elke klik opnieuw. Onthoud de resulterende opstelling per event.
+  const changeGridSort = (sort: 'date' | 'name' | 'random'): void => {
+    setGridSortMode(sort)
+    const scene = sceneRef.current
+    scene?.setGridSort?.(sort)
+    const id = currentEventRef.current
+    const state = scene?.layoutState?.()
+    if (id && state) saveEventView(id, { mode: 'grid', positions: state.positions })
+  }
+
   // Toggle of scatter foto's licht scheef legt. Zit je nu in scatter, pas het dan
   // meteen toe (posities blijven, alleen de rotatie wijzigt) en onthoud de view.
   const toggleScatterRotate = (): void => {
@@ -1520,6 +1533,8 @@ export function AppShell() {
           onDelete={() => void deleteCurrent()}
           scatterRotate={settings.scatterRotate}
           onToggleScatterRotate={toggleScatterRotate}
+          gridSort={gridSort}
+          onGridSort={changeGridSort}
         />
       )}
       {modal && (
@@ -2024,6 +2039,8 @@ function Fab({
   onDelete,
   scatterRotate,
   onToggleScatterRotate,
+  gridSort,
+  onGridSort,
 }: {
   uiLevel: 'lifeline' | 'year' | 'event' | 'focus'
   layoutMode: 'custom' | 'grid' | 'scatter'
@@ -2037,6 +2054,8 @@ function Fab({
   onDelete: () => void
   scatterRotate: boolean
   onToggleScatterRotate: () => void
+  gridSort: 'date' | 'name' | 'random'
+  onGridSort: (sort: 'date' | 'name' | 'random') => void
 }) {
   const wrap: React.CSSProperties = { position: 'absolute', right: 20, bottom: 20, display: 'flex', gap: 10 }
   if (uiLevel === 'year') {
@@ -2051,10 +2070,36 @@ function Fab({
       ...fabBtn,
       background: layoutMode === m ? '#3b82f6' : '#1f2734',
     })
+    const sortSeg = (s: 'date' | 'name' | 'random'): React.CSSProperties => ({
+      ...fabBtn,
+      fontSize: 12,
+      padding: '8px 12px',
+      background: gridSort === s ? '#3b82f6' : '#141a24',
+    })
     return (
       <div style={wrap}>
         {/* Vooraan (links) zodat het verschijnen de layout-knoppen NIET verschuift
             — de rij is rechts verankerd, dus een knop links laat de rest op zijn plek. */}
+        {layoutMode === 'grid' && (
+          <>
+            <span style={{ ...fabBtn, background: 'transparent', color: '#7f8aa0', cursor: 'default', paddingRight: 2 }}>
+              Sorteer
+            </span>
+            <button onClick={() => onGridSort('date')} style={sortSeg('date')} title="Sorteer op datum/tijd">
+              Datum
+            </button>
+            <button onClick={() => onGridSort('name')} style={sortSeg('name')} title="Sorteer op naam/bestandsnaam">
+              Naam
+            </button>
+            <button
+              onClick={() => onGridSort('random')}
+              style={sortSeg('random')}
+              title="Willekeurig — klik nogmaals om opnieuw te schudden"
+            >
+              Willekeurig 🎲
+            </button>
+          </>
+        )}
         {layoutMode !== 'custom' && (
           <button onClick={onSaveLayout} style={{ ...fabBtn, background: '#166534' }} title="Deze opstelling vastleggen als je eigen layout">
             Opslaan als Eigen

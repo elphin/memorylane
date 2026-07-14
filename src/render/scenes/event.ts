@@ -75,6 +75,9 @@ export class EventScene implements Scene {
   private ringCtrl = false
   private ringShift = false
   private mode: 'custom' | 'grid' | 'scatter' = 'custom'
+  // Sorteervolgorde van het grid + een seed die per 'willekeurig'-klik verspringt.
+  private gridSort: 'date' | 'name' | 'random' = 'date'
+  private gridSeed = 1
   // Herpak het grid zodra een foto-verhouding is geladen (grid-modus).
   private regridPending = false
 
@@ -286,10 +289,47 @@ export class EventScene implements Scene {
    * gaps ertussen; een rij breekt als hij te breed wordt. Zo overlappen niet-
    * vierkante of geschaalde foto's elkaar niet, en oogt het raster natuurlijker
    * dan een strak vierkant grid. Zet alleen doel-posities/z (update() animeert). */
+  /** Volgorde van de nodes voor het grid, volgens de gekozen sorteerstand. */
+  private orderedForGrid(): Node[] {
+    const arr = [...this.nodes]
+    if (this.gridSort === 'name') {
+      return arr.sort((a, b) =>
+        this.nameKey(a).localeCompare(this.nameKey(b), undefined, { numeric: true, sensitivity: 'base' }),
+      )
+    }
+    if (this.gridSort === 'random') {
+      return arr.sort((a, b) => this.randKey(a.ref) - this.randKey(b.ref))
+    }
+    return arr.sort((a, b) => (a.item.timestampMs ?? Infinity) - (b.item.timestampMs ?? Infinity))
+  }
+
+  /** Naam/bestandsnaam-sleutel: bijschrift, anders media/url-bestandsnaam, anders id. */
+  private nameKey(n: Node): string {
+    const it = n.item
+    const raw = it.caption || it.media || it.url || it.slug || it.id || ''
+    return raw.split(/[\\/]/).pop() ?? raw // alleen de bestandsnaam bij een pad
+  }
+
+  /** Deterministische hash van ref + seed → stabiele willekeurige volgorde per
+   * seed (herpakken bij foto-load schudt NIET), verspringt bij een nieuwe seed. */
+  private randKey(ref: string): number {
+    let h = this.gridSeed >>> 0
+    for (let i = 0; i < ref.length; i++) h = Math.imul(h ^ ref.charCodeAt(i), 0x01000193) >>> 0
+    return h
+  }
+
+  /** Zet de grid-sorteervolgorde en herpak. 'random' geeft elke aanroep een nieuwe
+   * worp (ook als je er al op staat) → herhaald klikken schudt opnieuw. */
+  setGridSort(sort: 'date' | 'name' | 'random'): void {
+    if (sort === 'random') this.gridSeed = (this.gridSeed + 0x9e3779b1) >>> 0
+    this.gridSort = sort
+    this.mode = 'grid'
+    this.layoutGridPositions()
+    this.refit()
+  }
+
   private layoutGridPositions(): void {
-    const ordered = [...this.nodes].sort(
-      (a, b) => (a.item.timestampMs ?? Infinity) - (b.item.timestampMs ?? Infinity),
-    )
+    const ordered = this.orderedForGrid()
     const gap = 28
     const items = ordered.map((n) => ({ n, w: 2 * n.halfW * n.scale, h: 2 * n.halfH * n.scale }))
     const avgW = items.reduce((s, it) => s + it.w, 0) / Math.max(1, items.length)
