@@ -45,7 +45,8 @@ const LEADER_COLOR = 0xbcc5d6 // licht blauw-grijs (iets minder wit)
 const LEADER_ALPHA = 0.85
 // Horizontale offset (scherm-px) van een kaart t.o.v. zijn datummarkering, zodat
 // de leader een mooie S-bezier kan maken (recht omhoog → opzij → recht de tegel in).
-const CARD_OFFSET_PX = 52
+// Ruim + sterk gevarieerd → speelse, wat-verder-van-de-datum spreiding.
+const CARD_OFFSET_PX = 78
 
 const DOT_R = 7 // stip-straal (scherm-px)
 const DOT_HIT = 22 // royale klik-halfmaat van een stip (scherm-px)
@@ -399,11 +400,11 @@ export class YearScene implements Scene {
       itemCount: ev.itemCount,
       hash: hashId(ev.id),
       prefSide: -1,
-      // Deterministisch links/rechts van de datum (magnitude licht gevarieerd).
+      // Deterministisch links/rechts van de datum, sterk gevarieerde magnitude.
       offX:
         ((hashId(ev.id) >>> 8) & 1 ? 1 : -1) *
         CARD_OFFSET_PX *
-        (0.8 + 0.4 * (((hashId(ev.id) >>> 9) % 100) / 100)),
+        (0.5 + 1.0 * (((hashId(ev.id) >>> 9) % 100) / 100)),
       cardW,
       cardH,
       baseScreenScale: cardH / THUMB_H,
@@ -486,16 +487,22 @@ export class YearScene implements Scene {
     for (const n of this.coverNodes) {
       const sx = (n.anchorX - camX) * z + vpW / 2 + n.offX * offOn
       const halfW = n.cardW / 2
-      // Kandidaat-lanes: eerst de huidige (sticky, lossere gap), dan van binnen
-      // naar buiten vanaf de voorkeurskant.
+      // Kandidaat-lanes: eerst de huidige (sticky, lossere gap), daarna de lanes
+      // gesorteerd op nabijheid tot een (hash-)voorkeurslane. Zo verspreiden de
+      // kaarten zich over de beschikbare lanes (i.p.v. dicht op de as te clusteren)
+      // en wordt de verticale ruimte benut, zeker als er weinig zijn.
+      const prefLevel = Math.min(N - 1, Math.floor((((n.hash >>> 20) % 1000) / 1000) * N))
       const cands: { lane: Lane; sticky: boolean }[] = []
       if (n.lane) cands.push({ lane: n.lane, sticky: true })
+      const rest: { lane: Lane; sticky: boolean }[] = []
       for (let lvl = 0; lvl < N; lvl++) {
         for (const side of n.prefSide < 0 ? [-1, 1] : [1, -1]) {
           if (n.lane && n.lane.side === side && n.lane.level === lvl) continue
-          cands.push({ lane: { side, level: lvl }, sticky: false })
+          rest.push({ lane: { side, level: lvl }, sticky: false })
         }
       }
+      rest.sort((a, b) => Math.abs(a.lane.level - prefLevel) - Math.abs(b.lane.level - prefLevel))
+      cands.push(...rest)
       let assigned: Lane | null = null
       for (const c of cands) {
         if (c.lane.level >= N) continue
@@ -606,7 +613,11 @@ export class YearScene implements Scene {
 
     for (const n of this.nodes) {
       const screenX = (n.anchorX - camX) * z + halfW
-      const inView = screenX + n.cardW / 2 > -marginPx && screenX - n.cardW / 2 < vp.width + marginPx
+      // Culling dekt zowel de stip (op de as, screenX) als de kaart (met offset).
+      const cardOff = this.curvedLeaders ? n.offX : 0
+      const loX = screenX + Math.min(0, cardOff) - n.cardW / 2
+      const hiX = screenX + Math.max(0, cardOff) + n.cardW / 2
+      const inView = hiX > -marginPx && loX < vp.width + marginPx
       const wasVisible = n.wasVisible
       n.wasVisible = inView
 

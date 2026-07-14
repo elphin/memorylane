@@ -719,7 +719,11 @@ export function AppShell() {
         }
       }
       engine.onHover = (wx, wy) => {
-        sceneRef.current?.onHover?.(wx, wy)
+        const scene = sceneRef.current
+        scene?.onHover?.(wx, wy)
+        // Pointer-cursor zodra je boven een klikbaar object hangt (kaart/tegel/item).
+        const hit = wx === null ? null : (scene?.hitTest?.(wx, wy) ?? null)
+        engineRef.current?.setCursor(hit ? 'pointer' : '')
       }
       // Sleep-dispatcher: op de jaar-tijdlijn met Ctrl = een datum-range slepen
       // (begin→eind) i.p.v. de camera pannen; anders delegeren naar de scene

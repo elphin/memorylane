@@ -139,6 +139,13 @@ export class RenderEngine {
     this.initialized = true
   }
 
+  /** Zet de muiscursor op de canvas (bijv. 'pointer' boven een klikbaar object,
+   * '' voor de standaard). Veilig als de app nog niet/niet meer bestaat. */
+  setCursor(style: string): void {
+    const canvas = this.app?.canvas as HTMLCanvasElement | undefined
+    if (canvas) canvas.style.cursor = style
+  }
+
   /** Logische viewport-grootte (CSS-pixels), gelijk aan de gesture-coördinaten. */
   viewport(): Viewport {
     return { width: this.app.screen.width, height: this.app.screen.height }
