@@ -30,17 +30,22 @@ const CARD_H_MIN = 66
 const CARD_H_MAX = 132
 
 // Lanes (schermruimte, boven/onder de as).
-const AXIS_CLEAR_PX = 40 // scherm tussen as en de eerste lane
+const AXIS_CLEAR_PX = 96 // scherm tussen as en de eerste lane (ruim, zodat de
+// leader-lijn een mooie verticale S maakt i.p.v. schuin te lopen)
 const LANE_GAP_PX = 40 // ruimte tussen lanes (incl. plek voor de titel ertussen)
 const LANE_PITCH = CARD_H_MAX + LANE_GAP_PX
 const CARD_GAP_PX = 16 // min. horizontale scherm-ruimte tussen kaarten in een lane
 const STICKY_GAP_PX = 4 // lossere gap voor een kaart die z'n lane behoudt (hysterese)
 
-// Leader-lijntjes (as → kaart): een simpele lijn met constante schermdikte.
-const LEADER_WIDTH = 2 // schermdikte (px)
+// Leader-lijntjes (as → kaart): een simpele lijn met constante schermdikte,
+// scherp getekend op schermresolutie (de leader-laag wordt met 1/zoom
+// counter-scaled en in scherm-coördinaten getekend).
+const LEADER_WIDTH = 1 // schermdikte (px)
 const LEADER_COLOR = 0xeef1f7 // bijna wit
 const LEADER_ALPHA = 0.85
-const LEADER_BOW = 16 // max. zijwaartse boog (scherm-px) bij gebogen lijnen
+// Horizontale offset (scherm-px) van een kaart t.o.v. zijn datummarkering, zodat
+// de leader een mooie S-bezier kan maken (recht omhoog → opzij → recht de tegel in).
+const CARD_OFFSET_PX = 52
 
 const DOT_R = 7 // stip-straal (scherm-px)
 const DOT_HIT = 22 // royale klik-halfmaat van een stip (scherm-px)
@@ -88,6 +93,7 @@ interface Node {
   itemCount: number // aantal items (voor effectiveSize bij live resize)
   hash: number
   prefSide: number // voorkeurskant voor lane-balancering
+  offX: number // horizontale scherm-offset van de kaart t.o.v. zijn datum (±)
   // Schermgroottes (px).
   cardW: number
   cardH: number
@@ -393,6 +399,11 @@ export class YearScene implements Scene {
       itemCount: ev.itemCount,
       hash: hashId(ev.id),
       prefSide: -1,
+      // Deterministisch links/rechts van de datum (magnitude licht gevarieerd).
+      offX:
+        ((hashId(ev.id) >>> 8) & 1 ? 1 : -1) *
+        CARD_OFFSET_PX *
+        (0.8 + 0.4 * (((hashId(ev.id) >>> 9) % 100) / 100)),
       cardW,
       cardH,
       baseScreenScale: cardH / THUMB_H,
@@ -436,16 +447,24 @@ export class YearScene implements Scene {
     return lane.side * (AXIS_CLEAR_PX + CARD_H_MAX / 2 + lane.level * LANE_PITCH)
   }
 
-  /** Teken een leader-lijntje (as → kaart, in `this.leaders`): een simpele lijn
-   * van uniforme schermdikte (counter-scaled), bijna wit. Optioneel licht gebogen
-   * (deterministisch per kaart via `bowFrac ∈ [-1,1]`) i.p.v. recht. `yEnd` = de
-   * (wereld-)y van de kaart-onderrand; het lijntje start op de as (y=0). */
-  private drawLeader(ax: number, yEnd: number, invZ: number, appear: number, bowFrac: number): void {
-    const bow = (this.curvedLeaders ? bowFrac : 0) * LEADER_BOW * invZ
-    this.leaders.moveTo(ax, 0)
-    if (bow !== 0) this.leaders.quadraticCurveTo(ax + bow, yEnd / 2, ax, yEnd)
-    else this.leaders.lineTo(ax, yEnd)
-    this.leaders.stroke({ width: LEADER_WIDTH * invZ, color: LEADER_COLOR, alpha: LEADER_ALPHA * appear })
+  /** Teken een leader-lijntje (as → kaart) in `this.leaders`, dat op 1/zoom is
+   * gecounter-scaled → we tekenen in scherm-coördinaten (wereld × z), zodat de
+   * lijn SCHERP blijft (geen kartels bij inzoomen) en een constante dikte houdt.
+   * Gebogen: een cubic bezier die RECHT omhoog van de as vertrekt, opzij curvet en
+   * RECHT de tegel in gaat. Recht: een kaarsrechte lijn. `dateX`/`cardX` = wereld-x
+   * (as-datum resp. kaart), `yEnd` = wereld-y van de kaart-onderrand. */
+  private drawLeader(dateX: number, cardX: number, yEnd: number, z: number, appear: number): void {
+    const x0 = dateX * z
+    const x3 = cardX * z
+    const y3 = yEnd * z
+    this.leaders.moveTo(x0, 0)
+    if (this.curvedLeaders && x3 !== x0) {
+      // Controlepunten delen de x met hun eindpunt → verticale uiteinden.
+      this.leaders.bezierCurveTo(x0, y3 * 0.4, x3, y3 * 0.6, x3, y3)
+    } else {
+      this.leaders.lineTo(x3, y3)
+    }
+    this.leaders.stroke({ width: LEADER_WIDTH, color: LEADER_COLOR, alpha: LEADER_ALPHA * appear })
   }
 
   /** Breedte-dominante fit: het hele jaar past in de breedte; kaarten (constante
@@ -463,8 +482,9 @@ export class YearScene implements Scene {
     const camX = this.engine.camera.x
     const N = this.lanesPerSide(vpH)
     const occ = new Map<string, { lo: number; hi: number }[]>()
+    const offOn = this.curvedLeaders ? 1 : 0
     for (const n of this.coverNodes) {
-      const sx = (n.anchorX - camX) * z + vpW / 2
+      const sx = (n.anchorX - camX) * z + vpW / 2 + n.offX * offOn
       const halfW = n.cardW / 2
       // Kandidaat-lanes: eerst de huidige (sticky, lossere gap), dan van binnen
       // naar buiten vanaf de voorkeurskant.
@@ -579,7 +599,10 @@ export class YearScene implements Scene {
     // Lane-toewijzing (kaart vs. stip) opnieuw bepalen.
     this.repack(vp.width, vp.height)
 
+    // Leader-laag op schermresolutie tekenen (scherp): counter-scale met 1/zoom en
+    // teken in wereld×z-coördinaten (zie drawLeader).
     this.leaders.clear()
+    this.leaders.scale.set(invZ)
 
     for (const n of this.nodes) {
       const screenX = (n.anchorX - camX) * z + halfW
@@ -612,7 +635,8 @@ export class YearScene implements Scene {
           // Kant volgt de doel-lane (niet het curY-teken) zodat een zeldzame
           // lane-flip niet één frame door de as "duikt" met omklappende titel/leader.
           const side = n.lane ? n.lane.side : n.curY < 0 ? -1 : 1
-          n.card.position.set(n.anchorX, n.curY * invZ)
+          const cardX = n.anchorX + (this.curvedLeaders ? n.offX : 0) * invZ
+          n.card.position.set(cardX, n.curY * invZ)
           n.card.scale.set(n.baseScreenScale * n.hover * grow * invZ)
           n.card.alpha = n.appear
 
@@ -623,10 +647,10 @@ export class YearScene implements Scene {
             n.title.position.set(0, side * (THUMB_H / 2 + BORDER + 6))
           }
 
-          // Leader: van de as naar de onderrand van de kaart, faadt met appear.
+          // Leader: van de datum op de as naar de onderrand van de (verschoven)
+          // kaart; faadt met appear.
           const innerY = (n.curY - side * (n.cardH / 2) * grow) * invZ
-          const bowFrac = (((n.hash >>> 6) % 1000) / 1000) * 2 - 1
-          this.drawLeader(n.anchorX, innerY, invZ, n.appear, bowFrac)
+          this.drawLeader(n.anchorX, cardX, innerY, z, n.appear)
 
           // Texture (alleen zichtbare kaarten laden/warmen een texture).
           if (n.sprite && !n.loaded && n.coverItemId) {
@@ -678,7 +702,7 @@ export class YearScene implements Scene {
       if (!inView) {
         n.hitHalfW = 0
       } else if (n.appear > 0.5) {
-        n.hitCx = n.anchorX
+        n.hitCx = n.anchorX + (this.curvedLeaders ? n.offX : 0) * invZ
         n.hitCy = n.curY * invZ
         n.hitHalfW = (n.cardW / 2 + BORDER) * invZ
         n.hitHalfH = (n.cardH / 2 + BORDER) * invZ
