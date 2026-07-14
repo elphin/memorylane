@@ -88,6 +88,9 @@ interface Node {
   baseScreenScale: number // cardH / THUMB_H (kaart in THUMB-eenheden getekend)
   // Packing-toestand (leeft mee over frames voor stabiliteit).
   lane: Lane | null // null = stip/overflow
+  // Animatie-toestand (fase B): appear 0=stip, 1=kaart; curY = huidige scherm-y.
+  appear: number
+  curY: number
   // Pixi-objecten.
   card: Container | null // cover-events
   title: Text | null
@@ -164,6 +167,7 @@ export class YearScene implements Scene {
   private coverNodes: Node[] = [] // op belang gesorteerd (packing-volgorde)
   private monthLabels: { text: Text; midX: number }[] = []
   private hoveredId: string | null = null
+  private primed = false // eerste frame snapt naar de packing-toestand; daarna animeren
   private yearStart = 0
   private span = 1
   private dayPicker = false
@@ -382,6 +386,8 @@ export class YearScene implements Scene {
       cardH,
       baseScreenScale: cardH / THUMB_H,
       lane: null,
+      appear: 0,
+      curY: 0,
       card,
       title,
       titleSide: 0,
@@ -556,102 +562,116 @@ export class YearScene implements Scene {
       const screenX = (n.anchorX - camX) * z + halfW
       const inView = screenX + n.cardW / 2 > -marginPx && screenX - n.cardW / 2 < vp.width + marginPx
       const wasVisible = n.wasVisible
+      n.wasVisible = inView
 
-      if (n.hasCover && n.lane) {
-        // --- Kaart ---
-        if (n.dot) n.dot.visible = false
-        const card = n.card!
-        card.visible = inView
-        n.wasVisible = inView
-        if (!inView) {
-          n.hitHalfW = 0
-          continue
-        }
-        const laneY = this.laneCenterY(n.lane)
-        // Hover-animatie.
-        const targetHover = n.eventId === this.hoveredId ? 1.05 : 1
-        n.hover += (targetHover - n.hover) * 0.2
-        card.position.set(n.anchorX, laneY * invZ)
-        card.scale.set((n.baseScreenScale * n.hover) * invZ)
+      // Animatie-doel: heeft dit event een lane → kaart (appear→1) op laneY;
+      // anders stip/overflow (appear→0) op de as. Eerste frame snapt (primed).
+      const hasLane = n.hasCover && !!n.lane
+      const targetAppear = hasLane ? 1 : 0
+      const targetY = hasLane ? this.laneCenterY(n.lane!) : 0
+      if (!this.primed) {
+        n.appear = targetAppear
+        n.curY = targetY
+      } else {
+        n.appear += (targetAppear - n.appear) * 0.16
+        n.curY += (targetY - n.curY) * 0.16
+      }
+      const off = (((n.hash >>> 3) % 5) - 2) * 6 // scherm-offset bij same-date stippen
 
-        // Titel aan de buitenkant van de kaart (kant volgt de lane).
-        if (n.title && n.titleSide !== n.lane.side) {
-          n.titleSide = n.lane.side
-          const outer = n.lane.side < 0 ? -1 : 1
-          n.title.anchor.set(0.5, outer < 0 ? 1 : 0)
-          n.title.position.set(0, outer * (THUMB_H / 2 + BORDER + 6))
-        }
+      // --- Kaart (cover-event, terwijl appear>0): stijgt op uit de as ---
+      if (n.card) {
+        const showCard = inView && n.appear > 0.01
+        n.card.visible = showCard
+        if (showCard) {
+          const targetHover = n.eventId === this.hoveredId ? 1.05 : 1
+          n.hover += (targetHover - n.hover) * 0.2
+          const grow = 0.5 + 0.5 * n.appear // van ~half (bij de as) naar vol
+          // Kant volgt de doel-lane (niet het curY-teken) zodat een zeldzame
+          // lane-flip niet één frame door de as "duikt" met omklappende titel/leader.
+          const side = n.lane ? n.lane.side : n.curY < 0 ? -1 : 1
+          n.card.position.set(n.anchorX, n.curY * invZ)
+          n.card.scale.set(n.baseScreenScale * n.hover * grow * invZ)
+          n.card.alpha = n.appear
 
-        // Leader: 1px van de as naar de onderrand van de kaart (wereldruimte).
-        const innerY = (laneY - n.lane.side * (n.cardH / 2)) * invZ
-        this.leaders
-          .moveTo(n.anchorX, 0)
-          .lineTo(n.anchorX, innerY)
-          .stroke({ width: 1, color: 0x3a4256, alpha: 0.6, pixelLine: true })
+          // Titel-kant volgt de (huidige) lane.
+          if (n.title && n.titleSide !== side) {
+            n.titleSide = side
+            n.title.anchor.set(0.5, side < 0 ? 1 : 0)
+            n.title.position.set(0, side * (THUMB_H / 2 + BORDER + 6))
+          }
 
-        // Basis-cover laden (alleen zichtbare kaarten laden een texture).
-        if (n.sprite && !n.loaded && n.coverItemId) {
-          const tex = engine.textures.get(n.key, frame)
-          if (tex) {
-            n.sprite.texture = tex
-            n.sprite.tint = 0xffffff
-            fitCover(n.sprite, tex)
-            n.loaded = true
-            n.curKey = n.key
-            if (n.nextAt === 0) n.nextAt = now + this.slideMs * (0.3 + Math.random())
-          } else {
-            const src = this.backend.thumb(n.coverItemId, 256)
-            engine.textures.request({ key: n.key, url: src.url, hue: src.hue, size: 256 })
+          // Leader: van de as naar de onderrand van de kaart, faadt met appear.
+          const innerY = (n.curY - side * (n.cardH / 2) * grow) * invZ
+          this.leaders
+            .moveTo(n.anchorX, 0)
+            .lineTo(n.anchorX, innerY)
+            .stroke({ width: 1, color: 0x3a4256, alpha: 0.6 * n.appear, pixelLine: true })
+
+          // Texture (alleen zichtbare kaarten laden/warmen een texture).
+          if (n.sprite && !n.loaded && n.coverItemId) {
+            const tex = engine.textures.get(n.key, frame)
+            if (tex) {
+              n.sprite.texture = tex
+              n.sprite.tint = 0xffffff
+              fitCover(n.sprite, tex)
+              n.loaded = true
+              n.curKey = n.key
+              if (n.nextAt === 0) n.nextAt = now + this.slideMs * (0.3 + Math.random())
+            } else {
+              const src = this.backend.thumb(n.coverItemId, 256)
+              engine.textures.request({ key: n.key, url: src.url, hue: src.hue, size: 256 })
+            }
+          }
+          if (n.loaded) {
+            if (n.curKey) engine.textures.get(n.curKey, frame)
+            if (n.fade > 0 && n.pendingKey) engine.textures.get(n.pendingKey, frame)
+          }
+          if (!wasVisible && n.loaded) {
+            if (n.fade > 0 && n.sprite2) {
+              n.sprite2.alpha = 0
+              n.fade = 0
+              n.pendingKey = ''
+            }
+            n.nextAt = now + this.slideMs * (0.3 + Math.random())
+          }
+          // Slideshow alleen op een (vrijwel) volledig opgestegen kaart.
+          if (this.slideEnabled && n.appear > 0.9 && n.loaded && n.sprite && n.sprite2 && n.photoIds.length > 1) {
+            this.tickSlideshow(n, engine, frame, now, dt)
           }
         }
-        if (n.loaded) {
-          if (n.curKey) engine.textures.get(n.curKey, frame)
-          if (n.fade > 0 && n.pendingKey) engine.textures.get(n.pendingKey, frame)
-        }
-        if (!wasVisible && n.loaded) {
-          // Terug in beeld: een crossfade die tijdens de afwezigheid "bevroor" kan
-          // een inmiddels geëvicte overlay-texture tonen → netjes afbreken.
-          if (n.fade > 0 && n.sprite2) {
-            n.sprite2.alpha = 0
-            n.fade = 0
-            n.pendingKey = ''
-          }
-          n.nextAt = now + this.slideMs * (0.3 + Math.random())
-        }
-        if (this.slideEnabled && n.loaded && n.sprite && n.sprite2 && n.photoIds.length > 1) {
-          this.tickSlideshow(n, engine, frame, now, dt)
-        }
+      }
 
-        // Hit-box (wereld) = de constante scherm-kaart gedeeld door de zoom.
+      // --- Stip (non-cover altijd; cover-overflow terwijl appear<1) ----------
+      if (n.dot) {
+        const dotAlpha = 1 - n.appear
+        const showDot = inView && dotAlpha > 0.01
+        n.dot.visible = showDot
+        if (showDot) {
+          n.dot.position.set(n.anchorX + off * invZ, 0)
+          n.dot.scale.set(invZ)
+          n.dot.alpha = dotAlpha
+        }
+      }
+
+      // --- Hit-box: de kaart als die overheerst, anders de stip -------------
+      if (!inView) {
+        n.hitHalfW = 0
+      } else if (n.appear > 0.5) {
         n.hitCx = n.anchorX
-        n.hitCy = laneY * invZ
+        n.hitCy = n.curY * invZ
         n.hitHalfW = (n.cardW / 2 + BORDER) * invZ
         n.hitHalfH = (n.cardH / 2 + BORDER) * invZ
       } else if (n.dot) {
-        // --- Stip (non-cover, of cover-overflow bij een niet-span) ---
-        if (n.card) n.card.visible = false
-        // Kleine deterministische scherm-offset zodat same-date stippen niet
-        // exact overlappen.
-        const off = (((n.hash >>> 3) % 5) - 2) * 6
-        n.dot.visible = inView
-        n.wasVisible = inView
-        if (!inView) {
-          n.hitHalfW = 0
-          continue
-        }
-        n.dot.position.set(n.anchorX + off * invZ, 0)
-        n.dot.scale.set(invZ)
         n.hitCx = n.anchorX + off * invZ
         n.hitCy = 0
         n.hitHalfW = Math.max(MARKER_HIT_MIN, DOT_HIT) * invZ
         n.hitHalfH = DOT_HIT * invZ
       } else {
-        // --- Span-overflow: alleen de balk (geen kaart, geen stip) ---
-        if (n.card) n.card.visible = false
-        n.wasVisible = false
+        // Span-overflow: alleen de balk op de as is de marker (niet klikbaar hier).
         n.hitHalfW = 0
       }
     }
+    this.primed = true
   }
 
   private tickSlideshow(n: Node, engine: RenderEngine, frame: number, now: number, dt: number): void {
