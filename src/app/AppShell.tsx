@@ -25,6 +25,8 @@ interface EventForm {
   endAt: string
   /** Belang/grootte (1–100) die de kaartgrootte op de jaar-tijdlijn bepaalt. */
   size?: number
+  /** Maak het jaar (uit de datum) aan i.p.v. in het huidige jaar (lifeline: nieuw jaar). */
+  atDate?: boolean
 }
 
 /** Drie startwaarden voor het belang van een nieuw event (de gebruiker kan het
@@ -1141,6 +1143,12 @@ export function AppShell() {
     setEventForm({ mode: 'create', title: '', startAt, endAt: '', size: 50 })
   }
 
+  // Nieuw jaar (vanaf de lifeline): maak een eerste memory op een datum aan → het
+  // jaar uit die datum wordt aangemaakt (atDate), ongeacht welk jaar laatst bezocht is.
+  const openNewYear = (): void => {
+    setEventForm({ mode: 'create', title: '', startAt: todayISO(), endAt: '', size: 50, atDate: true })
+  }
+
   // Start de diavoorstelling met een context-afhankelijke foto-set: op het overzicht
   // alle foto's, in een jaar die van dat jaar, in een event alleen die van het
   // event. Tag-filter (include/exclude) uit de instellingen.
@@ -1243,12 +1251,14 @@ export function AppShell() {
     try {
       if (f.mode === 'create') {
         const yearId = currentYearRef.current
-        if (yearId) {
+        // `atDate` (nieuw-jaar-flow) of een lege vault → het jaar uit de datum
+        // aanmaken; anders het event in het huidige jaar.
+        if (yearId && !f.atDate) {
           await backend.createEvent(yearId, f.title.trim(), f.startAt, end, f.size ?? null)
           enterYearRef.current(yearId) // ververs de jaar-tijdlijn
         } else {
-          // Geen huidig jaar (lege vault / eerste memory): maak het jaar + de
-          // memory aan op datum, herbouw de lifeline en duik het nieuwe jaar in.
+          // Maak het jaar + de memory aan op datum, herbouw de lifeline en duik
+          // het (mogelijk nieuwe) jaar in.
           await backend.createEventAtDate(f.title.trim(), f.startAt, end, f.size ?? null)
           await rebuildLifeline()
           const yearNum = Number(f.startAt.slice(0, 4))
@@ -1524,6 +1534,7 @@ export function AppShell() {
           uiLevel={uiLevel}
           layoutMode={layoutMode}
           onAddEvent={openNewEvent}
+          onAddYear={openNewYear}
           onAddNote={() => setModal('note')}
           onAddPhotos={() => void addPhotos()}
           onEditEvent={openEditEvent}
@@ -2030,6 +2041,7 @@ function Fab({
   uiLevel,
   layoutMode,
   onAddEvent,
+  onAddYear,
   onAddNote,
   onAddPhotos,
   onEditEvent,
@@ -2045,6 +2057,7 @@ function Fab({
   uiLevel: 'lifeline' | 'year' | 'event' | 'focus'
   layoutMode: 'custom' | 'grid' | 'scatter'
   onAddEvent: () => void
+  onAddYear: () => void
   onAddNote: () => void
   onAddPhotos: () => void
   onEditEvent: () => void
@@ -2058,6 +2071,13 @@ function Fab({
   onGridSort: (sort: 'date' | 'name' | 'random') => void
 }) {
   const wrap: React.CSSProperties = { position: 'absolute', right: 20, bottom: 20, display: 'flex', gap: 10 }
+  if (uiLevel === 'lifeline') {
+    return (
+      <div style={wrap}>
+        <button onClick={onAddYear} style={fabBtn}>+ Nieuw jaar</button>
+      </div>
+    )
+  }
   if (uiLevel === 'year') {
     return (
       <div style={wrap}>
@@ -2232,7 +2252,7 @@ function EventDialog({
         style={{ width: 480, maxWidth: '90%', background: '#161c28', borderRadius: 12, padding: 20 }}
       >
         <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 12 }}>
-          {form.mode === 'create' ? 'Nieuwe memory' : 'Memory bewerken'}
+          {form.mode === 'create' ? (form.atDate ? 'Nieuw jaar — eerste memory' : 'Nieuwe memory') : 'Memory bewerken'}
         </div>
         <input
           autoFocus
