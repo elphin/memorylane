@@ -1,9 +1,16 @@
-// L1 — Jaar: een horizontale maand-tijdlijn (Jan–Dec). Semantische zoom:
-// ver uitgezoomd zie je alleen de BELANGRIJKSTE memories als kleine markers op
-// de as (minder belangrijke vallen weg, afhankelijk van de schermruimte); zoom
-// je in, dan "bloeien" de markers open — ze stijgen naar hun lane en worden
-// thumbnails, en minder belangrijke memories faden er geleidelijk bij. Zo werken
-// ook honderden events per jaar vloeiend. Klik op een event → L2-canvas.
+// L1 — Jaar: een horizontale maand-tijdlijn (Jan–Dec). De as ligt verticaal
+// gecentreerd; INZOOMEN rekt de TIJD-AS uit (maanden worden breder) i.p.v. de
+// kaarten te vergroten — kaarten houden een VASTE schermgrootte (per zwaarte).
+// De belangrijkste memories vullen de lanes rond de as (overzicht is dus gevuld);
+// wie niet past is een stip op de as en "bloeit" op tot kaart zodra er ruimte
+// komt. Klik op een event → L2-canvas.
+//
+// Renderschema (de kern): de wereld-container wordt door de camera geschaald met
+// `z`. Een kaart staat op wereld-x = ankerdatum (dus hij schuift mee als de as
+// uitrekt), en krijgt `scale = baseScreenScale / z` en `y = laneScreenY / z`
+// (met camera.y=0) → constante schermgrootte + constante scherm-lane-offset. De
+// reveal-transitie (root.scale 0.12→1) componeert daar bovenop, want we delen
+// door `camera.zoom`, niet door de reveal-schaal.
 
 import { Container, Graphics, Sprite, Text, Texture } from 'pixi.js'
 import type { Backend, EventSummary, YearDetail } from '../../lib/backend'
@@ -11,164 +18,93 @@ import type { FrameContext, RenderEngine } from '../core/engine'
 import type { DragHandle } from '../core/gestures'
 import type { Scene } from './scene'
 
-const AXIS_W = 2400 // wereldbreedte van de jaar-as (Jan..Dec)
+const AXIS_W = 2400 // wereldbreedte van de jaar-as (Jan..Dec) bij zoom=1
 const THUMB_W = 168
 const THUMB_H = 126
 const BORDER = 8
-const AXIS_GAP = 118 // afstand as → midden van de eerste lane-kaart
-const LABEL_CLEARANCE = 46 // extra ruimte onder de as (voor de maandnamen)
-const LANE_GAP = 22 // verticale ruimte tussen lanes
-const CARD_GAP = 26 // min. horizontale ruimte tussen kaarten in dezelfde lane
-const DOT_R = 9 // marker voor events zonder cover
+const CARD_ASPECT = THUMB_W / THUMB_H
 
-// --- Semantische-zoom-parameters (afgestemd op de fit-zoom z0 ≈ 0.42) ---------
-const SCREEN_GAP_PX = 130 // declutter-afstand in SCHERM-pixels (zelf-schalend)
-const FULL_ZOOM = 1.1 // zoom waarbij ÁLLE events aanwezig zijn (viewport-onafh.)
-const REVEAL_BAND = 0.18 // relatieve breedte van de fade-in rond revealZoom
-const BLOOM_LO = 80 // schermhoogte (px) waaronder een kaart een marker blijft
-const BLOOM_HI = 150 // schermhoogte (px) waarboven een kaart volle thumbnail is
-const MARKER_R = 7 // straal van de pip-marker op de as
-const MARKER_HIT = 24 // royale klik-halfmaat van een marker (tegen mis-taps)
-const HIT_PRESENCE = 0.35 // onder deze presence is een node niet klikbaar
+// Kaart-schermhoogtes (px) naar zwaarte. Vast op het scherm, ongeacht de zoom.
+const CARD_H_BASE = 96 // schermhoogte bij effectiveSize 50
+const CARD_H_MIN = 66
+const CARD_H_MAX = 132
 
-// Belang → kaartschaal. size 50 = standaard (1.0); geklemd zodat kleine events
-// leesbaar blijven en grote niet de tijdlijn overheersen.
-const CARD_MIN_SCALE = 0.6
-const CARD_MAX_SCALE = 1.8
-/** Visuele schaal van een event-kaart op basis van zijn `size` (1–100). */
-function cardScale(size: number): number {
-  return Math.max(CARD_MIN_SCALE, Math.min(CARD_MAX_SCALE, size / 50))
-}
+// Lanes (schermruimte, boven/onder de as).
+const AXIS_CLEAR_PX = 40 // scherm tussen as en de eerste lane
+const LANE_GAP_PX = 40 // ruimte tussen lanes (incl. plek voor de titel ertussen)
+const LANE_PITCH = CARD_H_MAX + LANE_GAP_PX
+const CARD_GAP_PX = 16 // min. horizontale scherm-ruimte tussen kaarten in een lane
+const STICKY_GAP_PX = 4 // lossere gap voor een kaart die z'n lane behoudt (hysterese)
 
-/** Smoothstep tussen a en b (0 onder a, 1 boven b, S-curve ertussen). */
-function smoothstep(a: number, b: number, x: number): number {
-  if (a === b) return x < a ? 0 : 1
-  const t = Math.max(0, Math.min(1, (x - a) / (b - a)))
-  return t * t * (3 - 2 * t)
-}
+const DOT_R = 7 // stip-straal (scherm-px)
+const DOT_HIT = 22 // royale klik-halfmaat van een stip (scherm-px)
+const MARKER_HIT_MIN = 20
+const LABEL_SCREEN_Y = 20 // maandlabel-offset onder de as (scherm-px)
+const TITLE_MAX = 24 // max. tekens van een memory-titel
 
-function lerp(a: number, b: number, t: number): number {
-  return a + (b - a) * t
-}
-
-/** Effectieve zwaarte van een memory: de rating-`size` is leidend, met een
- * bescheiden, log-geschaalde bonus voor rijkere memories (meer items). De bonus
- * is geklemd op +12 — kleiner dan de 20-stap tussen de buckets — zodat de
- * rating-tiers (gewoon<bijzonder<uitzonderlijk) nooit worden ingehaald. Voedt
- * ZOWEL de kaartgrootte ALS de reveal-prioriteit (samenhangend). */
+/** Effectieve zwaarte: rating-`size` leidend, met een bescheiden log-nudge voor
+ * rijkere memories (max +12 < de 20-stap tussen de buckets → tiers blijven). */
 function effectiveSize(size: number | undefined, itemCount: number): number {
   const base = size == null ? 50 : size
   const nudge = Math.max(0, Math.min(12, Math.round(4 * (Math.log2(1 + Math.max(0, itemCount)) - 1))))
   return Math.max(1, Math.min(100, base + nudge))
 }
 
-/** Deterministische ±8% schaalvariatie zodat memories binnen dezelfde zwaarte
- * niet exact even groot zijn (organischer). Alleen visueel — NIET in de
- * reveal-prioriteit (die gebruikt de zuivere effectiveSize + id-hash). */
+/** Deterministische ±8% grootte-variatie (organischer); alleen visueel. */
 function jitterScale(id: string): number {
   const r = ((hashId(id) >>> 13) % 1000) / 1000
   return 1 + (r - 0.5) * 0.16
 }
 
-/** Plaatsing van één cover-kaart (resultaat van de lane-packing). */
-interface Placement {
-  ev: EventSummary
-  anchorX: number
-  cardX: number // laneX (eindpositie bij bloom=1), inclusief jitter
-  cardY: number // laneY (eindpositie bij bloom=1)
-  side: number
-  bs: number // baseScale (grootte-schaal) van deze kaart
-  ch: number // geschaalde kaarthoogte
-  innerY: number // binnenrand (leader-eindpunt)
-  startY: number // leader-startpunt op de as (blokrand bij meerdaags)
-  isSpan: boolean
-}
-
-/** Zuivere lane-packing: plaatst de (op datum gesorteerde) cover-events rond hun
- * datum in lanes boven/onder de as, geschaald met `factor` × hun eigen zwaarte.
- * Geen Pixi-neveneffecten → herbruikbaar door `setup()` (tekenen) én de
- * "passend maken"-solver (alleen `maxAbsY` meten bij een proef-factor). */
-function computePlacements(
-  withCoverSorted: EventSummary[],
-  factor: number,
-  anchorXOf: (ev: EventSummary) => number,
-  spanIds: Set<string>,
-): { placements: Placement[]; maxAbsY: number } {
-  const laneRight: Record<string, number> = {}
-  let maxAbsY = 0
-  const jyAmp = Math.min(120, 30 + withCoverSorted.length * 2)
-  const INNER_CLEAR = AXIS_GAP - THUMB_H / 2
-  const LANE_PITCH = THUMB_H * CARD_MAX_SCALE + LANE_GAP
-  const placements: Placement[] = []
-  withCoverSorted.forEach((ev, j) => {
-    const anchorX = anchorXOf(ev)
-    const bs = cardScale(effectiveSize(ev.size, ev.itemCount) * factor) * jitterScale(ev.id)
-    const cw = THUMB_W * bs
-    const ch = THUMB_H * bs
-    const seed = hashId(ev.id)
-    const jx = ((seed % 1000) / 1000 - 0.5) * 64 // ±32 (speels zijwaarts)
-    const jy = (((seed >>> 10) % 1000) / 1000) * jyAmp // 0..jyAmp, altijd naar buiten
-    const cardX = anchorX + jx
-    const prefer = j % 2 === 0 ? -1 : 1 // -1 = boven (neg. y), 1 = onder
-    let side = prefer
-    let level = 0
-    for (let lvl = 0; lvl < 64; lvl++) {
-      const kPref = `${prefer}:${lvl}`
-      const kOther = `${-prefer}:${lvl}`
-      if (cardX - cw / 2 > (laneRight[kPref] ?? -1e9) + CARD_GAP) {
-        side = prefer
-        level = lvl
-        break
-      }
-      if (cardX - cw / 2 > (laneRight[kOther] ?? -1e9) + CARD_GAP) {
-        side = -prefer
-        level = lvl
-        break
-      }
-    }
-    laneRight[`${side}:${level}`] = cardX + cw / 2
-    const gap = INNER_CLEAR + ch / 2 + (side === 1 ? LABEL_CLEARANCE : 0)
-    const cardY = side * (gap + level * LANE_PITCH + jy)
-    maxAbsY = Math.max(maxAbsY, Math.abs(cardY) + ch / 2)
-    const innerY = cardY - side * (ch / 2)
-    const startY = spanIds.has(ev.id) ? side * 9 : 0
-    placements.push({ ev, anchorX, cardX, cardY, side, bs, ch, innerY, startY, isSpan: spanIds.has(ev.id) })
-  })
-  return { placements, maxAbsY }
+/** Schermhoogte (px) van een kaart o.b.v. zwaarte + jitter. Klemt ná de jitter,
+ * zodat de werkelijke hoogte nooit boven CARD_H_MAX komt (die het lane-budget
+ * reserveert → geen verticale clipping in de buitenste lane). */
+function cardScreenH(eff: number, id: string): number {
+  const h = CARD_H_BASE * (eff / 50) * jitterScale(id)
+  return Math.max(CARD_H_MIN, Math.min(CARD_H_MAX, h))
 }
 
 const MONTHS = ['jan', 'feb', 'mrt', 'apr', 'mei', 'jun', 'jul', 'aug', 'sep', 'okt', 'nov', 'dec']
 
+interface Lane {
+  side: number // -1 = boven de as (neg. y), 1 = onder
+  level: number // 0 = dichtst bij de as
+}
+
 interface Node {
   eventId: string
-  anchorX: number // x op de as (de datum van het event)
-  laneX: number // eind-x van de kaart (bloom=1), inclusief jitter
-  laneY: number // eind-y van de kaart (bloom=1); 0 voor dot-events
+  anchorX: number // wereld-x (de datum)
   hasCover: boolean
+  isSpan: boolean
   coverItemId?: string
-  container: Container // de cover-kaart, of de dot-container
-  marker: Graphics | null // pip op de as (cover-events, niet spans)
-  leader: Graphics | null // per-kaart leader (statische geometrie, alpha animeert)
+  eff: number // effectiveSize (belang) — bepaalt grootte + packing-prioriteit
+  size: number // rauwe rating 1–100 (bron van eff; leeft mee met Shift-resize)
+  itemCount: number // aantal items (voor effectiveSize bij live resize)
+  hash: number
+  prefSide: number // voorkeurskant voor lane-balancering
+  // Schermgroottes (px).
+  cardW: number
+  cardH: number
+  baseScreenScale: number // cardH / THUMB_H (kaart in THUMB-eenheden getekend)
+  // Packing-toestand (leeft mee over frames voor stabiliteit).
+  lane: Lane | null // null = stip/overflow
+  // Pixi-objecten.
+  card: Container | null // cover-events
+  title: Text | null
+  titleSide: number // laatst toegepaste titel-kant (om niet elke frame te herzetten)
+  dot: Container | null // stip-marker (non-cover, of cover-overflow bij een niet-span)
   sprite: Sprite | null
-  sprite2: Sprite | null // crossfade-overlay voor de slideshow
+  sprite2: Sprite | null
   key: string
   loaded: boolean
-  scale: number // hover-animatie
-  baseScale: number // grootte-schaal (effectiveSize × jaar-factor × jitter)
-  size: number // rauwe belang-rating 1–100 (bron van baseScale, leeft mee met resize)
-  itemCount: number // aantal items (voor effectiveSize bij live resize)
-  revealZoom: number // zoom waarop dit event verschijnt (0 = altijd)
-  presence: number // huidige zichtbaarheid (per frame) — voor hittest
-  bloom: number // huidige marker→thumbnail-voortgang (per frame)
-  wasVisible: boolean
-  // Per-frame hit-box (marker→kaart geïnterpoleerd met bloom).
+  hover: number // hover-schaal-animatie
+  // Hit-box (wereldruimte, per frame gezet).
   hitCx: number
   hitCy: number
   hitHalfW: number
   hitHalfH: number
-  cardHalfW: number // volle kaart-halfmaat (bloom=1) / dot-hitbreedte
-  cardHalfH: number
-  // Slideshow-roulatie (alleen cover-kaarten met >1 foto).
+  wasVisible: boolean
+  // Slideshow-roulatie.
   photoIds: string[]
   photoIdx: number
   pendingIdx: number
@@ -178,14 +114,11 @@ interface Node {
   fade: number
 }
 
-// Felle basiskleuren met sterk wisselende tinten (warm/koel afgewisseld) zodat
-// twee naburige meerdaagse-blokjes altijd contrasteren.
+// Felle basiskleuren (warm/koel afgewisseld) voor de meerdaagse-blokjes.
 const SPAN_PALETTE_RAW = [
   0xff5c5c, 0x3cd6d6, 0xffd93c, 0xb15cff, 0x6ee06e, 0xff5cc0, 0x5c8cff, 0xffa63c, 0x38c9a0,
   0xf05545,
 ]
-/** Meng een felle kleur met de donkere achtergrond tot een gedimde, maar
- * ONDOORZICHTIGE kleur — zo schijnen de as-lijn en leader niet door het blokje. */
 function opaqueSpan(color: number): number {
   const bg = 0x0a0a0f
   const mix = (c: number, b: number): number => Math.round(c * 0.45 + b * 0.55)
@@ -196,7 +129,7 @@ function opaqueSpan(color: number): number {
 }
 const SPAN_PALETTE = SPAN_PALETTE_RAW.map(opaqueSpan)
 
-/** Stabiele hash (FNV-1a) van een id → voor deterministische, "vrije" jitter. */
+/** Stabiele hash (FNV-1a) van een id. */
 function hashId(s: string): number {
   let h = 2166136261
   for (let i = 0; i < s.length; i++) {
@@ -206,21 +139,17 @@ function hashId(s: string): number {
   return h >>> 0
 }
 
-/** Kap een titel af op een maximale lengte (met ellipsis) zodat lange namen de
- * tijdlijn niet overhoop gooien. */
 function truncateTitle(s: string, n: number): string {
   const t = s.trim()
   return t.length > n ? `${t.slice(0, n - 1).trimEnd()}…` : t
 }
 
-/** Cover-fit een sprite op een thumbnail-kaart (vult, behoudt aspect). */
 function fitCover(sprite: Sprite, tex: Texture): void {
   const s = Math.max(THUMB_W / tex.width, THUMB_H / tex.height)
   sprite.setSize(tex.width * s, tex.height * s)
 }
 
-/** Parse een `YYYY-MM-DD`-datum LOKAAL (niet als UTC — dat verschuift op
- * jaargrenzen een dag en zou een event buiten het jaar duwen). */
+/** Parse een `YYYY-MM-DD`-datum LOKAAL (niet als UTC). */
 function parseLocalDate(iso: string): number {
   const [y, m, d] = iso.split('-').map(Number)
   return new Date(y || 1970, (m || 1) - 1, d || 1).getTime()
@@ -228,14 +157,15 @@ function parseLocalDate(iso: string): number {
 
 export class YearScene implements Scene {
   readonly root = new Container()
-  private leadersLayer = new Container()
-  private markersLayer = new Container()
+  private leaders = new Graphics()
   private cardsLayer = new Container()
+  private dotsLayer = new Container()
   private nodes: Node[] = []
+  private coverNodes: Node[] = [] // op belang gesorteerd (packing-volgorde)
+  private monthLabels: { text: Text; midX: number }[] = []
   private hoveredId: string | null = null
   private yearStart = 0
   private span = 1
-  private z0 = 0.5 // fit-zoom (breedte-dominant); anker voor de bloom-ondergrens
   private dayPicker = false
   private hoverWX: number | null = null
   private dayLine = new Graphics()
@@ -244,11 +174,6 @@ export class YearScene implements Scene {
   private slideEnabled: boolean
   private slideMs: number
   private showTitles: boolean
-  private yearFactor = 1
-  // Bewaard voor de "passend maken"-solver.
-  private withCoverSorted: EventSummary[] = []
-  private anchorXOf: (ev: EventSummary) => number = () => 0
-  private spanIds: Set<string> = new Set()
 
   constructor(
     private engine: RenderEngine,
@@ -265,34 +190,36 @@ export class YearScene implements Scene {
     const span = Math.max(1, yearEnd - yearStart)
     this.yearStart = yearStart
     this.span = span
-    this.yearFactor = Math.max(0.1, Math.min(5, detail.year.sizeFactor ?? 1))
     const dateToX = (ms: number): number => {
       const p = Math.min(1, Math.max(0, (ms - yearStart) / span))
       return -AXIS_W / 2 + p * AXIS_W
     }
 
-    // ---- Achtergrond: as-lijn, maand-separators en -labels -----------------
+    // ---- As-lijn + maand-separators (wereldruimte, stretchen met de zoom) ----
     const axis = new Graphics()
     axis.moveTo(-AXIS_W / 2, 0).lineTo(AXIS_W / 2, 0).stroke({ width: 1, color: 0x3a4256, pixelLine: true })
-    for (let m = 0; m < 12; m++) {
+    for (let m = 1; m < 12; m++) {
       const mx = dateToX(new Date(year, m, 1).getTime())
-      if (m > 0) axis.moveTo(mx, -16).lineTo(mx, 16).stroke({ width: 1, color: 0x2a3142, pixelLine: true })
+      axis.moveTo(mx, -14).lineTo(mx, 14).stroke({ width: 1, color: 0x2a3142, pixelLine: true })
+    }
+    this.root.addChild(axis)
+    this.root.addChild(this.rangeBand)
+
+    // Maandlabels: constante schermgrootte, op het midden van elke maand (schuiven
+    // mee als de as uitrekt). Positie/schaal per frame (counter-scale).
+    for (let m = 0; m < 12; m++) {
+      const midX = (dateToX(new Date(year, m, 1).getTime()) + dateToX(new Date(year, m + 1, 1).getTime())) / 2
       const label = new Text({
         text: MONTHS[m],
         style: { fill: 0x8a97b0, fontSize: 15, fontFamily: 'Segoe UI, sans-serif' },
       })
       label.resolution = 2
       label.anchor.set(0.5, 0)
-      const mNext = dateToX(new Date(year, m + 1, 1).getTime())
-      label.position.set((mx + mNext) / 2, 12)
-      axis.addChild(label)
+      this.root.addChild(label)
+      this.monthLabels.push({ text: label, midX })
     }
-    this.root.addChild(axis)
-    this.root.addChild(this.rangeBand)
 
-    // Meerdaagse events (period): een balkje op de as over de hele periode.
-    // Deze balk is de marker van een span-event (dus geen aparte pip erbovenop);
-    // hij blijft zichtbaar als vaste as-context.
+    // ---- Meerdaagse (span) balken op de as (de balk is hun marker) -----------
     const spans = new Graphics()
     this.root.addChild(spans)
     const isSpan = (e: EventSummary): boolean =>
@@ -314,56 +241,20 @@ export class YearScene implements Scene {
       return startX
     }
 
-    // ---- Reveal-prioriteit (density-LOD) -----------------------------------
-    // Strikte totale ordening (effectiveSize aflopend, dan id-hash) zodat elk
-    // event op één na precies één "belangrijkere" referent heeft. Een event
-    // verschijnt zodra de as-afstand tot de dichtstbijzijnde belangrijkere buur
-    // groot genoeg is op het scherm (SCREEN_GAP_PX). Zo tonen ver-uitgezoomd
-    // alleen de belangrijkste, en komen de rest er bij het inzoomen op volgorde
-    // van belang bij. Same-datum (afstand 0) → geklemd op FULL_ZOOM.
-    const ranked = detail.events.map((ev) => ({
-      id: ev.id,
-      anchorX: anchorXOf(ev),
-      eff: effectiveSize(ev.size, ev.itemCount),
-      h: hashId(ev.id),
-    }))
-    const order = [...ranked].sort((a, b) => b.eff - a.eff || a.h - b.h)
-    const rankOf = new Map<string, number>()
-    order.forEach((r, i) => rankOf.set(r.id, i))
-    const revealZoom = new Map<string, number>()
-    for (const e of ranked) {
-      const er = rankOf.get(e.id)!
-      let dx = Infinity
-      for (const f of ranked) {
-        if (rankOf.get(f.id)! < er) {
-          const d = Math.abs(e.anchorX - f.anchorX)
-          if (d < dx) dx = d
-        }
-      }
-      const rz = dx === Infinity ? 0 : Math.min(FULL_ZOOM, SCREEN_GAP_PX / Math.max(dx, 0.0001))
-      revealZoom.set(e.id, rz)
-    }
-
-    // ---- Lagen (z-order: leaders < markers/dots < kaarten) -----------------
-    this.root.addChild(this.leadersLayer)
-    this.root.addChild(this.markersLayer)
+    // ---- Lagen (achter→voor: leaders < stippen < kaarten) -------------------
+    this.root.addChild(this.leaders)
+    this.root.addChild(this.dotsLayer)
     this.root.addChild(this.cardsLayer)
 
-    const withCover = detail.events.filter((e) => e.coverItemId)
-    const withoutCover = detail.events.filter((e) => !e.coverItemId)
-    withCover.sort((a, b) => parseLocalDate(a.startAt) - parseLocalDate(b.startAt))
-
-    this.withCoverSorted = withCover
-    this.anchorXOf = anchorXOf
-    this.spanIds = new Set(spanColor.keys())
-
-    const { placements } = computePlacements(withCover, this.yearFactor, anchorXOf, this.spanIds)
-    for (const p of placements) {
-      this.nodes.push(this.buildCard(p, revealZoom.get(p.ev.id) ?? 0))
+    // ---- Nodes bouwen -------------------------------------------------------
+    for (const ev of detail.events) {
+      const node = this.buildNode(ev, anchorXOf(ev), isSpan(ev))
+      this.nodes.push(node)
+      if (node.hasCover) this.coverNodes.push(node)
     }
-    withoutCover.forEach((ev) => {
-      this.nodes.push(this.buildDot(ev, anchorXOf(ev), revealZoom.get(ev.id) ?? 0))
-    })
+    // Packing-volgorde: strikt op belang aflopend, dan id-hash (deterministisch).
+    this.coverNodes.sort((a, b) => b.eff - a.eff || a.hash - b.hash)
+    this.coverNodes.forEach((n, i) => (n.prefSide = i % 2 === 0 ? -1 : 1))
 
     if (detail.events.length === 0) {
       const hint = new Text({
@@ -376,7 +267,7 @@ export class YearScene implements Scene {
       this.root.addChild(hint)
     }
 
-    // Dag-indicator (Ctrl): een verticale lijn + datumlabel, standaard verborgen.
+    // Dag-indicator (Ctrl).
     this.dayLine.visible = false
     this.root.addChild(this.dayLine)
     this.dayLabel = new Text({
@@ -392,7 +283,197 @@ export class YearScene implements Scene {
     this.fitCamera()
   }
 
-  /** Datum (`YYYY-MM-DD`) die hoort bij een wereld-x op de as. */
+  private buildNode(ev: EventSummary, anchorX: number, isSpan: boolean): Node {
+    const eff = effectiveSize(ev.size, ev.itemCount)
+    const cardH = cardScreenH(eff, ev.id)
+    const cardW = cardH * CARD_ASPECT
+    const hasCover = !!ev.coverItemId
+
+    let card: Container | null = null
+    let title: Text | null = null
+    let sprite: Sprite | null = null
+    let sprite2: Sprite | null = null
+    if (hasCover) {
+      card = new Container()
+      const frame = new Graphics()
+      frame
+        .roundRect(-THUMB_W / 2 - BORDER, -THUMB_H / 2 - BORDER, THUMB_W + BORDER * 2, THUMB_H + BORDER * 2, 5)
+        .fill(0xf5f5f0)
+      card.addChild(frame)
+      const photoLayer = new Container()
+      sprite = new Sprite(Texture.WHITE)
+      sprite.anchor.set(0.5)
+      sprite.setSize(THUMB_W, THUMB_H)
+      sprite.tint = 0x2a3345
+      sprite2 = new Sprite(Texture.WHITE)
+      sprite2.anchor.set(0.5)
+      sprite2.setSize(THUMB_W, THUMB_H)
+      sprite2.alpha = 0
+      const mask = new Graphics()
+      mask.rect(-THUMB_W / 2, -THUMB_H / 2, THUMB_W, THUMB_H).fill(0xffffff)
+      photoLayer.addChild(sprite)
+      photoLayer.addChild(sprite2)
+      photoLayer.addChild(mask)
+      photoLayer.mask = mask
+      card.addChild(photoLayer)
+      if (this.showTitles && ev.title) {
+        title = new Text({
+          text: truncateTitle(ev.title, TITLE_MAX),
+          style: {
+            fill: 0xe8edf6,
+            fontSize: 18,
+            fontWeight: '600',
+            fontFamily: 'Segoe UI, sans-serif',
+            align: 'center',
+            wordWrap: true,
+            wordWrapWidth: THUMB_W + BORDER * 2,
+          },
+        })
+        title.resolution = 2
+        title.anchor.set(0.5, 1)
+        title.position.set(0, -(THUMB_H / 2 + BORDER + 6))
+        card.addChild(title)
+      }
+      card.visible = false
+      this.cardsLayer.addChild(card)
+    }
+
+    // Stip-marker: voor non-cover events (permanent, met titel) en voor
+    // cover-overflow bij een NIET-span (span heeft de balk als marker).
+    let dot: Container | null = null
+    if (!isSpan) {
+      dot = new Container()
+      const g = new Graphics()
+      g.circle(0, 0, DOT_R).fill(hasCover ? 0xcfd6e4 : 0x8a97b0).stroke({ width: 2, color: 0x1a2030 })
+      dot.addChild(g)
+      if (!hasCover) {
+        const label = new Text({
+          text: ev.title ?? 'Memory',
+          style: {
+            fill: 0xcfd6e4,
+            fontSize: 13,
+            fontFamily: 'Segoe UI, sans-serif',
+            wordWrap: true,
+            wordWrapWidth: 140,
+            align: 'center',
+          },
+        })
+        label.resolution = 2
+        label.anchor.set(0.5, 1)
+        label.position.set(0, -DOT_R - 6)
+        dot.addChild(label)
+      }
+      dot.visible = false
+      this.dotsLayer.addChild(dot)
+    }
+
+    return {
+      eventId: ev.id,
+      anchorX,
+      hasCover,
+      isSpan,
+      coverItemId: ev.coverItemId,
+      eff,
+      size: ev.size ?? 50,
+      itemCount: ev.itemCount,
+      hash: hashId(ev.id),
+      prefSide: -1,
+      cardW,
+      cardH,
+      baseScreenScale: cardH / THUMB_H,
+      lane: null,
+      card,
+      title,
+      titleSide: 0,
+      dot,
+      sprite,
+      sprite2,
+      key: `cover-${ev.coverItemId}`,
+      loaded: false,
+      hover: 1,
+      hitCx: anchorX,
+      hitCy: 0,
+      hitHalfW: 0,
+      hitHalfH: 0,
+      wasVisible: false,
+      photoIds: ev.photoIds ?? [],
+      photoIdx: Math.max(0, (ev.photoIds ?? []).indexOf(ev.coverItemId ?? '')),
+      pendingIdx: 0,
+      curKey: `cover-${ev.coverItemId}`,
+      pendingKey: '',
+      nextAt: 0,
+      fade: 0,
+    }
+  }
+
+  /** Aantal lanes per kant dat in de viewporthoogte past (minimaal 1). Reserveert
+   * de volle kaarthoogte + titelruimte in de buitenste lane, zodat een grote
+   * kaart met titel niet boven/onder buiten beeld valt. */
+  private lanesPerSide(vpH: number): number {
+    const TITLE_CLEAR = 30
+    return Math.max(1, Math.floor((vpH / 2 - AXIS_CLEAR_PX - CARD_H_MAX - TITLE_CLEAR) / LANE_PITCH) + 1)
+  }
+
+  /** Scherm-y (px, t.o.v. de as) van het midden van een lane. */
+  private laneCenterY(lane: Lane): number {
+    return lane.side * (AXIS_CLEAR_PX + CARD_H_MAX / 2 + lane.level * LANE_PITCH)
+  }
+
+  /** Breedte-dominante fit: het hele jaar past in de breedte; kaarten (constante
+   * schermgrootte) vullen de lanes rond de gecentreerde as. */
+  private fitCamera(): void {
+    const vp = this.engine.viewport()
+    const zoom = Math.max(this.engine.camera.minZoom, Math.min(vp.width / (AXIS_W + 160), 1))
+    this.engine.jumpCamera(0, 0, zoom)
+  }
+
+  /** Wijs elke cover-node een lane toe (of stip) in SCHERMruimte, greedy op
+   * belang, met plakkerige lane-behoud (hysterese) voor stabiliteit. */
+  private repack(vpW: number, vpH: number): void {
+    const z = this.engine.camera.zoom
+    const camX = this.engine.camera.x
+    const N = this.lanesPerSide(vpH)
+    const occ = new Map<string, { lo: number; hi: number }[]>()
+    for (const n of this.coverNodes) {
+      const sx = (n.anchorX - camX) * z + vpW / 2
+      const halfW = n.cardW / 2
+      // Kandidaat-lanes: eerst de huidige (sticky, lossere gap), dan van binnen
+      // naar buiten vanaf de voorkeurskant.
+      const cands: { lane: Lane; sticky: boolean }[] = []
+      if (n.lane) cands.push({ lane: n.lane, sticky: true })
+      for (let lvl = 0; lvl < N; lvl++) {
+        for (const side of n.prefSide < 0 ? [-1, 1] : [1, -1]) {
+          if (n.lane && n.lane.side === side && n.lane.level === lvl) continue
+          cands.push({ lane: { side, level: lvl }, sticky: false })
+        }
+      }
+      let assigned: Lane | null = null
+      for (const c of cands) {
+        if (c.lane.level >= N) continue
+        const key = `${c.lane.side}:${c.lane.level}`
+        const gap = c.sticky ? STICKY_GAP_PX : CARD_GAP_PX
+        const list = occ.get(key)
+        let ok = true
+        if (list) {
+          for (const iv of list) {
+            if (!(sx + halfW + gap < iv.lo || sx - halfW - gap > iv.hi)) {
+              ok = false
+              break
+            }
+          }
+        }
+        if (ok) {
+          assigned = c.lane
+          const l = occ.get(key) ?? []
+          l.push({ lo: sx - halfW, hi: sx + halfW })
+          occ.set(key, l)
+          break
+        }
+      }
+      n.lane = assigned
+    }
+  }
+
   dateAt(worldX: number): string {
     const p = Math.min(1, Math.max(0, (worldX + AXIS_W / 2) / AXIS_W))
     const d = new Date(this.yearStart + p * this.span)
@@ -406,8 +487,6 @@ export class YearScene implements Scene {
     this.renderDay()
   }
 
-  /** Verticale halve hoogte van het zichtbare wereldgebied (voor de range-band /
-   * dag-lijn) — met markers op de as is de volledige lane-hoogte niet relevant. */
   private bandHalfH(): number {
     const b = this.engine.camera.worldBounds(this.engine.viewport())
     return (b.maxY - b.minY) / 2 + 20
@@ -442,209 +521,6 @@ export class YearScene implements Scene {
     this.dayLabel.position.set(x, -h - 6)
   }
 
-  private buildCard(p: Placement, revealZoom: number): Node {
-    const ev = p.ev
-    const container = new Container()
-    container.position.set(p.cardX, p.cardY)
-    container.scale.set(p.bs)
-
-    const frame = new Graphics()
-    frame
-      .roundRect(-THUMB_W / 2 - BORDER, -THUMB_H / 2 - BORDER, THUMB_W + BORDER * 2, THUMB_H + BORDER * 2, 5)
-      .fill(0xf5f5f0)
-    container.addChild(frame)
-
-    const photoLayer = new Container()
-    const sprite = new Sprite(Texture.WHITE)
-    sprite.anchor.set(0.5)
-    sprite.setSize(THUMB_W, THUMB_H)
-    sprite.tint = 0x2a3345
-    const sprite2 = new Sprite(Texture.WHITE)
-    sprite2.anchor.set(0.5)
-    sprite2.setSize(THUMB_W, THUMB_H)
-    sprite2.alpha = 0
-    const mask = new Graphics()
-    mask.rect(-THUMB_W / 2, -THUMB_H / 2, THUMB_W, THUMB_H).fill(0xffffff)
-    photoLayer.addChild(sprite)
-    photoLayer.addChild(sprite2)
-    photoLayer.addChild(mask)
-    photoLayer.mask = mask
-    container.addChild(photoLayer)
-
-    // Optionele memory-titel aan de BUITENkant van de kaart (weg van de as), als
-    // child van de container: hij rijst/faadt automatisch mee met de bloom
-    // (container-alpha = presence·bloom) en is bij een marker dus onzichtbaar.
-    if (this.showTitles && ev.title) {
-      const outer = p.side < 0 ? -1 : 1 // -1 = boven de kaart, 1 = eronder
-      const title = new Text({
-        text: truncateTitle(ev.title, 24),
-        style: {
-          fill: 0xe8edf6,
-          fontSize: 14,
-          fontWeight: '600',
-          fontFamily: 'Segoe UI, sans-serif',
-          align: 'center',
-          wordWrap: true,
-          wordWrapWidth: THUMB_W + BORDER * 2,
-        },
-      })
-      title.resolution = 2
-      title.anchor.set(0.5, outer < 0 ? 1 : 0)
-      title.position.set(0, outer * (THUMB_H / 2 + BORDER + 6))
-      container.addChild(title)
-    }
-
-    container.visible = false
-    this.cardsLayer.addChild(container)
-
-    // Per-kaart leader met STATISCHE geometrie naar de eindpositie; alleen de
-    // alpha animeert met bloom (geen per-frame hertekening → 60fps-vriendelijk).
-    const leader = new Graphics()
-    const midY = (p.startY + p.innerY) / 2
-    leader
-      .moveTo(p.anchorX, p.startY)
-      .bezierCurveTo(p.anchorX, midY, p.cardX, midY, p.cardX, p.innerY)
-      .stroke({ width: 2, color: 0x3a4256, alpha: 0.7, pixelLine: true })
-    leader.alpha = 0
-    this.leadersLayer.addChild(leader)
-
-    // Pip-marker op de as (niet voor spans — de balk is daar de marker).
-    let marker: Graphics | null = null
-    if (!p.isSpan) {
-      marker = new Graphics()
-      marker.circle(0, 0, MARKER_R).fill(0xcfd6e4).stroke({ width: 2, color: 0x1a2030 })
-      marker.position.set(p.anchorX, 0)
-      marker.alpha = 0
-      this.markersLayer.addChild(marker)
-    }
-
-    const photoIds = ev.photoIds ?? []
-    const startIdx = Math.max(0, photoIds.indexOf(ev.coverItemId ?? ''))
-    return {
-      eventId: ev.id,
-      anchorX: p.anchorX,
-      laneX: p.cardX,
-      laneY: p.cardY,
-      hasCover: true,
-      coverItemId: ev.coverItemId,
-      container,
-      marker,
-      leader,
-      sprite,
-      sprite2,
-      key: `cover-${ev.coverItemId}`,
-      loaded: false,
-      scale: 1,
-      baseScale: p.bs,
-      size: ev.size ?? 50,
-      itemCount: ev.itemCount,
-      revealZoom,
-      presence: 0,
-      bloom: 0,
-      wasVisible: false,
-      hitCx: p.anchorX,
-      hitCy: 0,
-      hitHalfW: 0,
-      hitHalfH: 0,
-      cardHalfW: (THUMB_W / 2 + BORDER) * p.bs,
-      cardHalfH: (THUMB_H / 2 + BORDER) * p.bs,
-      photoIds,
-      photoIdx: startIdx,
-      pendingIdx: startIdx,
-      curKey: `cover-${ev.coverItemId}`,
-      pendingKey: '',
-      nextAt: 0,
-      fade: 0,
-    }
-  }
-
-  private buildDot(ev: EventSummary, anchorX: number, revealZoom: number): Node {
-    const container = new Container()
-    container.position.set(anchorX, 0)
-
-    const dot = new Graphics()
-    dot.circle(0, 0, DOT_R).fill(0x8a97b0).stroke({ width: 2, color: 0x1a2030 })
-    container.addChild(dot)
-
-    const label = new Text({
-      text: ev.title ?? 'Memory',
-      style: {
-        fill: 0xcfd6e4,
-        fontSize: 13,
-        fontFamily: 'Segoe UI, sans-serif',
-        wordWrap: true,
-        wordWrapWidth: 140,
-        align: 'center',
-      },
-    })
-    label.resolution = 2
-    label.anchor.set(0.5, 1)
-    label.position.set(0, -DOT_R - 6)
-    container.addChild(label)
-
-    container.visible = false
-    this.markersLayer.addChild(container)
-    return {
-      eventId: ev.id,
-      anchorX,
-      laneX: anchorX,
-      laneY: 0,
-      hasCover: false,
-      container,
-      marker: null,
-      leader: null,
-      sprite: null,
-      sprite2: null,
-      key: '',
-      loaded: false,
-      scale: 1,
-      baseScale: 1,
-      size: ev.size ?? 50,
-      itemCount: ev.itemCount,
-      revealZoom,
-      presence: 0,
-      bloom: 0,
-      wasVisible: false,
-      hitCx: anchorX,
-      hitCy: 0,
-      hitHalfW: 0,
-      hitHalfH: 0,
-      cardHalfW: Math.max(DOT_R, 70),
-      cardHalfH: DOT_R + 26,
-      photoIds: [],
-      photoIdx: 0,
-      pendingIdx: 0,
-      curKey: '',
-      pendingKey: '',
-      nextAt: 0,
-      fade: 0,
-    }
-  }
-
-  /** Breedte-dominante fit: het hele jaar past in de breedte, met markers rond
-   * de as. Zo blijft de fit-zoom z0 stabiel, ongeacht het aantal events (de
-   * volledige lane-hoogte telt pas als je inzoomt en de kaarten bloeien). */
-  private fitCamera(): void {
-    const vp = this.engine.viewport()
-    const contentW = AXIS_W + THUMB_W * CARD_MAX_SCALE + 120
-    const zoom = Math.max(this.engine.camera.minZoom, Math.min(vp.width / contentW, 1))
-    this.z0 = zoom
-    this.engine.jumpCamera(0, 0, zoom)
-  }
-
-  /** Zichtbaarheid van een event bij deze zoom (density-LOD, met fade-band). */
-  private presenceOf(zoom: number, revealZoom: number): number {
-    if (revealZoom <= 0 || zoom >= FULL_ZOOM) return 1
-    return smoothstep(revealZoom * (1 - REVEAL_BAND), revealZoom * (1 + REVEAL_BAND), zoom)
-  }
-
-  /** Marker→thumbnail-voortgang o.b.v. de schermgrootte van de kaart, met een
-   * harde ondergrens rond de fit-zoom zodat bij binnenkomst alles marker is. */
-  private bloomOf(zoom: number, baseScale: number): number {
-    const screenH = THUMB_H * baseScale * zoom
-    return smoothstep(BLOOM_LO, BLOOM_HI, screenH) * smoothstep(this.z0 * 1.03, this.z0 * 1.3, zoom)
-  }
-
   onHover(worldX: number | null, worldY: number): void {
     this.hoveredId = worldX === null ? null : this.hitTest(worldX, worldY)
     this.hoverWX = worldX
@@ -655,117 +531,134 @@ export class YearScene implements Scene {
     const { engine, frame, dtMS } = ctx
     const now = performance.now()
     const dt = Math.min(dtMS, 100)
-    const zoom = engine.camera.zoom
-    const b = engine.camera.worldBounds(engine.viewport())
-    const marginX = THUMB_W
-    const marginY = THUMB_H
+    // De verticale uitlijning hangt op camera.y=0 (lockY dwingt dat af, maar we
+    // forceren het defensief zodat een restwaarde de counter-scale niet breekt).
+    engine.camera.y = 0
+    const z = engine.camera.zoom
+    const invZ = 1 / z
+    const camX = engine.camera.x
+    const vp = engine.viewport()
+    const halfW = vp.width / 2
+    const marginPx = 120
+
+    // Maandlabels: constante schermgrootte, meebewegend met de uitrekkende as.
+    for (const ml of this.monthLabels) {
+      ml.text.scale.set(invZ)
+      ml.text.position.set(ml.midX, LABEL_SCREEN_Y * invZ)
+    }
+
+    // Lane-toewijzing (kaart vs. stip) opnieuw bepalen.
+    this.repack(vp.width, vp.height)
+
+    this.leaders.clear()
 
     for (const n of this.nodes) {
-      const presence = this.presenceOf(zoom, n.revealZoom)
-      n.presence = presence
-      // Culling: neem zowel de as-positie (marker) als de lane-positie (kaart).
-      const loX = Math.min(n.anchorX, n.laneX) - marginX
-      const hiX = Math.max(n.anchorX, n.laneX) + marginX
-      const loY = Math.min(0, n.laneY) - marginY
-      const hiY = Math.max(0, n.laneY) + marginY
-      const inView = hiX > b.minX && loX < b.maxX && hiY > b.minY && loY < b.maxY
-      const visible = presence > 0.01 && inView
+      const screenX = (n.anchorX - camX) * z + halfW
+      const inView = screenX + n.cardW / 2 > -marginPx && screenX - n.cardW / 2 < vp.width + marginPx
       const wasVisible = n.wasVisible
-      n.wasVisible = visible
-      if (!visible) {
-        n.container.visible = false
-        if (n.marker) n.marker.visible = false
-        if (n.leader) n.leader.alpha = 0
-        n.hitHalfW = 0
-        n.hitHalfH = 0
-        continue
-      }
 
-      const target = n.eventId === this.hoveredId ? 1.05 : 1
-      n.scale += (target - n.scale) * 0.2
-
-      if (n.hasCover) {
-        const bloom = this.bloomOf(zoom, n.baseScale)
-        n.bloom = bloom
-        if (n.marker) {
-          n.marker.visible = bloom < 0.999
-          n.marker.alpha = presence * (1 - bloom)
+      if (n.hasCover && n.lane) {
+        // --- Kaart ---
+        if (n.dot) n.dot.visible = false
+        const card = n.card!
+        card.visible = inView
+        n.wasVisible = inView
+        if (!inView) {
+          n.hitHalfW = 0
+          continue
         }
-        const showCard = bloom > 0.01
-        n.container.visible = showCard
-        if (showCard) {
-          const bx = lerp(n.anchorX, n.laneX, bloom)
-          const by = lerp(0, n.laneY, bloom)
-          n.container.position.set(bx, by)
-          n.container.alpha = presence * bloom
-          n.container.scale.set(n.scale * n.baseScale * lerp(0.5, 1, bloom))
+        const laneY = this.laneCenterY(n.lane)
+        // Hover-animatie.
+        const targetHover = n.eventId === this.hoveredId ? 1.05 : 1
+        n.hover += (targetHover - n.hover) * 0.2
+        card.position.set(n.anchorX, laneY * invZ)
+        card.scale.set((n.baseScreenScale * n.hover) * invZ)
 
-          // Basis-cover laden — pas als de kaart merkbaar bloeit (markers laden geen
-          // texture → ver uitgezoomd blijven 100+ events goedkoop).
-          if (n.sprite && !n.loaded && n.coverItemId && bloom > 0.12) {
-            const tex = engine.textures.get(n.key, frame)
-            if (tex) {
-              n.sprite.texture = tex
-              n.sprite.tint = 0xffffff
-              fitCover(n.sprite, tex)
-              n.loaded = true
-              n.curKey = n.key
-              if (n.nextAt === 0) n.nextAt = now + this.slideMs * (0.3 + Math.random())
-            } else {
-              const src = this.backend.thumb(n.coverItemId, 256)
-              engine.textures.request({ key: n.key, url: src.url, hue: src.hue, size: 256 })
-            }
+        // Titel aan de buitenkant van de kaart (kant volgt de lane).
+        if (n.title && n.titleSide !== n.lane.side) {
+          n.titleSide = n.lane.side
+          const outer = n.lane.side < 0 ? -1 : 1
+          n.title.anchor.set(0.5, outer < 0 ? 1 : 0)
+          n.title.position.set(0, outer * (THUMB_H / 2 + BORDER + 6))
+        }
+
+        // Leader: 1px van de as naar de onderrand van de kaart (wereldruimte).
+        const innerY = (laneY - n.lane.side * (n.cardH / 2)) * invZ
+        this.leaders
+          .moveTo(n.anchorX, 0)
+          .lineTo(n.anchorX, innerY)
+          .stroke({ width: 1, color: 0x3a4256, alpha: 0.6, pixelLine: true })
+
+        // Basis-cover laden (alleen zichtbare kaarten laden een texture).
+        if (n.sprite && !n.loaded && n.coverItemId) {
+          const tex = engine.textures.get(n.key, frame)
+          if (tex) {
+            n.sprite.texture = tex
+            n.sprite.tint = 0xffffff
+            fitCover(n.sprite, tex)
+            n.loaded = true
+            n.curKey = n.key
+            if (n.nextAt === 0) n.nextAt = now + this.slideMs * (0.3 + Math.random())
+          } else {
+            const src = this.backend.thumb(n.coverItemId, 256)
+            engine.textures.request({ key: n.key, url: src.url, hue: src.hue, size: 256 })
           }
-          // Houd de getoonde texture(s) "warm" tegen eviction (zwarte kaart).
-          if (n.loaded && bloom > 0.12) {
-            if (n.curKey) engine.textures.get(n.curKey, frame)
-            if (n.fade > 0 && n.pendingKey) engine.textures.get(n.pendingKey, frame)
-          }
-          if (!wasVisible && n.loaded && n.fade === 0) {
-            n.nextAt = now + this.slideMs * (0.3 + Math.random())
-          }
-          // Slideshow alleen op een volledig gebloeide, zichtbare kaart.
-          if (this.slideEnabled && n.loaded && n.sprite && n.sprite2 && n.photoIds.length > 1 && bloom > 0.85) {
-            this.tickSlideshow(n, engine, frame, now, dt)
-          } else if (n.fade > 0 && n.sprite && n.sprite2) {
-            // Een crossfade die door uitzoomen/culling onder de slideshow-drempel
-            // zakt: netjes afronden, anders blijft de overlay half over de basis
-            // hangen tot je weer voorbij de drempel zoomt.
-            n.sprite.texture = n.sprite2.texture
-            n.sprite.setSize(n.sprite2.width, n.sprite2.height)
+        }
+        if (n.loaded) {
+          if (n.curKey) engine.textures.get(n.curKey, frame)
+          if (n.fade > 0 && n.pendingKey) engine.textures.get(n.pendingKey, frame)
+        }
+        if (!wasVisible && n.loaded) {
+          // Terug in beeld: een crossfade die tijdens de afwezigheid "bevroor" kan
+          // een inmiddels geëvicte overlay-texture tonen → netjes afbreken.
+          if (n.fade > 0 && n.sprite2) {
             n.sprite2.alpha = 0
-            n.photoIdx = n.pendingIdx
-            n.curKey = n.pendingKey
-            n.pendingKey = ''
             n.fade = 0
+            n.pendingKey = ''
           }
+          n.nextAt = now + this.slideMs * (0.3 + Math.random())
         }
-        if (n.leader) n.leader.alpha = presence * bloom
+        if (this.slideEnabled && n.loaded && n.sprite && n.sprite2 && n.photoIds.length > 1) {
+          this.tickSlideshow(n, engine, frame, now, dt)
+        }
 
-        n.hitCx = lerp(n.anchorX, n.laneX, bloom)
-        n.hitCy = lerp(0, n.laneY, bloom)
-        n.hitHalfW = lerp(MARKER_HIT, n.cardHalfW, bloom)
-        n.hitHalfH = lerp(MARKER_HIT, n.cardHalfH, bloom)
-      } else {
-        // Dot-event (geen cover): altijd een marker op de as.
-        n.container.visible = true
-        n.container.alpha = presence
-        n.container.scale.set(n.scale)
+        // Hit-box (wereld) = de constante scherm-kaart gedeeld door de zoom.
         n.hitCx = n.anchorX
+        n.hitCy = laneY * invZ
+        n.hitHalfW = (n.cardW / 2 + BORDER) * invZ
+        n.hitHalfH = (n.cardH / 2 + BORDER) * invZ
+      } else if (n.dot) {
+        // --- Stip (non-cover, of cover-overflow bij een niet-span) ---
+        if (n.card) n.card.visible = false
+        // Kleine deterministische scherm-offset zodat same-date stippen niet
+        // exact overlappen.
+        const off = (((n.hash >>> 3) % 5) - 2) * 6
+        n.dot.visible = inView
+        n.wasVisible = inView
+        if (!inView) {
+          n.hitHalfW = 0
+          continue
+        }
+        n.dot.position.set(n.anchorX + off * invZ, 0)
+        n.dot.scale.set(invZ)
+        n.hitCx = n.anchorX + off * invZ
         n.hitCy = 0
-        n.hitHalfW = n.cardHalfW
-        n.hitHalfH = n.cardHalfH
+        n.hitHalfW = Math.max(MARKER_HIT_MIN, DOT_HIT) * invZ
+        n.hitHalfH = DOT_HIT * invZ
+      } else {
+        // --- Span-overflow: alleen de balk (geen kaart, geen stip) ---
+        if (n.card) n.card.visible = false
+        n.wasVisible = false
+        n.hitHalfW = 0
       }
     }
   }
 
-  /** Eén slideshow-stap voor een cover-kaart: volgende foto voorbereiden en
-   * crossfaden; bij voltooien de overlay de nieuwe basis maken. */
   private tickSlideshow(n: Node, engine: RenderEngine, frame: number, now: number, dt: number): void {
     const s2 = n.sprite2!
     const s1 = n.sprite!
     if (n.fade > 0) {
-      n.fade += dt / 300 // ~0.3s crossfade
+      n.fade += dt / 300
       s2.alpha = Math.min(1, n.fade)
       if (n.fade >= 1) {
         s1.texture = s2.texture
@@ -790,7 +683,7 @@ export class YearScene implements Scene {
       s2.alpha = 0
       n.pendingIdx = nextIdx
       n.pendingKey = key
-      n.fade = 0.001 // start crossfade
+      n.fade = 0.001
     } else {
       const src = this.backend.thumb(n.photoIds[nextIdx], 256)
       engine.textures.request({ key, url: src.url, hue: src.hue, size: 256 })
@@ -798,11 +691,9 @@ export class YearScene implements Scene {
   }
 
   hitTest(worldX: number, worldY: number): string | null {
-    // Van voor naar achter (laatste toegevoegd = bovenop). Alleen voldoende
-    // aanwezige nodes zijn klikbaar (een half-gefade marker niet).
     for (let i = this.nodes.length - 1; i >= 0; i--) {
       const n = this.nodes[i]
-      if (n.presence < HIT_PRESENCE || n.hitHalfW <= 0) continue
+      if (n.hitHalfW <= 0) continue
       if (Math.abs(worldX - n.hitCx) <= n.hitHalfW && Math.abs(worldY - n.hitCy) <= n.hitHalfH) {
         return n.eventId
       }
@@ -810,33 +701,32 @@ export class YearScene implements Scene {
     return null
   }
 
-  /** Shift-slepen op een cover-kaart wijzigt het belang (grootte): de schaal
-   * volgt live de sleepafstand vanaf het kaartmidden, bij loslaten persisteren
-   * we de nieuwe `size` naar de vault. Niets geraakt → null (dan pant de camera).
-   * NB: de reveal-prioriteit is precomputed; die herberekent pas na het herladen
-   * van het jaar (setEventSize → rescan). Tijdens de drag is dat prima. */
+  /** Shift-slepen op een cover-kaart wijzigt het belang (grootte): de kaart-
+   * schermgrootte volgt live; bij loslaten persisteren we de nieuwe `size`. */
   beginResize(worldX: number, worldY: number): DragHandle | null {
     for (let i = this.nodes.length - 1; i >= 0; i--) {
       const n = this.nodes[i]
-      if (!n.hasCover || n.presence < HIT_PRESENCE || n.hitHalfW <= 0) continue
+      if (!n.hasCover || !n.lane || n.hitHalfW <= 0) continue
       if (Math.abs(worldX - n.hitCx) > n.hitHalfW || Math.abs(worldY - n.hitCy) > n.hitHalfH) continue
-      const startDist = Math.max(20, Math.hypot(worldX - n.hitCx, worldY - n.hitCy))
+      const cx = n.hitCx
+      const cy = n.hitCy
+      const startDist = Math.max(20, Math.hypot(worldX - cx, worldY - cy))
       const startSize = n.size
       let changed = false
       const apply = (size: number): void => {
         n.size = Math.max(1, Math.min(100, Math.round(size)))
-        // Eén baseScale voedt zowel de getekende schaal als de hit-box.
-        n.baseScale = cardScale(effectiveSize(n.size, n.itemCount) * this.yearFactor) * jitterScale(n.eventId)
-        n.cardHalfW = (THUMB_W / 2 + BORDER) * n.baseScale
-        n.cardHalfH = (THUMB_H / 2 + BORDER) * n.baseScale
+        n.eff = effectiveSize(n.size, n.itemCount)
+        n.cardH = cardScreenH(n.eff, n.eventId)
+        n.cardW = n.cardH * CARD_ASPECT
+        n.baseScreenScale = n.cardH / THUMB_H
       }
-      const cx = n.hitCx
-      const cy = n.hitCy
       return {
         moveTo: (mx, my) => {
           const f = Math.hypot(mx - cx, my - cy) / startDist
           apply(startSize * f)
           changed = true
+          // Belang veranderde → herorden de packing-prioriteit.
+          this.coverNodes.sort((a, b) => b.eff - a.eff || a.hash - b.hash)
         },
         end: () => {
           if (changed) void this.backend.setEventSize(n.eventId, n.size)
@@ -844,32 +734,6 @@ export class YearScene implements Scene {
       }
     }
     return null
-  }
-
-  /** "Passend maken": zoekt de grootste globale factor (binnen [0.5, 1.6]) waarbij
-   * de VOLLEDIG GEBLOEIDE lane-layout nog binnen een comfortabele hoogte past,
-   * proportioneel (de onderlinge zwaarte-verhoudingen blijven intact). Geeft de
-   * factor terug (AppShell persisteert 'm en herlaadt het jaar). */
-  computeFitFactor(): number {
-    if (this.withCoverSorted.length === 0) return 1
-    const vp = this.engine.viewport()
-    const contentW = AXIS_W + THUMB_W * CARD_MAX_SCALE + 120
-    const targetContentH = (vp.height / vp.width) * contentW
-    const targetMaxAbsY = Math.max(160, (targetContentH - 120) / 2)
-    const measure = (f: number): number =>
-      computePlacements(this.withCoverSorted, f, this.anchorXOf, this.spanIds).maxAbsY
-    const FMIN = 0.5
-    const FMAX = 1.6
-    if (measure(FMIN) > targetMaxAbsY) return FMIN
-    if (measure(FMAX) <= targetMaxAbsY) return FMAX
-    let lo = FMIN
-    let hi = FMAX
-    for (let i = 0; i < 24; i++) {
-      const mid = (lo + hi) / 2
-      if (measure(mid) <= targetMaxAbsY) lo = mid
-      else hi = mid
-    }
-    return Math.round(lo * 100) / 100
   }
 
   destroy(): void {

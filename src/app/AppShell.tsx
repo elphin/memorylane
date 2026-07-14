@@ -558,8 +558,11 @@ export function AppShell() {
     const applyPanLock = (): void => {
       if (!engine) return
       const lvl = levelRef.current
+      // De jaar-view rekent kaart-posities t.o.v. een verticaal gecentreerde as
+      // (camera.y=0), dus daar staat de verticale lock ALTIJD aan (los van de
+      // instelling). Op de lifeline volgt de lock de instelling.
       engine.camera.lockY =
-        settingsRef.current.lockVerticalPan && (lvl === 'lifeline' || lvl === 'year')
+        lvl === 'year' || (settingsRef.current.lockVerticalPan && lvl === 'lifeline')
     }
     applyPanLockRef.current = applyPanLock
 
@@ -697,7 +700,12 @@ export function AppShell() {
         // de referentie de scene (sibling-nav herfit de camera), zodat stappen
         // naar een grotere notitie niet meteen als "terug" telt.
         const refZoom = sceneRef.current?.baseZoom ?? entryZoomRef.current
-        const backThreshold = ctx.engine.camera.zoom < refZoom * 0.45
+        // Op de jaar-view is inzoomen het hoofdgebaar (de tijd-as rekt uit); onder
+        // de fit-zoom is er niets zinnigs te zien, dus daar volstaat een drempel
+        // dicht bij de fit (uitzoomen onder het overzicht = terug). Op andere
+        // niveaus blijft de ruimere 0.45-drempel.
+        const backMult = levelRef.current === 'year' ? 0.7 : 0.45
+        const backThreshold = ctx.engine.camera.zoom < refZoom * backMult
         if (backThreshold && !enteringRef.current && !ctx.engine.isTransitioning) {
           goBack()
         }
@@ -1114,28 +1122,6 @@ export function AppShell() {
     if (id) saveEventView(id, { mode: 'custom' })
   }
 
-  // "Passend maken" (L1): laat de scene de proportionele jaar-schaalfactor
-  // berekenen, persisteer 'm en herlaad het jaar zodat alles netjes past.
-  const fitYearSizes = async (): Promise<void> => {
-    const scene = sceneRef.current
-    const backend = backendRef.current
-    const yearId = currentYearRef.current
-    if (!scene?.computeFitFactor || !backend || !yearId || mutatingRef.current) return
-    const factor = scene.computeFitFactor()
-    mutatingRef.current = true
-    setBusy(true)
-    try {
-      await backend.setYearSizeFactor(yearId, factor)
-      enterYearRef.current(yearId) // herlaad de jaar-tijdlijn met de nieuwe factor
-    } catch (e) {
-      setMessage(String(e))
-      setPhase('error')
-    } finally {
-      mutatingRef.current = false
-      setBusy(false)
-    }
-  }
-
   const openEditEvent = (): void => {
     const info = currentEventInfoRef.current
     if (!info) return
@@ -1433,25 +1419,6 @@ export function AppShell() {
             title="Alles passend in beeld"
           >
             ⤢ Alles passend
-          </button>
-        )}
-      {uiLevel === 'year' &&
-        phase === 'ready' &&
-        !modal &&
-        !editing &&
-        !eventForm &&
-        !metaForm &&
-        !searchOpen &&
-        !settingsOpen &&
-        !screensaverIds &&
-        !settings.viewMode && (
-          <button
-            onClick={() => void fitYearSizes()}
-            disabled={busy}
-            style={fitBtn}
-            title="Schaal alle memories proportioneel zodat het jaar netjes past"
-          >
-            ⤢ Passend maken
           </button>
         )}
       {toast && <div style={toastStyle}>{toast}</div>}

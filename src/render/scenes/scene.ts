@@ -42,9 +42,6 @@ export interface Scene {
   /** Shift-slepen op een event-kaart wijzigt zijn belang/grootte (alleen L1-jaar).
    * Geeft een DragHandle of null als er geen kaart onder het punt zit. */
   beginResize?(worldX: number, worldY: number): DragHandle | null
-  /** Berekent de proportionele "passend maken"-schaalfactor voor dit jaar
-   * (alleen L1-jaar). AppShell persisteert 'm en herlaadt het jaar. */
-  computeFitFactor?(): number
   /** Zet de uitgelichte foto (op ref) en werk de markering bij (alleen L2). */
   setFeatured?(ref: string | null): void
   /** Zet de vaste jaar-cover (op item-id) en werk de blauwe rand bij (alleen L2). */
