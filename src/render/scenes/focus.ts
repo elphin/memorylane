@@ -11,12 +11,15 @@ import type { Scene } from './scene'
 const FOCUS = 720
 const CARD_W = 640
 const CARD_H = 440
+const PHOTO_BORDER = 16 // witte rand rond de foto (L3)
 
 export class FocusScene implements Scene {
   readonly root = new Container()
   private display = new Container()
   private index: number
   private sprite: Sprite | null = null
+  private frame: Graphics | null = null // witte fotorand (past zich aan de foto aan)
+  private caption: Text | null = null // caption onder de foto (herpositioneert na load)
   private currentKey = ''
   private loaded = false
   // Werkelijke afmeting van de huidige inhoud (tekstkaart groeit mee met de
@@ -51,6 +54,8 @@ export class FocusScene implements Scene {
   private build(): void {
     this.display.removeChildren().forEach((c) => c.destroy({ children: true }))
     this.sprite = null
+    this.frame = null
+    this.caption = null
     this.loaded = false
     const item = this.current
     if (!item) return
@@ -86,9 +91,10 @@ export class FocusScene implements Scene {
       this.contentW = CARD_W
       this.contentH = cardH
     } else {
-      const bg = new Graphics()
-      bg.roundRect(-FOCUS / 2 - 6, -FOCUS / 2 - 6, FOCUS + 12, FOCUS + 12, 6).fill(0x000000)
-      this.display.addChild(bg)
+      // Witte fotorand die zich straks (na load) om de werkelijke foto vouwt.
+      const frame = new Graphics()
+      this.display.addChild(frame)
+      this.frame = frame
       const sprite = new Sprite(Texture.WHITE)
       sprite.anchor.set(0.5)
       sprite.setSize(FOCUS, FOCUS)
@@ -98,6 +104,7 @@ export class FocusScene implements Scene {
       this.currentKey = `focus-${item.id}`
       this.contentW = FOCUS
       this.contentH = FOCUS
+      this.drawPhotoFrame(FOCUS, FOCUS)
     }
 
     // Caption onder het item (alleen bij foto's; bij tekst ís de kaart de tekst).
@@ -110,9 +117,20 @@ export class FocusScene implements Scene {
       cap.anchor.set(0.5, 0)
       cap.position.set(0, this.contentH / 2 + 20)
       this.display.addChild(cap)
+      this.caption = cap
     }
 
     this.fitCamera()
+  }
+
+  /** Teken de witte fotorand rond een foto van `w`×`h` (past zich aan de werkelijke
+   * fotoverhouding aan; net als de tegels in de jaar-view). */
+  private drawPhotoFrame(w: number, h: number): void {
+    if (!this.frame) return
+    this.frame.clear()
+    this.frame
+      .roundRect(-w / 2 - PHOTO_BORDER, -h / 2 - PHOTO_BORDER, w + PHOTO_BORDER * 2, h + PHOTO_BORDER * 2, 8)
+      .fill(0xf5f5f0)
   }
 
   private fitCamera(): void {
@@ -154,9 +172,14 @@ export class FocusScene implements Scene {
     if (tex) {
       this.sprite.texture = tex
       this.sprite.tint = 0xffffff
-      // Contain-fit: de hele foto zichtbaar.
+      // Contain-fit: de hele foto zichtbaar; de witte rand vouwt zich om de
+      // werkelijke afmetingen, en de caption schuift onder de foto.
       const s = Math.min(FOCUS / tex.width, FOCUS / tex.height)
-      this.sprite.setSize(tex.width * s, tex.height * s)
+      const tw = tex.width * s
+      const th = tex.height * s
+      this.sprite.setSize(tw, th)
+      this.drawPhotoFrame(tw, th)
+      if (this.caption) this.caption.position.set(0, th / 2 + PHOTO_BORDER + 18)
       this.loaded = true
     } else {
       // L3 = het detailniveau: laad de scherpe 2048-bron (niet de 1024-thumbnail).

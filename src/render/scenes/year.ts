@@ -160,6 +160,15 @@ function truncateTitle(s: string, n: number): string {
   return t.length > n ? `${t.slice(0, n - 1).trimEnd()}…` : t
 }
 
+// Gedempte kleuren voor de placeholder-tegel van een memory zónder foto (per
+// memory deterministisch → ze variëren; donker genoeg voor witte titeltekst).
+const PLACEHOLDER_PALETTE = [
+  0x3d4a5c, 0x4a3d5c, 0x5c3d4a, 0x3d5c4a, 0x5c4a3d, 0x3d5c5c, 0x504a3d, 0x473d5c,
+]
+function placeholderColor(id: string): number {
+  return PLACEHOLDER_PALETTE[hashId(id) % PLACEHOLDER_PALETTE.length]!
+}
+
 function fitCover(sprite: Sprite, tex: Texture): void {
   const s = Math.max(THUMB_W / tex.width, THUMB_H / tex.height)
   sprite.setSize(tex.width * s, tex.height * s)
@@ -177,7 +186,7 @@ export class YearScene implements Scene {
   private cardsLayer = new Container()
   private dotsLayer = new Container()
   private nodes: Node[] = []
-  private coverNodes: Node[] = [] // op belang gesorteerd (packing-volgorde)
+  private cardNodes: Node[] = [] // alle memory-tegels, op belang gesorteerd (packing-volgorde)
   private monthLabels: { text: Text; midX: number }[] = []
   private hoveredId: string | null = null
   private primed = false // eerste frame snapt naar de packing-toestand; daarna animeren
@@ -272,11 +281,11 @@ export class YearScene implements Scene {
     for (const ev of detail.events) {
       const node = this.buildNode(ev, anchorXOf(ev), isSpan(ev))
       this.nodes.push(node)
-      if (node.hasCover) this.coverNodes.push(node)
+      this.cardNodes.push(node)
     }
     // Packing-volgorde: strikt op belang aflopend, dan id-hash (deterministisch).
-    this.coverNodes.sort((a, b) => b.eff - a.eff || a.hash - b.hash)
-    this.coverNodes.forEach((n, i) => (n.prefSide = i % 2 === 0 ? -1 : 1))
+    this.cardNodes.sort((a, b) => b.eff - a.eff || a.hash - b.hash)
+    this.cardNodes.forEach((n, i) => (n.prefSide = i % 2 === 0 ? -1 : 1))
 
     if (detail.events.length === 0) {
       const hint = new Text({
@@ -311,17 +320,19 @@ export class YearScene implements Scene {
     const cardW = cardH * CARD_ASPECT
     const hasCover = !!ev.coverItemId
 
-    let card: Container | null = null
+    // Elke memory krijgt een tegel. Met cover = foto; zónder cover = een gedempte
+    // placeholder-tegel met de titel erin, zodat ook foto-loze memories een
+    // volwaardige tegel zijn (en gewoon meedoen in de packing).
     let title: Text | null = null
     let sprite: Sprite | null = null
     let sprite2: Sprite | null = null
+    const card = new Container()
+    const frame = new Graphics()
+    frame
+      .roundRect(-THUMB_W / 2 - BORDER, -THUMB_H / 2 - BORDER, THUMB_W + BORDER * 2, THUMB_H + BORDER * 2, 5)
+      .fill(0xf5f5f0)
+    card.addChild(frame)
     if (hasCover) {
-      card = new Container()
-      const frame = new Graphics()
-      frame
-        .roundRect(-THUMB_W / 2 - BORDER, -THUMB_H / 2 - BORDER, THUMB_W + BORDER * 2, THUMB_H + BORDER * 2, 5)
-        .fill(0xf5f5f0)
-      card.addChild(frame)
       const photoLayer = new Container()
       sprite = new Sprite(Texture.WHITE)
       sprite.anchor.set(0.5)
@@ -356,35 +367,38 @@ export class YearScene implements Scene {
         title.position.set(0, -(THUMB_H / 2 + BORDER + 6))
         card.addChild(title)
       }
-      card.visible = false
-      this.cardsLayer.addChild(card)
+    } else {
+      // Placeholder: gedempte kleurvulling + de titel gecentreerd in de tegel.
+      const bg = new Graphics()
+      bg.rect(-THUMB_W / 2, -THUMB_H / 2, THUMB_W, THUMB_H).fill(placeholderColor(ev.id))
+      card.addChild(bg)
+      const inner = new Text({
+        text: truncateTitle(ev.title ?? 'Memory', 40),
+        style: {
+          fill: 0xeef1f7,
+          fontSize: 15,
+          fontWeight: '600',
+          fontFamily: 'Segoe UI, sans-serif',
+          align: 'center',
+          wordWrap: true,
+          wordWrapWidth: THUMB_W - 20,
+        },
+      })
+      inner.resolution = 2
+      inner.anchor.set(0.5)
+      inner.position.set(0, 0)
+      card.addChild(inner)
     }
+    card.visible = false
+    this.cardsLayer.addChild(card)
 
-    // Stip-marker: voor non-cover events (permanent, met titel) en voor
-    // cover-overflow bij een NIET-span (span heeft de balk als marker).
+    // Stip-marker (overflow): niet-span events; een span gebruikt de balk als marker.
     let dot: Container | null = null
     if (!isSpan) {
       dot = new Container()
       const g = new Graphics()
       g.circle(0, 0, DOT_R).fill(hasCover ? 0xcfd6e4 : 0x8a97b0).stroke({ width: 2, color: 0x1a2030 })
       dot.addChild(g)
-      if (!hasCover) {
-        const label = new Text({
-          text: ev.title ?? 'Memory',
-          style: {
-            fill: 0xcfd6e4,
-            fontSize: 13,
-            fontFamily: 'Segoe UI, sans-serif',
-            wordWrap: true,
-            wordWrapWidth: 140,
-            align: 'center',
-          },
-        })
-        label.resolution = 2
-        label.anchor.set(0.5, 1)
-        label.position.set(0, -DOT_R - 6)
-        dot.addChild(label)
-      }
       dot.visible = false
       this.dotsLayer.addChild(dot)
     }
@@ -484,7 +498,7 @@ export class YearScene implements Scene {
     const N = this.lanesPerSide(vpH)
     const occ = new Map<string, { lo: number; hi: number }[]>()
     const offOn = this.curvedLeaders ? 1 : 0
-    for (const n of this.coverNodes) {
+    for (const n of this.cardNodes) {
       const sx = (n.anchorX - camX) * z + vpW / 2 + n.offX * offOn
       const halfW = n.cardW / 2
       // Kandidaat-lanes: eerst de huidige (sticky, lossere gap), daarna de lanes
@@ -623,7 +637,7 @@ export class YearScene implements Scene {
 
       // Animatie-doel: heeft dit event een lane → kaart (appear→1) op laneY;
       // anders stip/overflow (appear→0) op de as. Eerste frame snapt (primed).
-      const hasLane = n.hasCover && !!n.lane
+      const hasLane = !!n.lane
       const targetAppear = hasLane ? 1 : 0
       const targetY = hasLane ? this.laneCenterY(n.lane!) : 0
       if (!this.primed) {
@@ -782,7 +796,7 @@ export class YearScene implements Scene {
   beginResize(worldX: number, worldY: number): DragHandle | null {
     for (let i = this.nodes.length - 1; i >= 0; i--) {
       const n = this.nodes[i]
-      if (!n.hasCover || !n.lane || n.hitHalfW <= 0) continue
+      if (!n.lane || n.hitHalfW <= 0) continue
       if (Math.abs(worldX - n.hitCx) > n.hitHalfW || Math.abs(worldY - n.hitCy) > n.hitHalfH) continue
       const cx = n.hitCx
       const cy = n.hitCy
@@ -802,7 +816,7 @@ export class YearScene implements Scene {
           apply(startSize * f)
           changed = true
           // Belang veranderde → herorden de packing-prioriteit.
-          this.coverNodes.sort((a, b) => b.eff - a.eff || a.hash - b.hash)
+          this.cardNodes.sort((a, b) => b.eff - a.eff || a.hash - b.hash)
         },
         end: () => {
           if (changed) void this.backend.setEventSize(n.eventId, n.size)
