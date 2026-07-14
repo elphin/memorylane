@@ -34,6 +34,8 @@ export interface EventSummary {
   photoIds: string[]
   /** Belang/grootte op de jaar-tijdlijn (1–100). Afwezig = standaard (50). */
   size?: number
+  /** "In aanbouw"-status (badge in de jaar-view). Afwezig = false. */
+  underConstruction?: boolean
 }
 
 export interface Year {
@@ -106,6 +108,8 @@ export interface EventInfo {
   featuredPhoto?: string
   /** Belang/grootte op de jaar-tijdlijn (1–100). Afwezig = standaard (50). */
   size?: number
+  /** "In aanbouw"-status. Afwezig = false. */
+  underConstruction?: boolean
 }
 
 export interface EventDetail {
@@ -186,6 +190,8 @@ export interface Backend {
   setYearSizeFactor(yearId: string, factor: number | null): Promise<void>
   /** Zet (of wist bij `null`) het belang/grootte (1–100) van een event. */
   setEventSize(eventId: string, size: number | null): Promise<void>
+  /** Zet of wist de "in aanbouw"-vlag van een event. */
+  setEventUnderConstruction(eventId: string, flag: boolean): Promise<void>
   createEvent(
     yearId: string,
     title: string,
@@ -391,6 +397,11 @@ class TauriBackend implements Backend {
     await invoke('set_event_size', { eventId, size })
   }
 
+  async setEventUnderConstruction(eventId: string, flag: boolean): Promise<void> {
+    const invoke = await this.api()
+    await invoke('set_event_under_construction', { eventId, flag })
+  }
+
   async setYearSizeFactor(yearId: string, factor: number | null): Promise<void> {
     const invoke = await this.api()
     await invoke('set_year_size_factor', { yearId, factor })
@@ -508,6 +519,8 @@ class MockBackend implements Backend {
           photoIds: [], // door getYear gevuld (mock)
           // Gevarieerde groottes → test de dynamische kaartschaling in het jaar.
           size: e % 5 === 0 ? 75 : e % 5 === 2 ? 30 : undefined,
+          // Elk 3e event "in aanbouw" → test de badge in de jaar-view.
+          underConstruction: e % 3 === 0 || undefined,
         }
       })
       const points: DensityPoint[] = []
@@ -663,6 +676,7 @@ class MockBackend implements Backend {
         yearId,
         featuredPhoto: this.featured.get(eventId),
         size: summary?.size,
+        underConstruction: summary?.underConstruction,
       },
       items,
       canvas: [],
@@ -746,6 +760,10 @@ class MockBackend implements Backend {
   async setEventSize(eventId: string, size: number | null): Promise<void> {
     const ev = this.findEvent(eventId)
     if (ev) ev.size = size == null ? undefined : Math.max(1, Math.min(100, Math.round(size)))
+  }
+  async setEventUnderConstruction(eventId: string, flag: boolean): Promise<void> {
+    const ev = this.findEvent(eventId)
+    if (ev) ev.underConstruction = flag || undefined
   }
   async updateEvent(
     eventId: string,

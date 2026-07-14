@@ -447,6 +447,8 @@ export class YearScene implements Scene {
       inner.position.set(0, 0)
       card.addChild(inner)
     }
+    // "In aanbouw"-badge: amber caution-chip rechtsboven in de hoek.
+    if (ev.underConstruction) card.addChild(this.buildUnderConstructionBadge())
     card.visible = false
     this.cardsLayer.addChild(card)
 
@@ -521,6 +523,29 @@ export class YearScene implements Scene {
   /** Scherm-y (px, t.o.v. de as) van het midden van een lane. */
   private laneCenterY(lane: Lane): number {
     return lane.side * (AXIS_CLEAR_PX + CARD_H_MAX / 2 + lane.level * LANE_PITCH)
+  }
+
+  /** "In aanbouw"-badge: een amber chip met caution-diagonalen, geplaatst
+   * rechtsboven in de hoek van een memory-kaart. Herkenbaar als "nog niet af". */
+  private buildUnderConstructionBadge(): Container {
+    const W = 30
+    const H = 16
+    const R = 4
+    const b = new Container()
+    const chip = new Graphics()
+    chip.roundRect(-W / 2, -H / 2, W, H, R).fill(0xe8a54a)
+    const mask = new Graphics()
+    mask.roundRect(-W / 2, -H / 2, W, H, R).fill(0xffffff)
+    const stripes = new Graphics()
+    for (let x = -W; x < W; x += 9) stripes.moveTo(x, H / 2 + 2).lineTo(x + H + 4, -H / 2 - 2)
+    stripes.stroke({ width: 3.5, color: 0x2a2015, alpha: 0.5 })
+    stripes.mask = mask
+    const border = new Graphics()
+    border.roundRect(-W / 2, -H / 2, W, H, R).stroke({ width: 1.5, color: 0x2a2015 })
+    b.addChild(chip, mask, stripes, border)
+    // Net binnen de rechterbovenhoek van het frame (frame reikt tot ±(THUMB/2+BORDER)).
+    b.position.set(THUMB_W / 2 + BORDER - W / 2 + 2, -(THUMB_H / 2 + BORDER) + H / 2 - 1)
+    return b
   }
 
   /** Teken een leader-lijntje (as → kaart) in `this.leaders`, dat op 1/zoom is

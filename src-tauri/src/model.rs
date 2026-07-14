@@ -129,6 +129,9 @@ pub struct Event {
     /// Belang/grootte van het event op de jaar-tijdlijn (1–100). None = standaard (50).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size: Option<i64>,
+    /// "In aanbouw" (under construction): memory nog niet af. Afwezig = false.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub under_construction: Option<bool>,
     /// Id van het jaar waaronder dit event valt.
     pub year_id: String,
     /// Vault-relatief pad naar de eventmap (forward slashes).

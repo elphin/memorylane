@@ -27,6 +27,8 @@ interface EventForm {
   size?: number
   /** Maak het jaar (uit de datum) aan i.p.v. in het huidige jaar (lifeline: nieuw jaar). */
   atDate?: boolean
+  /** "In aanbouw"-status van de memory (alleen in bewerk-modus). */
+  underConstruction?: boolean
 }
 
 /** Drie startwaarden voor het belang van een nieuw event (de gebruiker kan het
@@ -1263,6 +1265,7 @@ export function AppShell() {
       // Seed het huidige belang zodat de rating de juiste bucket voorselecteert
       // (undefined = standaard 50, tonen we als "Bijzonder").
       size: info.size,
+      underConstruction: info.underConstruction ?? false,
     })
   }
 
@@ -1299,6 +1302,11 @@ export function AppShell() {
         const origSize = currentEventInfoRef.current?.size ?? 50
         if (f.size != null && f.size !== origSize) {
           await backend.setEventSize(f.eventId, f.size)
+        }
+        // "In aanbouw"-vlag: apart non-destructief veld; alleen bij een echte wijziging.
+        const origUC = currentEventInfoRef.current?.underConstruction ?? false
+        if ((f.underConstruction ?? false) !== origUC) {
+          await backend.setEventUnderConstruction(f.eventId, f.underConstruction ?? false)
         }
         // Een datum-edit kan het event naar een ander jaar verplaatsen. Houd
         // `currentYearRef` in de pas met de nieuwe startdatum, anders landt
@@ -2431,6 +2439,31 @@ function EventDialog({
             })}
           </div>
         </div>
+        {form.mode === 'edit' && (
+          <label
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              marginTop: 16,
+              cursor: 'pointer',
+              color: '#cfd6e4',
+              fontSize: 14,
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={form.underConstruction ?? false}
+              onChange={(e) => onChange({ underConstruction: e.target.checked })}
+            />
+            <span>
+              🔨 Deze memory is nog <strong>in aanbouw</strong>
+              <span style={{ color: '#8794aa', marginLeft: 6, fontSize: 12 }}>
+                · toont een badge in de jaar-view
+              </span>
+            </span>
+          </label>
+        )}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 14 }}>
           <button onClick={onCancel} style={ghostBtn}>Annuleren</button>
           <button onClick={onSubmit} disabled={busy || invalid} style={primaryBtn}>

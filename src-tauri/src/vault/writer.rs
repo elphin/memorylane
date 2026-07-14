@@ -610,6 +610,47 @@ pub fn set_event_size(
     write_atomic(&path, &out)
 }
 
+/// Zet (`true`) of wist (`false`) de `underConstruction`-vlag in `<folder>/_event.md`.
+/// Uit = veld verwijderen (afwezig = false), zodat de vault schoon blijft.
+/// Non-destructief: raakt alleen de betreffende frontmatter-regel(s).
+pub fn set_event_under_construction(
+    vault_root: &Path,
+    folder_path: &str,
+    on: bool,
+) -> std::io::Result<()> {
+    let path = vault_root.join(folder_path).join("_event.md");
+    let original = std::fs::read_to_string(&path)?;
+    let normalized = original.replace("\r\n", "\n");
+    let lines: Vec<&str> = normalized.split('\n').collect();
+    let open = lines.iter().position(|l| l.trim() == "---");
+    let close = open.and_then(|o| {
+        lines
+            .iter()
+            .enumerate()
+            .skip(o + 1)
+            .find(|(_, l)| l.trim() == "---")
+            .map(|(i, _)| i)
+    });
+    let (Some(open), Some(close)) = (open, close) else {
+        return write_atomic(&path, &normalized);
+    };
+    let mut fm: Vec<String> = lines[open + 1..close].iter().map(|s| s.to_string()).collect();
+    let value = if on { Some("true") } else { None };
+    set_fm_field(&mut fm, "underConstruction", value);
+    set_fm_field(&mut fm, "updatedAt", Some(&now_iso()));
+
+    let body = lines[close + 1..].join("\n").trim().to_string();
+    let mut out = String::from("---\n");
+    out.push_str(&fm.join("\n"));
+    out.push_str("\n---\n");
+    if !body.is_empty() {
+        out.push('\n');
+        out.push_str(&body);
+        out.push('\n');
+    }
+    write_atomic(&path, &out)
+}
+
 /// Zet (of wist bij `None`) de vaste jaar-cover in `<folder>/_year.md`. Bestaat er
 /// geen `_year.md` (of één zonder frontmatter-fences), dan maken we er één met
 /// minimale frontmatter — bewust ZONDER `id`, zodat de scanner deterministisch
@@ -1314,6 +1355,28 @@ mod tests {
         set_event_size(root, &folder, None).unwrap();
         let c2 = std::fs::read_to_string(root.join(&folder).join("_event.md")).unwrap();
         assert!(crate::vault::frontmatter::parse(&c2).get_str("size").is_none());
+    }
+
+    #[test]
+    fn set_event_under_construction_sets_and_clears() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let (_id, folder) = create_event(root, "2024", "Reis", "2024-07-01", None, None).unwrap();
+        // Standaard afwezig.
+        let c0 = std::fs::read_to_string(root.join(&folder).join("_event.md")).unwrap();
+        assert!(crate::vault::frontmatter::parse(&c0).get_str("underConstruction").is_none());
+
+        // Aan → veld "true".
+        set_event_under_construction(root, &folder, true).unwrap();
+        let c1 = std::fs::read_to_string(root.join(&folder).join("_event.md")).unwrap();
+        let p1 = crate::vault::frontmatter::parse(&c1);
+        assert_eq!(p1.get_str("underConstruction").unwrap(), "true");
+        assert_eq!(p1.get_str("title").unwrap(), "Reis"); // overige velden intact
+
+        // Uit → veld verdwijnt (afwezig = false).
+        set_event_under_construction(root, &folder, false).unwrap();
+        let c2 = std::fs::read_to_string(root.join(&folder).join("_event.md")).unwrap();
+        assert!(crate::vault::frontmatter::parse(&c2).get_str("underConstruction").is_none());
     }
 
     #[test]

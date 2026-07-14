@@ -382,6 +382,20 @@ impl VaultService {
         Ok(())
     }
 
+    /// Zet of wist de "in aanbouw"-vlag (`underConstruction`) van een event.
+    pub fn set_event_under_construction(&self, event_id: &str, flag: bool) -> Result<(), String> {
+        let vault = self.current_vault()?;
+        let folder = {
+            let conn = self.conn.lock().map_err(lock_err)?;
+            index::event_folder(&conn, event_id)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("event {event_id} niet gevonden"))?
+        };
+        writer::set_event_under_construction(&vault, &folder, flag).map_err(|e| e.to_string())?;
+        self.rescan()?;
+        Ok(())
+    }
+
     /// Werkt titel/begin-/einddatum van een bestaand event bij (file first, dan
     /// herindexeren). `end_at = None` verwijdert de einddatum.
     pub fn update_event(
@@ -690,6 +704,16 @@ pub fn set_event_size(
     size: Option<i64>,
 ) -> Result<(), String> {
     state.set_event_size(&event_id, size)
+}
+
+/// Zet of wist de "in aanbouw"-vlag (`underConstruction`) van een event.
+#[tauri::command]
+pub fn set_event_under_construction(
+    state: State<VaultService>,
+    event_id: String,
+    flag: bool,
+) -> Result<(), String> {
+    state.set_event_under_construction(&event_id, flag)
 }
 
 #[tauri::command]

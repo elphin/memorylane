@@ -181,6 +181,7 @@ fn scan_loose_media_event(
         featured_photo: None,
         tags: Vec::new(),
         size: None,
+        under_construction: None,
         year_id: year.id.clone(),
         folder_path,
     });
@@ -235,6 +236,10 @@ fn scan_event(root: &Path, event_path: &Path, year: &Year, model: &mut VaultMode
             .as_ref()
             .and_then(|p| p.get_str("size"))
             .and_then(|s| s.trim().parse::<i64>().ok()),
+        under_construction: parsed
+            .as_ref()
+            .and_then(|p| p.get_str("underConstruction"))
+            .map(|s| s.trim().eq_ignore_ascii_case("true")),
         year_id: year.id.clone(),
         folder_path: folder_path.clone(),
     };

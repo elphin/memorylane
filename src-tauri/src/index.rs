@@ -21,7 +21,8 @@ CREATE TABLE events (
     id TEXT PRIMARY KEY, year_id TEXT NOT NULL, kind TEXT NOT NULL,
     title TEXT, description TEXT, start_at TEXT NOT NULL, end_at TEXT,
     location_lat REAL, location_lng REAL, location_label TEXT,
-    featured_photo TEXT, tags TEXT NOT NULL, folder_path TEXT NOT NULL, size INTEGER
+    featured_photo TEXT, tags TEXT NOT NULL, folder_path TEXT NOT NULL, size INTEGER,
+    under_construction INTEGER
 );
 CREATE TABLE items (
     id TEXT PRIMARY KEY, event_id TEXT NOT NULL, item_type TEXT NOT NULL,
@@ -78,8 +79,9 @@ pub fn load(conn: &mut Connection, model: &VaultModel) -> rusqlite::Result<()> {
         let (lat, lng, label) = split_location(&e.location);
         tx.execute(
             "INSERT INTO events (id, year_id, kind, title, description, start_at, end_at,
-                 location_lat, location_lng, location_label, featured_photo, tags, folder_path, size)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+                 location_lat, location_lng, location_label, featured_photo, tags, folder_path, size,
+                 under_construction)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
             params![
                 e.id,
                 e.year_id,
@@ -95,6 +97,7 @@ pub fn load(conn: &mut Connection, model: &VaultModel) -> rusqlite::Result<()> {
                 json(&e.tags),
                 e.folder_path,
                 e.size,
+                e.under_construction,
             ],
         )?;
     }
@@ -220,6 +223,8 @@ pub struct EventSummary {
     pub photo_ids: Vec<String>,
     /// Grootte/belang op de jaar-tijdlijn (1–100), of None = standaard (50).
     pub size: Option<i64>,
+    /// "In aanbouw"-status (badge in de jaar-view). Afwezig/None = false.
+    pub under_construction: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -359,7 +364,7 @@ pub fn get_year(conn: &Connection, year_id: &str) -> rusqlite::Result<Option<Yea
              (SELECT group_concat(id) FROM
                (SELECT id FROM items WHERE event_id = e.id AND item_type = 'photo'
                     ORDER BY (timestamp_ms IS NULL), timestamp_ms LIMIT 24)),
-             e.size
+             e.size, e.under_construction
          FROM events e WHERE e.year_id = ?1 ORDER BY e.start_at",
     )?;
     let events = stmt
@@ -375,6 +380,7 @@ pub fn get_year(conn: &Connection, year_id: &str) -> rusqlite::Result<Option<Yea
                 cover_item_id: r.get(6)?,
                 photo_ids: split_ids(r.get::<_, Option<String>>(7)?),
                 size: r.get(8)?,
+                under_construction: r.get(9)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -386,7 +392,8 @@ pub fn get_event(conn: &Connection, event_id: &str) -> rusqlite::Result<Option<E
     let event = conn
         .query_row(
             "SELECT id, year_id, kind, title, description, start_at, end_at,
-                 location_lat, location_lng, location_label, featured_photo, tags, folder_path, size
+                 location_lat, location_lng, location_label, featured_photo, tags, folder_path, size,
+                 under_construction
              FROM events WHERE id = ?1",
             params![event_id],
             row_to_event,
@@ -784,6 +791,7 @@ fn row_to_event(r: &rusqlite::Row) -> rusqlite::Result<Event> {
         featured_photo: r.get(10)?,
         tags: parse_json_vec(&tags),
         size: r.get(13)?,
+        under_construction: r.get(14)?,
         folder_path: r.get(12)?,
     })
 }
@@ -884,6 +892,7 @@ mod tests {
             featured_photo: None,
             tags: vec!["vakantie".into()],
             size: None,
+            under_construction: None,
             year_id: "y2024".into(),
             folder_path: "2024/2024-11-23 palermo".into(),
         });
@@ -1054,6 +1063,7 @@ mod tests {
                 featured_photo: None,
                 tags: vec![],
                 size: None,
+                under_construction: None,
                 year_id: yid.into(),
                 folder_path: format!("{year}/e"),
             });
@@ -1229,6 +1239,7 @@ mod tests {
             featured_photo: None,
             tags: vec![],
             size: None,
+            under_construction: None,
             year_id: "y2024".into(),
             folder_path: "2024/ev1".into(),
         });
@@ -1267,6 +1278,7 @@ mod tests {
             featured_photo: None,
             tags: vec![],
             size: None,
+            under_construction: None,
             year_id: "y2024".into(),
             folder_path: "2024/ev2".into(),
         });
@@ -1329,6 +1341,7 @@ mod tests {
                 featured_photo: featured.map(|s| s.into()),
                 tags: vec![],
                 size: None,
+                under_construction: None,
                 year_id: "y2024".into(),
                 folder_path: format!("2024/{id}"),
             }
