@@ -409,11 +409,19 @@ export function AppShell() {
         const old = sceneRef.current
         sceneRef.current = null
         if (old) engine.exitScene(old.root, dir, () => old.destroy())
+        // Buurjaren (voor de overscroll-preview + jaar-overgang): de jarenlijst is
+        // chronologisch oplopend → later jaar = rechts, eerder = links.
+        const yi = yearsRef.current.findIndex((y) => y.id === yearId)
+        const neighbors = {
+          prev: yi > 0 ? yearsRef.current[yi - 1]?.title : undefined,
+          next: yi >= 0 && yi < yearsRef.current.length - 1 ? yearsRef.current[yi + 1]?.title : undefined,
+        }
         const scene = new YearScene(engine, backendRef.current, detail, {
           enabled: settingsRef.current.slideshow,
           speedMs: settingsRef.current.slideshowSpeed * 1000,
           showTitles: settingsRef.current.showMemoryTitles,
           curvedLeaders: settingsRef.current.curvedLeaders,
+          neighbors,
         })
         sceneRef.current = scene
         if (ctrlDown) scene.setDayPicker(true)

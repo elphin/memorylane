@@ -51,6 +51,9 @@ const CARD_OFFSET_PX = 78
 // Marge (scherm-px) waarmee de as-rand binnen de schermrand blijft bij de rust-
 // scroll-grens, zodat rand-kaarten (met hun offset) net zichtbaar blijven.
 const EDGE_MARGIN = 130
+// Rauwe overscroll (scherm-px) waarbij de buurjaar-naam volledig wit is → commit
+// naar dat jaar (fase 3). Daaronder groeit/vervaagt de preview mee.
+const COMMIT_PX = 240
 
 const DOT_R = 7 // stip-straal (scherm-px)
 const DOT_HIT = 22 // royale klik-halfmaat van een stip (scherm-px)
@@ -205,12 +208,21 @@ export class YearScene implements Scene {
   private slideMs: number
   private showTitles: boolean
   private curvedLeaders: boolean
+  private neighbors: { prev?: string; next?: string }
+  private prevLabel: Text | null = null // buurjaar-naam links (eerder jaar)
+  private nextLabel: Text | null = null // buurjaar-naam rechts (later jaar)
 
   constructor(
     private engine: RenderEngine,
     private backend: Backend,
     detail: YearDetail,
-    opts: { enabled: boolean; speedMs: number; showTitles?: boolean; curvedLeaders?: boolean } = {
+    opts: {
+      enabled: boolean
+      speedMs: number
+      showTitles?: boolean
+      curvedLeaders?: boolean
+      neighbors?: { prev?: string; next?: string }
+    } = {
       enabled: false,
       speedMs: 5000,
     },
@@ -219,6 +231,7 @@ export class YearScene implements Scene {
     this.slideMs = Math.max(800, opts.speedMs)
     this.showTitles = opts.showTitles ?? false
     this.curvedLeaders = opts.curvedLeaders ?? true
+    this.neighbors = opts.neighbors ?? {}
     const year = detail.year.year
     const yearStart = new Date(year, 0, 1).getTime()
     const yearEnd = new Date(year, 11, 31, 23, 59, 59).getTime()
@@ -314,8 +327,48 @@ export class YearScene implements Scene {
     this.dayLabel.visible = false
     this.root.addChild(this.dayLabel)
 
+    // Buurjaar-naam-previews (verschijnen bij overscroll voorbij de grens).
+    if (this.neighbors.prev) this.prevLabel = this.buildYearLabel(this.neighbors.prev)
+    if (this.neighbors.next) this.nextLabel = this.buildYearLabel(this.neighbors.next)
+
     this.engine.world.addChild(this.root)
     this.fitCamera()
+  }
+
+  /** Grote jaar-naam voor de overscroll-preview (in de root; per frame op de as
+   * gepositioneerd + geschaald/gefade o.b.v. de overscroll). */
+  private buildYearLabel(text: string): Text {
+    const t = new Text({
+      text,
+      style: { fill: 0xffffff, fontSize: 64, fontWeight: '700', fontFamily: 'Georgia, serif' },
+    })
+    t.resolution = 2
+    t.anchor.set(0.5)
+    t.alpha = 0
+    t.visible = false
+    this.root.addChild(t)
+    return t
+  }
+
+  /** Toon de buurjaar-naam aan de kant waar je voorbij de grens trekt: klein +
+   * transparant bij weinig overscroll, groter + wit richting de commit-drempel. */
+  private renderYearPreview(vp: { width: number; height: number }, z: number, camX: number): void {
+    const over = this.engine.camera.overscrollPx // signed rauwe scherm-px
+    const active = over > 0 ? this.nextLabel : over < 0 ? this.prevLabel : null
+    if (this.prevLabel && this.prevLabel !== active) this.prevLabel.visible = false
+    if (this.nextLabel && this.nextLabel !== active) this.nextLabel.visible = false
+    if (!active) return
+    const t = Math.min(1, Math.abs(over) / COMMIT_PX)
+    if (t <= 0.001) {
+      active.visible = false
+      return
+    }
+    active.visible = true
+    active.alpha = 0.25 + 0.75 * t
+    active.scale.set((0.5 + 0.65 * t) / z)
+    const side = over > 0 ? 1 : -1
+    const sx = vp.width / 2 + side * (vp.width / 2 - 150) // ~150px binnen de rand
+    active.position.set(camX + (sx - vp.width / 2) / z, 0)
   }
 
   private buildNode(ev: EventSummary, anchorX: number, isSpan: boolean): Node {
@@ -620,6 +673,9 @@ export class YearScene implements Scene {
     // beeld), daarna rubber-band + terugveren (afgehandeld in de gesture-laag).
     const restMax = Math.max(0, AXIS_W / 2 - (halfW - EDGE_MARGIN) / z)
     engine.camera.boundsX = { min: -restMax, max: restMax }
+
+    // Buurjaar-naam-preview bij overscroll voorbij de grens.
+    this.renderYearPreview(vp, z, camX)
 
     // Maandlabels: constante schermgrootte, meebewegend met de uitrekkende as.
     for (const ml of this.monthLabels) {
