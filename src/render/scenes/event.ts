@@ -30,6 +30,11 @@ interface Node {
   mask: Graphics | null // clip-masker (foto)
   ring: Graphics | null // gouden rand als deze foto de event-omslag (featured) is
   yearRing: Graphics | null // blauwe rand als deze foto de vaste jaar-cover is
+  // Notitie-kaart (tekst/link): losse onderdelen zodat de box los van de tekst
+  // hergroot kan worden (Alt-slepen = box groter, font gelijk; tekst herloopt).
+  textBg: Graphics | null
+  textEl: Text | null
+  textClip: Graphics | null
   x: number
   y: number
   // Doel-positie/-rotatie; `update()` lerpt de node hier vloeiend naartoe (voor
@@ -108,8 +113,14 @@ export class EventScene implements Scene {
       let mask: Graphics | null = null
       let ring: Graphics | null = null
       let yearRing: Graphics | null = null
+      let textBg: Graphics | null = null
+      let textEl: Text | null = null
+      let textClip: Graphics | null = null
       if (isText) {
-        this.buildTextCard(container, item)
+        const tc = this.buildTextCard(container, item)
+        textBg = tc.bg
+        textEl = tc.text
+        textClip = tc.clip
       } else {
         const card = this.buildPhotoCard(container)
         sprite = card.sprite
@@ -133,7 +144,7 @@ export class EventScene implements Scene {
       this.zTop = Math.max(this.zTop, z)
 
       this.root.addChild(container)
-      this.nodes.push({
+      const node: Node = {
         item,
         ref,
         container,
@@ -142,6 +153,9 @@ export class EventScene implements Scene {
         mask,
         ring,
         yearRing,
+        textBg,
+        textEl,
+        textClip,
         x,
         y,
         tx: x,
@@ -165,7 +179,13 @@ export class EventScene implements Scene {
         textScale: saved?.textScale,
         width: saved?.width,
         height: saved?.height,
-      })
+      }
+      this.nodes.push(node)
+      // Notitie: box op maat zetten (onthouden width/height of default) → juiste
+      // hittest-halfmaten (breedte×hoogte i.p.v. vierkant) + herlopen tekst.
+      if (isText) {
+        this.sizeTextCard(node, node.width ?? TEXT_W, node.height ?? TEXT_H)
+      }
     })
 
     this.root.sortableChildren = true
@@ -593,7 +613,7 @@ export class EventScene implements Scene {
     return null
   }
 
-  private buildTextCard(container: Container, item: Item): void {
+  private buildTextCard(container: Container, item: Item): { bg: Graphics; text: Text; clip: Graphics } {
     const bg = new Graphics()
     bg.roundRect(-TEXT_W / 2, -TEXT_H / 2, TEXT_W, TEXT_H, 10).fill(0xfffdf5).stroke({
       width: 1,
@@ -613,8 +633,9 @@ export class EventScene implements Scene {
       },
     })
     text.resolution = 2
-    // Boven-uitgelijnd + geklipt op het kader: lange tekst loopt niet meer buiten
-    // de kaart (de volledige tekst lees je op L3, waar de kaart meegroeit).
+    // Boven-uitgelijnd + geklipt op het kader: lange tekst loopt niet buiten de
+    // box (met Alt-slepen maak je de box groter → meer tekst zichtbaar; Alt-tik =
+    // passend om alle tekst te tonen).
     text.anchor.set(0.5, 0)
     text.position.set(0, -TEXT_H / 2 + 14)
     container.addChild(text)
@@ -622,6 +643,40 @@ export class EventScene implements Scene {
     clip.roundRect(-TEXT_W / 2, -TEXT_H / 2, TEXT_W, TEXT_H, 10).fill(0xffffff)
     container.addChild(clip)
     text.mask = clip
+    return { bg, text, clip }
+  }
+
+  /** Herteken de notitie-box op maat `w`×`h` (font blijft gelijk; tekst herloopt
+   * op de nieuwe breedte en wordt op de nieuwe hoogte geklipt). Werkt de hittest-
+   * halfmaten bij. */
+  private sizeTextCard(n: Node, w: number, h: number): void {
+    n.width = w
+    n.height = h
+    n.halfW = w / 2
+    n.halfH = h / 2
+    if (n.textBg) {
+      n.textBg.clear()
+      n.textBg.roundRect(-w / 2, -h / 2, w, h, 10).fill(0xfffdf5).stroke({ width: 1, color: 0xe0dccb })
+    }
+    if (n.textClip) {
+      n.textClip.clear()
+      n.textClip.roundRect(-w / 2, -h / 2, w, h, 10).fill(0xffffff)
+    }
+    if (n.textEl) {
+      n.textEl.style.wordWrapWidth = w - 32
+      n.textEl.position.set(0, -h / 2 + 14)
+    }
+  }
+
+  /** "Passend": maak de box (op de huidige breedte) precies hoog genoeg voor alle
+   * tekst, zodat je een lang verhaal volledig ziet. */
+  private fitTextCard(n: Node): void {
+    if (!n.textEl) return
+    const w = n.width ?? TEXT_W
+    n.textEl.style.wordWrapWidth = w - 32
+    const needed = n.textEl.height + 28 // volledige gewrapte teksthoogte + marge
+    this.sizeTextCard(n, w, Math.max(TEXT_H, needed))
+    this.persist()
   }
 
   private fitCamera(cols: number, rows: number): void {
@@ -703,6 +758,28 @@ export class EventScene implements Scene {
       n.z = ++this.zTop
       n.container.zIndex = n.z
       let changed = false
+      // Notitie (tekst/link): Alt = box-resize i.p.v. roteren. Slepen maakt de box
+      // groter/kleiner (font gelijk, tekst herloopt); een Alt-tík (geen beweging)
+      // maakt de box passend om álle tekst te tonen.
+      const isTextNode = n.item.itemType === 'text' || n.item.itemType === 'link'
+      if (kind === 'rotate' && isTextNode) {
+        const moveTol = 6 / this.engine.camera.zoom // world-drempel ~ 6 scherm-px
+        return {
+          moveTo: (mx, my) => {
+            if (!changed && Math.hypot(mx - wx, my - wy) < moveTol) return // tik → geen resize
+            // De box-hoek volgt de cursor: halve maten = afstand tot het midden,
+            // teruggerekend naar lokale (ongeschaalde) coördinaten (÷ n.scale).
+            const hw = Math.min(TEXT_W * 4, Math.max(TEXT_W * 0.5, Math.abs(mx - n.x) / n.scale))
+            const hh = Math.min(TEXT_H * 6, Math.max(TEXT_H * 0.5, Math.abs(my - n.y) / n.scale))
+            this.sizeTextCard(n, hw * 2, hh * 2)
+            changed = true
+          },
+          end: () => {
+            if (changed) this.persist()
+            else this.fitTextCard(n) // Alt-tik = passend
+          },
+        }
+      }
       if (kind === 'rotate') {
         const startAngle = Math.atan2(wy - n.y, wx - n.x)
         const startRot = n.trot
