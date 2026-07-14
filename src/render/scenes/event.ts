@@ -71,6 +71,8 @@ export class EventScene implements Scene {
   private featuredRef: string | null
   private yearCoverId: string | null
   private mode: 'custom' | 'grid' | 'scatter' = 'custom'
+  // Herpak het grid zodra een foto-verhouding is geladen (grid-modus).
+  private regridPending = false
 
   constructor(
     private engine: RenderEngine,
@@ -244,8 +246,60 @@ export class EventScene implements Scene {
     }
   }
 
+  /** Grid-plaatsing (chronologisch) als een "shelf"/justified-gallery: kaarten op
+   * hun WERKELIJKE grootte (verhouding × eigen schaal) links→rechts in rijen, met
+   * gaps ertussen; een rij breekt als hij te breed wordt. Zo overlappen niet-
+   * vierkante of geschaalde foto's elkaar niet, en oogt het raster natuurlijker
+   * dan een strak vierkant grid. Zet alleen doel-posities/z (update() animeert). */
+  private layoutGridPositions(): void {
+    const ordered = [...this.nodes].sort(
+      (a, b) => (a.item.timestampMs ?? Infinity) - (b.item.timestampMs ?? Infinity),
+    )
+    const gap = 28
+    const items = ordered.map((n) => ({ n, w: 2 * n.halfW * n.scale, h: 2 * n.halfH * n.scale }))
+    const avgW = items.reduce((s, it) => s + it.w, 0) / Math.max(1, items.length)
+    const cols = Math.max(1, Math.round(Math.sqrt(items.length)))
+    const maxRowW = cols * (avgW + gap)
+    // Kaarten in rijen breken (shelf-packing).
+    const rows: { list: typeof items; w: number }[] = []
+    let list: typeof items = []
+    let rowW = 0
+    for (const it of items) {
+      const add = (list.length ? gap : 0) + it.w
+      if (list.length && rowW + add > maxRowW) {
+        rows.push({ list, w: rowW })
+        list = []
+        rowW = 0
+      }
+      rowW += (list.length ? gap : 0) + it.w
+      list.push(it)
+    }
+    if (list.length) rows.push({ list, w: rowW })
+    // Positioneren: elke rij horizontaal gecentreerd, kaarten verticaal in het
+    // midden van de rijhoogte; het hele blok gecentreerd rond (0,0).
+    const rowH = rows.map((r) => Math.max(...r.list.map((it) => it.h)))
+    const totalH = rowH.reduce((s, h) => s + h, 0) + gap * Math.max(0, rows.length - 1)
+    let y = -totalH / 2
+    let zi = 0
+    rows.forEach((r, ri) => {
+      const h = rowH[ri]
+      let x = -r.w / 2
+      for (const it of r.list) {
+        it.n.tx = x + it.w / 2
+        it.n.ty = y + h / 2
+        it.n.trot = 0
+        it.n.z = zi++
+        it.n.container.zIndex = it.n.z
+        this.zTop = Math.max(this.zTop, it.n.z)
+        x += it.w + gap
+      }
+      y += h + gap
+    })
+  }
+
   /** Herschik het canvas. 'custom' herstelt de eigen posities; 'grid' zet ze
-   * chronologisch in een vierkant raster; 'scatter' verspreidt ze speels
+   * chronologisch in een "shelf"-raster (rekening houdend met formaat); 'scatter'
+   * verspreidt ze speels
    * (kriskras + scheef, elke aanroep opnieuw). Grid/scatter persisteren NIET. */
   applyLayout(mode: 'custom' | 'grid' | 'scatter', snap = false, scatterRotate = true): void {
     this.mode = mode
@@ -260,18 +314,7 @@ export class EventScene implements Scene {
         n.container.zIndex = n.z
       }
     } else if (mode === 'grid') {
-      // Chronologisch (op timestamp; ongedateerd achteraan), zo vierkant mogelijk.
-      const ordered = [...this.nodes].sort(
-        (a, b) => (a.item.timestampMs ?? Infinity) - (b.item.timestampMs ?? Infinity),
-      )
-      const cols = Math.max(1, Math.ceil(Math.sqrt(ordered.length)))
-      ordered.forEach((n, i) => {
-        n.tx = (i % cols) * CELL - ((cols - 1) * CELL) / 2
-        n.ty = Math.floor(i / cols) * CELL
-        n.trot = 0
-        n.z = i
-        n.container.zIndex = n.z
-      })
+      this.layoutGridPositions()
     } else {
       // Scatter: geschudde losse raster-cellen + flinke jitter + rotatie → een
       // "op tafel verspreid"-look; elke aanroep een nieuwe worp (dobbelsteen).
@@ -640,6 +683,11 @@ export class EventScene implements Scene {
 
   update(ctx: FrameContext): void {
     const { engine, frame } = ctx
+    // Foto('s) laadden hun verhouding → herpak het grid (posities animeren mee).
+    if (this.regridPending && this.mode === 'grid') {
+      this.layoutGridPositions()
+      this.regridPending = false
+    }
     for (const n of this.nodes) {
       // Vloeiend naar de doel-layout bewegen (animatie bij een stand-wissel).
       // Binnen een kleine epsilon meteen snappen, zodat een node in rust niet
@@ -683,6 +731,8 @@ export class EventScene implements Scene {
             } else {
               this.sizePhotoCard(n, PHOTO, PHOTO) // vangnet tegen een 0×0-texture
             }
+            // De kaartgrootte veranderde → herpak het grid als dat de stand is.
+            if (this.mode === 'grid') this.regridPending = true
           }
           n.loaded = true
           n.tier = 256

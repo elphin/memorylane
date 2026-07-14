@@ -2032,6 +2032,13 @@ function Fab({
     })
     return (
       <div style={wrap}>
+        {/* Vooraan (links) zodat het verschijnen de layout-knoppen NIET verschuift
+            — de rij is rechts verankerd, dus een knop links laat de rest op zijn plek. */}
+        {layoutMode !== 'custom' && (
+          <button onClick={onSaveLayout} style={{ ...fabBtn, background: '#166534' }} title="Deze opstelling vastleggen als je eigen layout">
+            Opslaan als Eigen
+          </button>
+        )}
         <button onClick={() => onLayout('custom')} style={seg('custom')}>Eigen</button>
         <button onClick={() => onLayout('grid')} style={seg('grid')}>Grid</button>
         <button onClick={() => onLayout('scatter')} style={seg('scatter')} title="Elke klik een nieuwe worp">
@@ -2044,11 +2051,6 @@ function Fab({
         >
           {scatterRotate ? '⟲' : '▭'}
         </button>
-        {layoutMode !== 'custom' && (
-          <button onClick={onSaveLayout} style={{ ...fabBtn, background: '#166534' }} title="Deze opstelling vastleggen als je eigen layout">
-            Opslaan als Eigen
-          </button>
-        )}
         <button onClick={onAddPhotos} style={fabBtn}>+ Foto&apos;s</button>
         <button onClick={onAddNote} style={fabBtn}>+ Notitie</button>
         <button onClick={onEditEvent} style={fabBtn}>Bewerk memory</button>
