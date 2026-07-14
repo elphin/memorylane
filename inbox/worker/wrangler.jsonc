@@ -1,0 +1,47 @@
+{
+  // MemoryLane Onderweg — Cloudflare Worker.
+  // Zie README.md voor het eenmalige runbook (D1/R2 aanmaken, secrets, deploy).
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "memorylane-inbox",
+  "main": "src/index.ts",
+  "compatibility_date": "2024-12-05",
+  "observability": { "enabled": true },
+
+  // ---- Config-knoppen (niet-geheim). Wijzig hier + `npm run deploy` ----------
+  "vars": {
+    // Max openstaande (uploading+ready) opslag per brievenbus, in GiB.
+    // 8 = strikt binnen de R2-free-tier (€0). Zet op "20" voor ruimer
+    // (kán centen kosten; de 30-dagen-opruiming begrenst het). Zie §14 van het plan.
+    "MAILBOX_LIMIT_GIB": "8"
+  },
+
+  // ---- D1 (metadata-administratie) ------------------------------------------
+  // database_id invullen ná `wrangler d1 create memorylane-inbox` (zie README).
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "memorylane-inbox",
+      "database_id": "REPLACE_ME_NA_D1_CREATE",
+      "migrations_dir": "migrations"
+    }
+  ],
+
+  // ---- R2 (versleutelde blobs) ----------------------------------------------
+  "r2_buckets": [
+    {
+      "binding": "BUCKET",
+      "bucket_name": "memorylane-inbox"
+    }
+  ],
+
+  // ---- Cron (dagelijkse opruiming, §5.7) ------------------------------------
+  "triggers": {
+    "crons": ["17 3 * * *"]
+  }
+
+  // Secrets (NIET hier — via `wrangler secret put`): INVITE_CODE,
+  // R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, R2_ACCOUNT_ID. Zie README.
+  //
+  // Static assets (PWA) worden in fase 3 toegevoegd:
+  //   "assets": { "directory": "../pwa/dist", "binding": "ASSETS" }
+}

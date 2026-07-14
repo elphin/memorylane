@@ -1,0 +1,8 @@
+[
+  {
+    "AllowedOrigins": ["https://REPLACE_ME_INBOX_ORIGIN"],
+    "AllowedMethods": ["PUT", "GET", "HEAD"],
+    "AllowedHeaders": ["content-type"],
+    "MaxAgeSeconds": 3600
+  }
+]
