@@ -75,6 +75,9 @@ interface Settings {
   showMemoryTitles: boolean
   /** Teken de lijntjes van de as naar een memory-kaart gebogen (of recht). */
   curvedLeaders: boolean
+  /** Snijd foto's in de memory-view naar een vierkant (1:1) bij? Uit = natuurlijke
+   * verhouding (de kaart neemt de vorm van de foto over). */
+  squarePhotos: boolean
   /** Toon de titel bovenin (Memory Lane / jaar / eventnaam). */
   showTitle: boolean
   /** Bij een detailfoto: toon de caption als titel (indien aanwezig; anders de
@@ -100,6 +103,7 @@ const DEFAULT_SETTINGS: Settings = {
   scatterRotate: true,
   showMemoryTitles: true,
   curvedLeaders: true,
+  squarePhotos: false,
   showTitle: true,
   photoTitleFromCaption: false,
   diaMode: 'kenburns',
@@ -295,6 +299,10 @@ export function AppShell() {
       currentYearRef.current
     ) {
       void enterYearRef.current(currentYearRef.current)
+    }
+    // Foto-verhouding leeft in de event-scene → herbouw het event als het open is.
+    if (patch.squarePhotos !== undefined && levelRef.current === 'event' && currentEventRef.current) {
+      void enterEventRef.current(currentEventRef.current)
     }
   }
 
@@ -528,6 +536,7 @@ export function AppShell() {
               state.mode === 'custom' ? { mode: 'custom' } : { mode: state.mode, positions: state.positions },
             )
           },
+          settingsRef.current.squarePhotos,
         )
         sceneRef.current = scene
         // Open in de onthouden weergave van dit event (vóór de reveal, zodat de
@@ -1799,6 +1808,15 @@ function SettingsPanel({
                   label="Scatter legt foto's licht scheef"
                 />
                 {desc("Uit = recht. Ook per memory te wisselen met het ⟲-knopje naast Scatter.")}
+              </div>
+
+              <div style={{ marginTop: 12 }}>
+                <Toggle
+                  on={settings.squarePhotos}
+                  set={(v) => onChange({ squarePhotos: v })}
+                  label="Foto's vierkant bijsnijden (in een memory)"
+                />
+                {desc('Uit = de foto behoudt zijn eigen verhouding (de tegel neemt de vorm van de foto over).')}
               </div>
 
               <div style={{ height: 1, background: '#2c3650', margin: '16px 0' }} />

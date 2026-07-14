@@ -26,6 +26,8 @@ interface Node {
   ref: string
   container: Container
   sprite: Sprite | null
+  frame: Graphics | null // witte rand-kaart (foto); wordt op de foto-verhouding gezet
+  mask: Graphics | null // clip-masker (foto)
   ring: Graphics | null // gouden rand als deze foto de event-omslag (featured) is
   yearRing: Graphics | null // blauwe rand als deze foto de vaste jaar-cover is
   x: number
@@ -35,7 +37,12 @@ interface Node {
   tx: number
   ty: number
   trot: number
-  half: number
+  // Halve kaartmaat (incl. rand) voor hittest/bounds — apart per as zodat een
+  // niet-vierkante foto correct raakbaar is. cardW/cardH = de foto-inhoud.
+  halfW: number
+  halfH: number
+  cardW: number
+  cardH: number
   z: number
   // Eigen ("custom") layout: de posities/rotatie/z uit `_canvas.json` (of auto-grid).
   // Grid/scatter herschikken tijdelijk; hiernaar keer je altijd terug.
@@ -73,6 +80,8 @@ export class EventScene implements Scene {
     // Aangeroepen als een niet-'custom' opstelling verandert (drag in grid/scatter):
     // de app onthoudt de view dan per event (grid/scatter leven niet in de vault).
     private onViewChange?: (state: LayoutState) => void,
+    // Foto's naar een vierkant (1:1) bijsnijden? Uit = natuurlijke verhouding.
+    private squarePhotos = false,
   ) {
     this.featuredRef = detail.event.featuredPhoto ?? null
     this.yearCoverId = detail.yearCover ?? null
@@ -86,12 +95,17 @@ export class EventScene implements Scene {
       const half = isText ? Math.max(TEXT_W, TEXT_H) / 2 : PHOTO / 2 + BORDER
 
       let sprite: Sprite | null = null
+      let frame: Graphics | null = null
+      let mask: Graphics | null = null
       let ring: Graphics | null = null
       let yearRing: Graphics | null = null
       if (isText) {
         this.buildTextCard(container, item)
       } else {
-        sprite = this.buildPhotoCard(container)
+        const card = this.buildPhotoCard(container)
+        sprite = card.sprite
+        frame = card.frame
+        mask = card.mask
         yearRing = this.buildYearRing(container) // onder de gouden ring
         yearRing.visible = item.id === this.yearCoverId
         ring = this.buildFeaturedRing(container)
@@ -115,6 +129,8 @@ export class EventScene implements Scene {
         ref,
         container,
         sprite,
+        frame,
+        mask,
         ring,
         yearRing,
         x,
@@ -122,7 +138,10 @@ export class EventScene implements Scene {
         tx: x,
         ty: y,
         trot: rot,
-        half,
+        halfW: half,
+        halfH: half,
+        cardW: PHOTO,
+        cardH: PHOTO,
         z,
         baseX: x,
         baseY: y,
@@ -144,7 +163,7 @@ export class EventScene implements Scene {
     this.fitCamera(cols, Math.max(1, Math.ceil(detail.items.length / cols)))
   }
 
-  private buildPhotoCard(container: Container): Sprite {
+  private buildPhotoCard(container: Container): { sprite: Sprite; frame: Graphics; mask: Graphics } {
     const frame = new Graphics()
     frame
       .roundRect(-PHOTO / 2 - BORDER, -PHOTO / 2 - BORDER, PHOTO + BORDER * 2, PHOTO + BORDER * 2, 4)
@@ -159,7 +178,34 @@ export class EventScene implements Scene {
     container.addChild(sprite)
     container.addChild(mask)
     sprite.mask = mask
-    return sprite
+    return { sprite, frame, mask }
+  }
+
+  /** Zet een foto-kaart op afmeting `w`×`h` (foto-inhoud): hertekent de witte
+   * rand, het masker en de eventuele rings, en werkt de hittest-halfmaten bij.
+   * Voor de natuurlijke-verhouding-modus (niet 1:1). */
+  private sizePhotoCard(n: Node, w: number, h: number): void {
+    n.cardW = w
+    n.cardH = h
+    n.halfW = w / 2 + BORDER
+    n.halfH = h / 2 + BORDER
+    n.frame?.clear()
+    n.frame?.roundRect(-w / 2 - BORDER, -h / 2 - BORDER, w + BORDER * 2, h + BORDER * 2, 4).fill(0xf5f5f0)
+    n.mask?.clear()
+    n.mask?.rect(-w / 2, -h / 2, w, h).fill(0xffffff)
+    if (n.ring) {
+      const rw = w / 2 + BORDER + 3
+      const rh = h / 2 + BORDER + 3
+      n.ring.clear()
+      n.ring.roundRect(-rw, -rh, rw * 2, rh * 2, 6).stroke({ width: 4, color: 0xffc24b, alignment: 0 })
+    }
+    if (n.yearRing) {
+      const rw = w / 2 + BORDER + 8
+      const rh = h / 2 + BORDER + 8
+      n.yearRing.clear()
+      n.yearRing.roundRect(-rw, -rh, rw * 2, rh * 2, 8).stroke({ width: 4, color: 0x4b9bff, alignment: 0 })
+    }
+    n.sprite?.setSize(w, h)
   }
 
   /** Gekleurde rand die de uitgelichte (featured) foto markeert; standaard uit. */
@@ -367,10 +413,10 @@ export class EventScene implements Scene {
     let maxX = -Infinity
     let maxY = -Infinity
     for (const n of this.nodes) {
-      minX = Math.min(minX, n.x - n.half * n.scale)
-      maxX = Math.max(maxX, n.x + n.half * n.scale)
-      minY = Math.min(minY, n.y - n.half * n.scale)
-      maxY = Math.max(maxY, n.y + n.half * n.scale)
+      minX = Math.min(minX, n.x - n.halfW * n.scale)
+      maxX = Math.max(maxX, n.x + n.halfW * n.scale)
+      minY = Math.min(minY, n.y - n.halfH * n.scale)
+      maxY = Math.max(maxY, n.y + n.halfH * n.scale)
     }
     return { minX, minY, maxX, maxY }
   }
@@ -400,10 +446,10 @@ export class EventScene implements Scene {
     for (const n of this.nodes) {
       // Op de DOEL-bounds fitten (waar de animatie naartoe gaat), niet de
       // huidige tussenpositie.
-      minX = Math.min(minX, n.tx - n.half * n.scale)
-      maxX = Math.max(maxX, n.tx + n.half * n.scale)
-      minY = Math.min(minY, n.ty - n.half * n.scale)
-      maxY = Math.max(maxY, n.ty + n.half * n.scale)
+      minX = Math.min(minX, n.tx - n.halfW * n.scale)
+      maxX = Math.max(maxX, n.tx + n.halfW * n.scale)
+      minY = Math.min(minY, n.ty - n.halfH * n.scale)
+      maxY = Math.max(maxY, n.ty + n.halfH * n.scale)
     }
     const vp = this.engine.viewport()
     const w = maxX - minX
@@ -420,7 +466,7 @@ export class EventScene implements Scene {
   refAt(worldX: number, worldY: number): string | null {
     for (let i = this.nodes.length - 1; i >= 0; i--) {
       const n = this.nodes[i]
-      if (n.sprite && Math.abs(worldX - n.x) <= n.half * n.scale && Math.abs(worldY - n.y) <= n.half * n.scale) {
+      if (n.sprite && Math.abs(worldX - n.x) <= n.halfW * n.scale && Math.abs(worldY - n.y) <= n.halfH * n.scale) {
         return n.ref
       }
     }
@@ -477,7 +523,7 @@ export class EventScene implements Scene {
     // Bovenste item onder het punt.
     for (let i = this.nodes.length - 1; i >= 0; i--) {
       const n = this.nodes[i]
-      if (Math.abs(wx - n.x) <= n.half * n.scale && Math.abs(wy - n.y) <= n.half * n.scale) {
+      if (Math.abs(wx - n.x) <= n.halfW * n.scale && Math.abs(wy - n.y) <= n.halfH * n.scale) {
         const offX = n.x - wx
         const offY = n.y - wy
         const startX = n.x
@@ -530,8 +576,9 @@ export class EventScene implements Scene {
     if (this.mode !== 'custom') return null
     for (let i = this.nodes.length - 1; i >= 0; i--) {
       const n = this.nodes[i]
-      const hw = n.half * n.scale
-      if (Math.abs(wx - n.x) > hw || Math.abs(wy - n.y) > hw) continue
+      const hw = n.halfW * n.scale
+      const hh = n.halfH * n.scale
+      if (Math.abs(wx - n.x) > hw || Math.abs(wy - n.y) > hh) continue
       // Naar voren halen.
       n.z = ++this.zTop
       n.container.zIndex = n.z
@@ -623,8 +670,20 @@ export class EventScene implements Scene {
         if (tex) {
           n.sprite.texture = tex
           n.sprite.tint = 0xffffff
-          const s = Math.max(PHOTO / tex.width, PHOTO / tex.height)
-          n.sprite.setSize(tex.width * s, tex.height * s)
+          if (this.squarePhotos) {
+            // Cover-crop naar het vierkante masker (1:1).
+            const s = Math.max(PHOTO / tex.width, PHOTO / tex.height)
+            n.sprite.setSize(tex.width * s, tex.height * s)
+          } else {
+            // Natuurlijke verhouding: de kaart krijgt de foto-vorm (langste zijde = PHOTO).
+            const mx = Math.max(tex.width, tex.height)
+            if (mx > 0) {
+              const s = PHOTO / mx
+              this.sizePhotoCard(n, tex.width * s, tex.height * s)
+            } else {
+              this.sizePhotoCard(n, PHOTO, PHOTO) // vangnet tegen een 0×0-texture
+            }
+          }
           n.loaded = true
           n.tier = 256
         } else {
@@ -644,8 +703,13 @@ export class EventScene implements Scene {
         if (tex) {
           n.sprite.texture = tex
           n.sprite.tint = 0xffffff
-          const s = Math.max(PHOTO / tex.width, PHOTO / tex.height)
-          n.sprite.setSize(tex.width * s, tex.height * s)
+          if (this.squarePhotos) {
+            const s = Math.max(PHOTO / tex.width, PHOTO / tex.height)
+            n.sprite.setSize(tex.width * s, tex.height * s)
+          } else {
+            // Zelfde weergavemaat, scherpere bron.
+            n.sprite.setSize(n.cardW, n.cardH)
+          }
           n.tier = need
         } else {
           const src = this.backend.thumb(n.item.id, need as 1024 | 2048)
@@ -658,7 +722,7 @@ export class EventScene implements Scene {
   hitTest(worldX: number, worldY: number): string | null {
     for (let i = this.nodes.length - 1; i >= 0; i--) {
       const n = this.nodes[i]
-      if (Math.abs(worldX - n.x) <= n.half * n.scale && Math.abs(worldY - n.y) <= n.half * n.scale) {
+      if (Math.abs(worldX - n.x) <= n.halfW * n.scale && Math.abs(worldY - n.y) <= n.halfH * n.scale) {
         return n.item.id
       }
     }
