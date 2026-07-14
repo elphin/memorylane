@@ -13,6 +13,10 @@ import type { NodePosition, Scene } from './scene'
 export interface LayoutState {
   mode: 'custom' | 'grid' | 'scatter'
   positions: NodePosition[]
+  /** Grid-sorteervolgorde + seed (voor 'random'), zodat de gekozen sortering
+   * per event onthouden kan worden. */
+  gridSort: 'date' | 'name' | 'random'
+  gridSeed: number
 }
 
 const PHOTO = 200
@@ -352,44 +356,88 @@ export class EventScene implements Scene {
     const ordered = this.orderedForGrid()
     const gap = 28
     const items = ordered.map((n) => ({ n, w: 2 * n.halfW * n.scale, h: 2 * n.halfH * n.scale }))
-    const avgW = items.reduce((s, it) => s + it.w, 0) / Math.max(1, items.length)
+    if (items.length === 0) return
+    const avgW = items.reduce((s, it) => s + it.w, 0) / items.length
     const cols = Math.max(1, Math.round(Math.sqrt(items.length)))
-    const maxRowW = cols * (avgW + gap)
-    // Kaarten in rijen breken (shelf-packing).
-    const rows: { list: typeof items; w: number }[] = []
-    let list: typeof items = []
-    let rowW = 0
-    for (const it of items) {
-      const add = (list.length ? gap : 0) + it.w
-      if (list.length && rowW + add > maxRowW) {
-        rows.push({ list, w: rowW })
-        list = []
-        rowW = 0
+    // Strip-breedte: minstens het breedste item, doel ~`cols` kolommen breed.
+    const stripW = Math.max(...items.map((it) => it.w), cols * (avgW + gap) - gap)
+
+    // Skyline-packing (bottom-left): plaats elk item op de laagste x waar het past.
+    // Zo vullen korte kaarten de ruimte NAAST een hoge notitie op (meerdere
+    // foto-rijen naast één hoge tegel) i.p.v. één rij per hoogste item (shelf).
+    type Seg = { x: number; w: number; top: number }
+    let sky: Seg[] = [{ x: 0, w: stripW, top: 0 }]
+    const maxTop = (x0: number, w: number): number => {
+      let t = 0
+      for (const s of sky) {
+        if (s.x + s.w <= x0 + 1e-6 || s.x >= x0 + w - 1e-6) continue
+        if (s.top > t) t = s.top
       }
-      rowW += (list.length ? gap : 0) + it.w
-      list.push(it)
+      return t
     }
-    if (list.length) rows.push({ list, w: rowW })
-    // Positioneren: elke rij horizontaal gecentreerd, kaarten verticaal in het
-    // midden van de rijhoogte; het hele blok gecentreerd rond (0,0).
-    const rowH = rows.map((r) => Math.max(...r.list.map((it) => it.h)))
-    const totalH = rowH.reduce((s, h) => s + h, 0) + gap * Math.max(0, rows.length - 1)
-    let y = -totalH / 2
-    let zi = 0
-    rows.forEach((r, ri) => {
-      const h = rowH[ri]
-      let x = -r.w / 2
-      for (const it of r.list) {
-        it.n.tx = x + it.w / 2
-        it.n.ty = y + h / 2
-        it.n.trot = 0
-        it.n.z = zi++
-        it.n.container.zIndex = it.n.z
-        this.zTop = Math.max(this.zTop, it.n.z)
-        x += it.w + gap
+    const raise = (x0: number, w: number, newTop: number): void => {
+      const x1 = x0 + w
+      const next: Seg[] = []
+      for (const s of sky) {
+        if (s.x + s.w <= x0 + 1e-6 || s.x >= x1 - 1e-6) {
+          next.push(s)
+          continue
+        }
+        if (s.x < x0 - 1e-6) next.push({ x: s.x, w: x0 - s.x, top: s.top })
+        if (s.x + s.w > x1 + 1e-6) next.push({ x: x1, w: s.x + s.w - x1, top: s.top })
       }
-      y += h + gap
-    })
+      next.push({ x: x0, w, top: newTop })
+      next.sort((a, b) => a.x - b.x)
+      sky = []
+      for (const s of next) {
+        const last = sky[sky.length - 1]
+        if (last && Math.abs(last.top - s.top) < 1e-6 && Math.abs(last.x + last.w - s.x) < 1e-6) last.w += s.w
+        else sky.push({ ...s })
+      }
+    }
+
+    const placed: { it: (typeof items)[number]; x: number; y: number }[] = []
+    let zi = 0
+    for (const it of items) {
+      let bestX = 0
+      let bestTop = Infinity
+      for (const s of sky) {
+        if (s.x + it.w > stripW + 1e-6) continue // past niet binnen de strip vanaf hier
+        const top = maxTop(s.x, it.w + gap)
+        if (top < bestTop - 1e-6) {
+          bestTop = top
+          bestX = s.x
+        }
+      }
+      if (bestTop === Infinity) {
+        // Breder dan de strip: bovenop alles op x=0.
+        bestX = 0
+        bestTop = Math.max(...sky.map((s) => s.top))
+      }
+      placed.push({ it, x: bestX, y: bestTop })
+      raise(bestX, it.w + gap, bestTop + it.h + gap)
+      it.n.z = zi++
+      it.n.container.zIndex = it.n.z
+      this.zTop = Math.max(this.zTop, it.n.z)
+    }
+    // Het hele blok centreren rond (0,0) op de werkelijke item-extents.
+    let minX = Infinity
+    let maxX = -Infinity
+    let minY = Infinity
+    let maxY = -Infinity
+    for (const p of placed) {
+      minX = Math.min(minX, p.x)
+      maxX = Math.max(maxX, p.x + p.it.w)
+      minY = Math.min(minY, p.y)
+      maxY = Math.max(maxY, p.y + p.it.h)
+    }
+    const cX = (minX + maxX) / 2
+    const cY = (minY + maxY) / 2
+    for (const p of placed) {
+      p.it.n.tx = p.x + p.it.w / 2 - cX
+      p.it.n.ty = p.y + p.it.h / 2 - cY
+      p.it.n.trot = 0
+    }
   }
 
   /** Herschik het canvas. 'custom' herstelt de eigen posities; 'grid' zet ze
@@ -454,6 +502,8 @@ export class EventScene implements Scene {
   layoutState(): LayoutState {
     return {
       mode: this.mode,
+      gridSort: this.gridSort,
+      gridSeed: this.gridSeed,
       positions: this.nodes.map((n) => ({
         ref: n.ref,
         x: Math.round(n.tx),
@@ -462,6 +512,14 @@ export class EventScene implements Scene {
         z: Math.round(n.z),
       })),
     }
+  }
+
+  /** Herstel een onthouden grid-sortering (sort + seed) zonder te herpakken —
+   * applyPositions zet de exacte opstelling; dit houdt alleen de stand consistent
+   * zodat een latere herpak/reshuffle de juiste volgorde gebruikt. */
+  restoreGridSort(sort: 'date' | 'name' | 'random', seed: number): void {
+    this.gridSort = sort
+    this.gridSeed = seed
   }
 
   /** Herstel een onthouden scatter/grid: zet per node de doel-positie uit

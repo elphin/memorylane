@@ -63,8 +63,16 @@ export interface Scene {
     positions: NodePosition[],
     snap?: boolean,
   ): { matched: number; total: number }
-  /** Huidige layout-stand + doelposities (voor het onthouden per event). Alleen L2. */
-  layoutState?(): { mode: 'custom' | 'grid' | 'scatter'; positions: NodePosition[] }
+  /** Huidige layout-stand + doelposities + grid-sortering (voor het onthouden per
+   * event). Alleen L2. */
+  layoutState?(): {
+    mode: 'custom' | 'grid' | 'scatter'
+    positions: NodePosition[]
+    gridSort: 'date' | 'name' | 'random'
+    gridSeed: number
+  }
+  /** Herstel een onthouden grid-sortering (sort + seed) zonder te herpakken (L2). */
+  restoreGridSort?(sort: 'date' | 'name' | 'random', seed: number): void
   /** Zet de scatter-kaarten recht of licht scheef, posities ongemoeid (alleen L2). */
   setScatterRotation?(rotate: boolean): void
   /** Zet de grid-sorteervolgorde (datum/naam/willekeurig) en herpak; 'random'

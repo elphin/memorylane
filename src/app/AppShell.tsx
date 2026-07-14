@@ -132,7 +132,11 @@ function saveSettings(s: Settings): void {
 
 /** Onthouden weergave per event: de layout-stand, en voor grid/scatter de exacte
  * posities (custom-posities leven in de vault-`_canvas.json`, niet hier). */
-type LayoutView = { mode: 'custom' } | { mode: 'grid' | 'scatter'; positions: NodePosition[] }
+type GridSort = 'date' | 'name' | 'random'
+type LayoutView =
+  | { mode: 'custom' }
+  | { mode: 'grid'; positions: NodePosition[]; sort?: GridSort; seed?: number }
+  | { mode: 'scatter'; positions: NodePosition[] }
 const EVENTVIEWS_KEY = 'memorylane-eventviews'
 
 /** Valideer één opgeslagen view-record (localStorage kan oud/corrupt zijn). */
@@ -156,6 +160,12 @@ function parseView(v: unknown): LayoutView | null {
     ) {
       positions.push(p as NodePosition)
     }
+  }
+  if (mode === 'grid') {
+    const s = (v as { sort?: unknown }).sort
+    const seed = (v as { seed?: unknown }).seed
+    const sort = s === 'date' || s === 'name' || s === 'random' ? s : undefined
+    return { mode, positions, sort, seed: typeof seed === 'number' ? seed : undefined }
   }
   return { mode, positions }
 }
@@ -184,6 +194,20 @@ function saveEventView(eventId: string, view: LayoutView): void {
   } catch {
     /* localStorage niet beschikbaar → view geldt alleen deze sessie */
   }
+}
+
+/** Bouw een op te slaan LayoutView uit de scene-layoutState (grid onthoudt de
+ * gekozen sortering + seed). */
+function viewFromState(state: {
+  mode: 'custom' | 'grid' | 'scatter'
+  positions: NodePosition[]
+  gridSort: GridSort
+  gridSeed: number
+}): LayoutView {
+  if (state.mode === 'custom') return { mode: 'custom' }
+  if (state.mode === 'grid')
+    return { mode: 'grid', positions: state.positions, sort: state.gridSort, seed: state.gridSeed }
+  return { mode: 'scatter', positions: state.positions }
 }
 
 function removeEventView(eventId: string): void {
@@ -484,7 +508,7 @@ export function AppShell() {
       if (dl !== 'custom') {
         scene.applyLayout(dl, true, settingsRef.current.scatterRotate) // snap: geen inklap-animatie bij binnenkomst
         setLayoutMode(dl)
-        saveEventView(eventId, { mode: dl, positions: scene.layoutState().positions })
+        saveEventView(eventId, viewFromState(scene.layoutState()))
       } else {
         setLayoutMode('custom')
       }
@@ -510,11 +534,17 @@ export function AppShell() {
         return
       }
       setLayoutMode(saved.mode)
+      // Onthouden grid-sortering herstellen (highlight + toekomstige herpak/shuffle).
+      if (saved.mode === 'grid') {
+        const sort = saved.sort ?? 'date'
+        scene.restoreGridSort?.(sort, saved.seed ?? 1)
+        setGridSortMode(sort)
+      }
       // Wijkt de node-set af van de snapshot (item toegevoegd → matched<total, of
       // verwijderd → snapshot bevat een verweesde ref)? Onthoud de opgeschoonde
       // opstelling, zodat dode refs niet blijven hangen.
       if (matched < total || matched < saved.positions.length) {
-        saveEventView(eventId, { mode: saved.mode, positions: scene.layoutState().positions })
+        saveEventView(eventId, viewFromState(scene.layoutState()))
       }
     }
 
@@ -547,10 +577,7 @@ export function AppShell() {
             // Drag in grid/scatter → onthoud de view. Alleen als dit nog het
             // actieve event is (geen stale write na snel wegnavigeren).
             if (currentEventRef.current !== eventId) return
-            saveEventView(
-              eventId,
-              state.mode === 'custom' ? { mode: 'custom' } : { mode: state.mode, positions: state.positions },
-            )
+            saveEventView(eventId, viewFromState(state))
           },
           settingsRef.current.squarePhotos,
         )
@@ -1186,12 +1213,10 @@ export function AppShell() {
     setLayoutMode(mode)
     const scene = sceneRef.current
     scene?.applyLayout?.(mode, false, settingsRef.current.scatterRotate)
-    // Onthoud de view per event. Grid/scatter: de zojuist gezette doelposities.
+    // Onthoud de view per event (grid onthoudt ook de sortering + seed).
     const id = currentEventRef.current
     const state = scene?.layoutState?.()
-    if (id && state) {
-      saveEventView(id, mode === 'custom' ? { mode: 'custom' } : { mode, positions: state.positions })
-    }
+    if (id && state) saveEventView(id, viewFromState(state))
   }
 
   // Grid-sorteervolgorde wisselen (alleen zichtbaar in grid-modus). 'random' schudt
@@ -1202,7 +1227,7 @@ export function AppShell() {
     scene?.setGridSort?.(sort)
     const id = currentEventRef.current
     const state = scene?.layoutState?.()
-    if (id && state) saveEventView(id, { mode: 'grid', positions: state.positions })
+    if (id && state) saveEventView(id, viewFromState(state))
   }
 
   // Toggle of scatter foto's licht scheef legt. Zit je nu in scatter, pas het dan
@@ -1214,7 +1239,7 @@ export function AppShell() {
       sceneRef.current?.setScatterRotation?.(next)
       const id = currentEventRef.current
       const state = sceneRef.current?.layoutState?.()
-      if (id && state) saveEventView(id, { mode: 'scatter', positions: state.positions })
+      if (id && state) saveEventView(id, viewFromState(state))
     }
   }
 
