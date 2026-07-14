@@ -48,6 +48,10 @@ const LEADER_ALPHA = 0.85
 // Ruim + sterk gevarieerd → speelse, wat-verder-van-de-datum spreiding.
 const CARD_OFFSET_PX = 78
 
+// Marge (scherm-px) waarmee de as-rand binnen de schermrand blijft bij de rust-
+// scroll-grens, zodat rand-kaarten (met hun offset) net zichtbaar blijven.
+const EDGE_MARGIN = 130
+
 const DOT_R = 7 // stip-straal (scherm-px)
 const DOT_HIT = 22 // royale klik-halfmaat van een stip (scherm-px)
 const MARKER_HIT_MIN = 20
@@ -610,6 +614,12 @@ export class YearScene implements Scene {
     const vp = engine.viewport()
     const halfW = vp.width / 2
     const marginPx = 120
+
+    // Elastische horizontale scroll-grens: bij het overzicht (as past in beeld)
+    // geen scroll; ingezoomd kun je tot de rand scrollen (rand-kaarten net binnen
+    // beeld), daarna rubber-band + terugveren (afgehandeld in de gesture-laag).
+    const restMax = Math.max(0, AXIS_W / 2 - (halfW - EDGE_MARGIN) / z)
+    engine.camera.boundsX = { min: -restMax, max: restMax }
 
     // Maandlabels: constante schermgrootte, meebewegend met de uitrekkende as.
     for (const ml of this.monthLabels) {

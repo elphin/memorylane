@@ -685,6 +685,9 @@ export function AppShell() {
 
       engine.onFrame = (ctx) => {
         sceneRef.current?.update(ctx)
+        // Buiten de jaar-view geen elastische scroll-grens (de jaar-scene zet 'm
+        // elke frame; andere niveaus zouden anders een stale grens erven).
+        if (levelRef.current !== 'year') ctx.engine.camera.boundsX = null
         // "Alles passend"-knop tonen zodra er inhoud buiten beeld valt (alleen L2,
         // niet tijdens een transitie). Alleen setState bij een echte verandering.
         const cb =

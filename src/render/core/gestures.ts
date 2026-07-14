@@ -7,6 +7,9 @@ import type { Camera, Viewport } from './camera'
 
 const FRICTION = 0.92
 const MIN_INERTIA = 0.05
+// Rubber-band-sterkte (scherm-px): hoe zwaarder het voelt om voorbij de grens te
+// trekken. De rauwe overscroll wordt logaritmisch gedempt naar de getekende x.
+const RUBBER = 130
 
 interface PointerPos {
   x: number
@@ -40,6 +43,9 @@ export class GestureController {
   private pinchMid: PointerPos = { x: 0, y: 0 }
   private vx = 0
   private vy = 0
+  // Rauwe (ongeklemde) horizontale positie voor de elastische scroll-grens; de
+  // getekende `camera.x` volgt via rubber-band (zie applyElasticX).
+  private rawX = 0
 
   private downPos: PointerPos = { x: 0, y: 0 }
   private downId = -1
@@ -98,6 +104,8 @@ export class GestureController {
     const delta = Math.max(-140, Math.min(140, e.deltaY))
     const factor = Math.exp(-delta * (e.ctrlKey ? 0.01 : 0.0016))
     this.camera.zoomAt(p.x, p.y, factor, vp)
+    // Inzoomen mag niet buiten de elastische grens ontsnappen.
+    this.syncRawX()
     this.onChange()
   }
 
@@ -118,6 +126,8 @@ export class GestureController {
       this.downId = e.pointerId
       this.vx = 0
       this.vy = 0
+      // Rauwe horizontale positie op de huidige camera-x zetten (nieuwe drag).
+      this.rawX = this.camera.x
       // Object onder de pointer? Dan dat slepen i.p.v. de camera.
       const w = this.camera.screenToWorld(p.x, p.y, this.getVp())
       this.dragTarget =
@@ -163,8 +173,15 @@ export class GestureController {
     if (this.dragging) {
       const dx = p.x - this.lastDrag.x
       const dy = p.y - this.lastDrag.y
-      // Content volgt de vinger → camera beweegt tegengesteld.
-      this.camera.panScreen(-dx, -dy)
+      // Content volgt de vinger → camera beweegt tegengesteld. In de elastische
+      // modus (jaar-view) loopt x via de rauwe positie + rubber-band.
+      if (this.camera.boundsX) {
+        this.rawX += -dx / this.camera.zoom
+        if (!this.camera.lockY) this.camera.y += -dy / this.camera.zoom
+        this.applyElasticX()
+      } else {
+        this.camera.panScreen(-dx, -dy)
+      }
       this.lastMove = { x: -dx, y: -dy }
       this.lastDrag = p
       this.onChange()
@@ -264,15 +281,78 @@ export class GestureController {
       this.camera.zoomAt(mid.x, mid.y, factor, vp)
       // Pan mee met de verplaatsing van het middelpunt.
       this.camera.panScreen(-(mid.x - this.pinchMid.x), -(mid.y - this.pinchMid.y))
+      // Binnen de elastische grens houden (pinch-pan hard geklemd).
+      if (this.camera.boundsX) this.syncRawX()
       this.onChange()
     }
     this.pinchDist = dist
     this.pinchMid = mid
   }
 
+  /** Map de rauwe horizontale positie via rubber-band naar `camera.x` en bewaar de
+   * (rauwe) overscroll in scherm-px. Zonder `boundsX` = 1:1. */
+  private applyElasticX(): void {
+    const cam = this.camera
+    const b = cam.boundsX
+    if (!b) {
+      cam.x = this.rawX
+      cam.overscrollPx = 0
+      return
+    }
+    const clamped = Math.max(b.min, Math.min(b.max, this.rawX))
+    const overWorld = this.rawX - clamped
+    if (overWorld === 0) {
+      cam.x = this.rawX
+      cam.overscrollPx = 0
+      return
+    }
+    const rawPx = overWorld * cam.zoom // rauwe overscroll (scherm-px, signed)
+    const dispPx = Math.sign(rawPx) * RUBBER * Math.log(1 + Math.abs(rawPx) / RUBBER)
+    cam.x = clamped + dispPx / cam.zoom
+    cam.overscrollPx = rawPx
+  }
+
+  /** Synchroniseer de rauwe positie met de (bijv. door zoom gewijzigde) `camera.x`,
+   * geklemd binnen de grenzen zodat inzoomen niet buiten de grens ontsnapt. */
+  private syncRawX(): void {
+    const b = this.camera.boundsX
+    const x = b ? Math.max(b.min, Math.min(b.max, this.camera.x)) : this.camera.x
+    this.camera.x = x
+    this.rawX = x
+    this.camera.overscrollPx = 0
+  }
+
   /** Past resterende inertie toe (per frame door de engine aangeroepen). */
   tickInertia(): void {
     if (this.dragging) return
+    const cam = this.camera
+    // Elastische modus (jaar-view): inertie/bounce op de rauwe positie.
+    if (cam.boundsX) {
+      let moved = false
+      if (Math.abs(this.vx) >= MIN_INERTIA) {
+        this.rawX += this.vx / cam.zoom
+        this.vx *= FRICTION
+        moved = true
+      } else this.vx = 0
+      // Terugveren naar de grens (bounce) + inertie sterk dempen in de overscroll.
+      const clamped = Math.max(cam.boundsX.min, Math.min(cam.boundsX.max, this.rawX))
+      if (this.rawX !== clamped) {
+        this.rawX += (clamped - this.rawX) * 0.18
+        this.vx *= 0.5
+        if (Math.abs(this.rawX - clamped) < 0.5 / cam.zoom) this.rawX = clamped
+        moved = true
+      }
+      if (!cam.lockY && Math.abs(this.vy) >= MIN_INERTIA) {
+        cam.y += this.vy / cam.zoom
+        this.vy *= FRICTION
+        moved = true
+      } else this.vy = 0
+      if (moved) {
+        this.applyElasticX()
+        this.onChange()
+      }
+      return
+    }
     if (Math.abs(this.vx) < MIN_INERTIA && Math.abs(this.vy) < MIN_INERTIA) {
       this.vx = 0
       this.vy = 0

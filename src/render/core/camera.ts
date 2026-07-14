@@ -20,6 +20,13 @@ export class Camera {
   // Vergrendel verticaal pannen (voor de horizontale L0/L1-niveaus): `y` blijft
   // op de fit-waarde; pan/zoom laten 'm ongemoeid.
   lockY = false
+  // Elastische horizontale scroll-grenzen (rust-positie; wereld-x). null = geen
+  // grens. De gesture-laag mapt een rauwe positie via rubber-band naar `x` (en
+  // veert terug). Alleen de jaar-view zet dit.
+  boundsX: { min: number; max: number } | null = null
+  // Getekende overscroll voorbij de grens (scherm-px, signed; + = rechts). Rauw
+  // (groeit door met de pull) → voor de buurjaar-preview en de commit-drempel.
+  overscrollPx = 0
 
   screenToWorld(sx: number, sy: number, vp: Viewport): { x: number; y: number } {
     return {
