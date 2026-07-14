@@ -13,7 +13,7 @@ import { Screensaver } from './Screensaver'
 import { FocusScene } from '../render/scenes/focus'
 import { LifelineScene } from '../render/scenes/lifeline'
 import type { Scene } from '../render/scenes/scene'
-import { YearScene } from '../render/scenes/year'
+import { YearScene, YEAR_COMMIT_PX } from '../render/scenes/year'
 
 type Phase = 'loading' | 'first-run' | 'empty' | 'ready' | 'error'
 
@@ -397,10 +397,17 @@ export function AppShell() {
     }
     setupLifelineRef.current = setupLifeline
 
-    const enterYear = async (yearId: string, dir: 'in' | 'out' = 'in'): Promise<void> => {
+    const enterYear = async (
+      yearId: string,
+      dir: 'in' | 'out' | 'slideNext' | 'slidePrev' = 'in',
+    ): Promise<void> => {
       if (!engine || !backendRef.current || enteringRef.current) return
       enteringRef.current = true
       const seq = ++enterSeqRef.current
+      // Zijwaartse jaar-overgang (+1 = nieuwe jaar komt van rechts): oude scene
+      // schuift de andere kant uit, nieuwe schuift van deze kant in.
+      const slide = dir === 'slideNext' || dir === 'slidePrev'
+      const slideDir = dir === 'slideNext' ? 1 : -1
       try {
         const detail = await backendRef.current.getYear(yearId)
         if (disposed || !engine || seq !== enterSeqRef.current || !detail) return
@@ -408,7 +415,10 @@ export function AppShell() {
         // scene-constructor: die roept jumpCamera en verandert de camera.
         const old = sceneRef.current
         sceneRef.current = null
-        if (old) engine.exitScene(old.root, dir, () => old.destroy())
+        if (old) {
+          if (slide) engine.slideOutScene(old.root, -slideDir, () => old.destroy())
+          else engine.exitScene(old.root, dir as 'in' | 'out', () => old.destroy())
+        }
         // Buurjaren (voor de overscroll-preview + jaar-overgang): de jarenlijst is
         // chronologisch oplopend → later jaar = rechts, eerder = links.
         const yi = yearsRef.current.findIndex((y) => y.id === yearId)
@@ -425,10 +435,11 @@ export function AppShell() {
         })
         sceneRef.current = scene
         if (ctrlDown) scene.setDayPicker(true)
-        revealScene(engine, scene, dir)
+        if (slide) engine.slideInScene(scene.root, slideDir)
+        else revealScene(engine, scene, dir as 'in' | 'out')
         levelRef.current = 'year'
         setUiLevel('year')
-        setHeader({ text: detail.year.title, dir })
+        setHeader({ text: detail.year.title, dir: slide ? 'in' : (dir as 'in' | 'out') })
         applyPanLock()
         currentYearRef.current = yearId
         entryZoomRef.current = engine.pendingZoom
@@ -729,6 +740,24 @@ export function AppShell() {
         const backThreshold = ctx.engine.camera.zoom < refZoom * backMult
         if (backThreshold && !enteringRef.current && !ctx.engine.isTransitioning) {
           goBack()
+        }
+        // Jaar-overgang: bewust doortrekken (vinger neer) voorbij de grens tot de
+        // buurjaar-naam vol is → schuif naar dat jaar. Alleen bij een aangehouden
+        // pull (isDragging), nooit via inertie/flick.
+        else if (
+          levelRef.current === 'year' &&
+          !enteringRef.current &&
+          !ctx.engine.isTransitioning &&
+          ctx.engine.isDragging() &&
+          Math.abs(ctx.engine.camera.overscrollPx) >= YEAR_COMMIT_PX
+        ) {
+          const over = ctx.engine.camera.overscrollPx
+          const yi = yearsRef.current.findIndex((y) => y.id === currentYearRef.current)
+          const target = yi < 0 ? undefined : over > 0 ? yearsRef.current[yi + 1] : yearsRef.current[yi - 1]
+          if (target) {
+            ctx.engine.endDrag() // stop de drag zodat de slide niet meegepand wordt
+            void enterYear(target.id, over > 0 ? 'slideNext' : 'slidePrev')
+          }
         }
       }
       engine.onHover = (wx, wy) => {

@@ -322,6 +322,22 @@ export class GestureController {
     this.camera.overscrollPx = 0
   }
 
+  /** Stop de camera-drag en inertie (bijv. bij een commit tijdens het slepen).
+   * Reset ook de overscroll zodat een direct-opnieuw-indrukken (zonder pan) niet
+   * ongewild nóg een commit triggert. */
+  endDrag(): void {
+    this.dragging = false
+    this.vx = 0
+    this.vy = 0
+    this.camera.overscrollPx = 0
+    this.rawX = this.camera.x
+  }
+
+  /** Is er een actieve camera-drag (vinger neer)? */
+  isDragging(): boolean {
+    return this.dragging
+  }
+
   /** Past resterende inertie toe (per frame door de engine aangeroepen). */
   tickInertia(): void {
     if (this.dragging) return

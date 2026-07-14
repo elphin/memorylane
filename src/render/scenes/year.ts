@@ -52,8 +52,9 @@ const CARD_OFFSET_PX = 78
 // scroll-grens, zodat rand-kaarten (met hun offset) net zichtbaar blijven.
 const EDGE_MARGIN = 130
 // Rauwe overscroll (scherm-px) waarbij de buurjaar-naam volledig wit is → commit
-// naar dat jaar (fase 3). Daaronder groeit/vervaagt de preview mee.
-const COMMIT_PX = 240
+// naar dat jaar. Daaronder groeit/vervaagt de preview mee. Gedeeld met AppShell
+// (die de commit detecteert).
+export const YEAR_COMMIT_PX = 240
 
 const DOT_R = 7 // stip-straal (scherm-px)
 const DOT_HIT = 22 // royale klik-halfmaat van een stip (scherm-px)
@@ -358,7 +359,7 @@ export class YearScene implements Scene {
     if (this.prevLabel && this.prevLabel !== active) this.prevLabel.visible = false
     if (this.nextLabel && this.nextLabel !== active) this.nextLabel.visible = false
     if (!active) return
-    const t = Math.min(1, Math.abs(over) / COMMIT_PX)
+    const t = Math.min(1, Math.abs(over) / YEAR_COMMIT_PX)
     if (t <= 0.001) {
       active.visible = false
       return

@@ -254,6 +254,53 @@ export class RenderEngine {
     this.exitAnim = { onDone, fromScale, fromX, fromY, toScale, toX, toY, start: performance.now(), dur }
   }
 
+  /** Schuif een nieuwe scene-root horizontaal in beeld vanaf `dir` (+1 = van
+   * rechts, -1 = van links) — puur een zijwaartse translatie, geen zoom. Reuse
+   * van het reveal-mechanisme met fromScale=1. */
+  slideInScene(root: Container, dir: number, dur = 460): void {
+    const cx = this.camera.x
+    const cy = this.camera.y
+    const off = (dir * this.viewport().width) / this.camera.zoom // één viewport in wereld
+    root.pivot.set(cx, cy)
+    root.scale.set(1)
+    root.position.set(cx + off, cy)
+    root.alpha = 0
+    this.reveal = { root, fromScale: 1, fromX: cx + off, fromY: cy, toX: cx, toY: cy, start: performance.now(), dur }
+  }
+
+  /** Schuif de oude scene-root horizontaal uit beeld naar `dir` (+1 = naar rechts).
+   * De root wordt in de overlay bevroren op zijn huidige scherm-transform. */
+  slideOutScene(oldRoot: Container, dir: number, onDone: () => void, dur = 460): void {
+    if (this.exitAnim) this.finishExit()
+    if (this.reveal?.root === oldRoot) this.finishReveal()
+    if (oldRoot.destroyed) {
+      onDone()
+      return
+    }
+    const vp = this.viewport()
+    const z = this.camera.zoom
+    const fromX = vp.width / 2 - this.camera.x * z
+    const fromY = vp.height / 2 - this.camera.y * z
+    this.overlay.addChild(oldRoot)
+    this.overlay.pivot.set(0, 0)
+    this.overlay.scale.set(z)
+    this.overlay.position.set(fromX, fromY)
+    this.overlay.alpha = 1
+    const toX = fromX + dir * vp.width
+    this.exitAnim = { onDone, fromScale: z, fromX, fromY, toScale: z, toX, toY: fromY, start: performance.now(), dur }
+  }
+
+  /** Stop een actieve camera-drag (bijv. bij een commit tijdens het slepen), zodat
+   * verdere pointermoves niet meer pannen tot een nieuwe pointerdown. */
+  endDrag(): void {
+    this.gestures?.endDrag()
+  }
+
+  /** Is er een actieve camera-drag (vinger neer)? */
+  isDragging(): boolean {
+    return this.gestures?.isDragging() ?? false
+  }
+
   private advanceExit(): void {
     if (!this.exitAnim) return
     const a = this.exitAnim
