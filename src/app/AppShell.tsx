@@ -446,6 +446,12 @@ export function AppShell() {
           neighbors,
         })
         sceneRef.current = scene
+        // De scene-constructor heeft de camera al naar het nieuwe jaar gezet
+        // (jumpCamera). Peg de elastische rauwe positie daarop, zodat een
+        // overgebleven overscroll (van een jaar-slide-commit) de camera niet
+        // laat terugveren tíjdens de slide — anders sleept dat de nieuwe tijdlijn
+        // zichtbaar de verkeerde kant op i.p.v. schoon van opzij in te schuiven.
+        engine.syncElastic()
         if (ctrlDown) scene.setDayPicker(true)
         // Gecentreerde reveal (geen tap-coördinaten → schermmidden): spiegelt de
         // gecentreerde exit hierboven, zodat een jaar in-/uitzoomen altijd vanuit

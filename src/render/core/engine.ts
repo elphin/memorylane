@@ -309,6 +309,13 @@ export class RenderEngine {
     return this.gestures?.isDragging() ?? false
   }
 
+  /** Peg de elastische rauwe positie op de huidige camera (na een transitie die
+   * de camera verplaatst), zodat een overgebleven overscroll de camera niet laat
+   * terugveren tijdens de daaropvolgende animatie. */
+  syncElastic(): void {
+    this.gestures?.resetElasticToCamera()
+  }
+
   private advanceExit(): void {
     if (!this.exitAnim) return
     const a = this.exitAnim

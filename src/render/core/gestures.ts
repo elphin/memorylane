@@ -322,6 +322,18 @@ export class GestureController {
     this.camera.overscrollPx = 0
   }
 
+  /** Peg de rauwe positie op de HUIDIGE `camera.x` en wis alle overscroll/inertie.
+   * Nodig na een niveau-transitie die de camera verplaatst (bijv. een jaar-slide
+   * na een overscroll-commit): anders houdt `rawX` de ver-uitgerekte overscroll-
+   * waarde van het vórige jaar vast en veert de camera tíjdens de slide terug,
+   * wat de nieuwe tijdlijn ongewild de verkeerde kant op sleept. */
+  resetElasticToCamera(): void {
+    this.rawX = this.camera.x
+    this.camera.overscrollPx = 0
+    this.vx = 0
+    this.vy = 0
+  }
+
   /** Stop de camera-drag en inertie (bijv. bij een commit tijdens het slepen).
    * Reset ook de overscroll zodat een direct-opnieuw-indrukken (zonder pan) niet
    * ongewild nóg een commit triggert. */
