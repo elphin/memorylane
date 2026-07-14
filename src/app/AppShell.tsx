@@ -1734,7 +1734,7 @@ function SettingsPanel({
   onReindex: () => void
   onResetSettings: () => void
 }) {
-  const [tab, setTab] = useState<'weergave' | 'tijdlijn' | 'dia' | 'beheer'>('weergave')
+  const [tab, setTab] = useState<'weergave' | 'tijdlijn' | 'dia' | 'beheer' | 'sneltoetsen'>('weergave')
   const seg = (m: 'custom' | 'grid' | 'scatter'): React.CSSProperties => ({
     ...ghostBtn,
     background: settings.defaultLayout === m ? '#3b82f6' : 'transparent',
@@ -1767,6 +1767,18 @@ function SettingsPanel({
   const subhead = (t: string): React.ReactElement => (
     <div style={{ fontSize: 13, color: '#8a97b0', margin: '16px 0 6px' }}>{t}</div>
   )
+  const kbd: React.CSSProperties = {
+    display: 'inline-block',
+    padding: '2px 7px',
+    fontSize: 12,
+    fontFamily: 'ui-monospace, monospace',
+    color: '#e6ebf5',
+    background: '#232c3d',
+    border: '1px solid #3a465e',
+    borderRadius: 5,
+    boxShadow: '0 1px 0 #10151f',
+    whiteSpace: 'nowrap',
+  }
   const tabBtn = (id: typeof tab, label: string): React.ReactElement => (
     <button
       onClick={() => setTab(id)}
@@ -1815,6 +1827,7 @@ function SettingsPanel({
           {tabBtn('tijdlijn', 'Tijdlijn & canvas')}
           {tabBtn('dia', 'Diavoorstelling')}
           {tabBtn('beheer', 'Beheer')}
+          {tabBtn('sneltoetsen', 'Sneltoetsen')}
         </div>
         <div style={{ overflowY: 'auto', padding: '14px 22px 6px', flex: '1 1 auto' }}>
           {tab === 'weergave' && (
@@ -2044,6 +2057,78 @@ function SettingsPanel({
               {desc(
                 'Zet alle app-instellingen (weergave, diavoorstelling, per-memory onthouden standen) terug naar standaard. Je foto’s, memories en curatie in de vault blijven ongemoeid.',
               )}
+            </>
+          )}
+          {tab === 'sneltoetsen' && (
+            <>
+              {desc('Alle toetsen en muis-/sleepacties, gegroepeerd per context.')}
+              {[
+                {
+                  title: 'Algemeen',
+                  items: [
+                    { k: ['Ctrl', 'K'], d: 'Zoeken' },
+                    { k: ['S'], d: 'Diavoorstelling starten' },
+                    { k: ['E'], d: 'Kijkmodus (bewerkknoppen tonen/verbergen)' },
+                    { k: ['Esc'], d: 'Sluiten — dialoog, zoeken of diavoorstelling' },
+                    { k: ['F11'], d: 'Volledig scherm aan/uit' },
+                  ],
+                },
+                {
+                  title: 'Navigeren (zoombare tijdlijn)',
+                  items: [
+                    { k: ['Klik'], d: 'Op een tegel/kaart/foto → één niveau dieper' },
+                    { k: ['Klik'], d: 'Op lege ruimte ernaast → één niveau terug (uitzoomen)' },
+                    { k: ['Scroll', 'Pinch'], d: 'In-/uitzoomen naar de cursor' },
+                    { k: ['Slepen'], d: 'Pannen' },
+                    { k: ['←', '→'], d: 'In een detailfoto: vorige / volgende foto' },
+                    { k: ['Slepen'], d: 'In een jaar voorbij de rand → vorig/volgend jaar' },
+                  ],
+                },
+                {
+                  title: 'Jaar-tijdlijn',
+                  items: [
+                    { k: ['Ctrl'], d: '(ingedrukt houden) dag-indicator op de as' },
+                    { k: ['Ctrl', '+', 'Klik'], d: 'Op de as → nieuwe memory op die datum' },
+                    { k: ['Ctrl', '+', 'Slepen'], d: 'Op de as → datumbereik voor een meerdaagse memory' },
+                    { k: ['Shift', '+', 'Slepen'], d: 'Op een memory-kaart → belang/grootte bijstellen' },
+                  ],
+                },
+                {
+                  title: 'Memory-canvas (eigen layout)',
+                  items: [
+                    { k: ['Shift', '+', 'Slepen'], d: 'Foto/notitie schalen (bij een notitie schaalt de tekst mee)' },
+                    { k: ['Alt', '+', 'Slepen'], d: 'Foto roteren' },
+                    { k: ['Alt', '+', 'Slepen'], d: 'Notitie: box groter/kleiner (tekst herloopt, font gelijk)' },
+                    { k: ['Alt', '+', 'Klik'], d: 'Notitie: passend maken (box precies om alle tekst)' },
+                    { k: ['Ctrl'], d: '(ingedrukt) gouden rand op de memory-omslag tonen' },
+                    { k: ['Ctrl', '+', 'Shift'], d: '(ingedrukt) blauwe rand op de vaste jaar-cover tonen' },
+                    { k: ['Ctrl', '+', 'Klik'], d: 'Foto als memory-omslag (featured)' },
+                    { k: ['Ctrl', '+', 'Shift', '+', 'Klik'], d: 'Foto als vaste jaar-cover' },
+                  ],
+                },
+              ].map((group) => (
+                <div key={group.title}>
+                  {subhead(group.title)}
+                  {group.items.map((it, i) => (
+                    <div key={i} style={{ display: 'flex', alignItems: 'baseline', gap: 12, padding: '5px 0' }}>
+                      <div style={{ display: 'flex', gap: 4, flex: '0 0 190px', flexWrap: 'wrap', alignItems: 'center' }}>
+                        {it.k.map((key, j) =>
+                          key === '+' ? (
+                            <span key={j} style={{ color: '#6a7690', fontSize: 12 }}>
+                              +
+                            </span>
+                          ) : (
+                            <span key={j} style={kbd}>
+                              {key}
+                            </span>
+                          ),
+                        )}
+                      </div>
+                      <div style={{ fontSize: 13, color: '#cfd6e4' }}>{it.d}</div>
+                    </div>
+                  ))}
+                </div>
+              ))}
             </>
           )}
         </div>
