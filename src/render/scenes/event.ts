@@ -507,7 +507,9 @@ export class EventScene implements Scene {
     const w = b.maxX - b.minX
     const h = b.maxY - b.minY
     const zoom = Math.min(vp.width / (w + CELL), vp.height / (h + CELL))
-    this.engine.jumpCamera(
+    // Geanimeerd (i.p.v. springen) naar de passende camera, zodat "Alles passend"
+    // vloeiend inzoomt/uitzoomt.
+    this.engine.animateCamera(
       (b.minX + b.maxX) / 2,
       (b.minY + b.maxY) / 2,
       Math.max(this.engine.camera.minZoom, Math.min(zoom, 1.2)),

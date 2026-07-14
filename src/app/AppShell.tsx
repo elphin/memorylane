@@ -1494,8 +1494,9 @@ export function AppShell() {
               // Herijk de terug-uitzoom-referentie op de zojuist gefitte zoom.
               // Anders kan een fit die ver uitzoomt (inhoud ver buiten beeld, bv.
               // een foto ver opzij) onder de goBack-drempel (entryZoom*0.45)
-              // duiken en de gebruiker meteen het canvas uit stuiteren.
-              const z = engineRef.current?.camera.zoom
+              // duiken en de gebruiker meteen het canvas uit stuiteren. fitToView
+              // animeert nu → lees de DOEL-zoom (pendingZoom), niet de nog-lopende.
+              const z = engineRef.current?.pendingZoom
               if (z !== undefined) entryZoomRef.current = z
             }}
             style={fitBtn}
@@ -2171,6 +2172,7 @@ function EventDialog({
   const isCustomSize = !IMPORTANCE_CHOICES.some((c) => c.size === curSize)
   return (
     <div
+      onClick={onCancel}
       style={{
         position: 'absolute',
         inset: 0,
@@ -2180,7 +2182,10 @@ function EventDialog({
         justifyContent: 'center',
       }}
     >
-      <div style={{ width: 480, maxWidth: '90%', background: '#161c28', borderRadius: 12, padding: 20 }}>
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{ width: 480, maxWidth: '90%', background: '#161c28', borderRadius: 12, padding: 20 }}
+      >
         <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 12 }}>
           {form.mode === 'create' ? 'Nieuwe memory' : 'Memory bewerken'}
         </div>
