@@ -36,12 +36,11 @@ const LANE_PITCH = CARD_H_MAX + LANE_GAP_PX
 const CARD_GAP_PX = 16 // min. horizontale scherm-ruimte tussen kaarten in een lane
 const STICKY_GAP_PX = 4 // lossere gap voor een kaart die z'n lane behoudt (hysterese)
 
-// Leader-lijntjes (as → kaart): een licht getaperde ribbon, constante schermdikte.
-const LEADER_HALF_MAX = 1.9 // halve breedte (scherm-px) in het midden
-const LEADER_COLOR = 0xc4cee0 // licht blauw-grijs (duidelijk, "witter")
-const LEADER_ALPHA = 0.7
+// Leader-lijntjes (as → kaart): een simpele lijn met constante schermdikte.
+const LEADER_WIDTH = 2 // schermdikte (px)
+const LEADER_COLOR = 0xeef1f7 // bijna wit
+const LEADER_ALPHA = 0.85
 const LEADER_BOW = 16 // max. zijwaartse boog (scherm-px) bij gebogen lijnen
-const LEADER_SEGMENTS = 10
 
 const DOT_R = 7 // stip-straal (scherm-px)
 const DOT_HIT = 22 // royale klik-halfmaat van een stip (scherm-px)
@@ -437,35 +436,16 @@ export class YearScene implements Scene {
     return lane.side * (AXIS_CLEAR_PX + CARD_H_MAX / 2 + lane.level * LANE_PITCH)
   }
 
-  /** Teken een leader-lijntje (as → kaart, in `this.leaders`) als een licht
-   * getaperde ribbon: dun aan de uiteinden, iets dikker in het midden, met een
-   * constante schermdikte (counter-scaled). Optioneel licht gebogen (deterministisch
-   * per kaart via `bowFrac ∈ [-1,1]`) i.p.v. kaarsrecht. `yEnd` = de (wereld-)y van
-   * de kaart-onderrand; het lijntje start op de as (y=0). */
+  /** Teken een leader-lijntje (as → kaart, in `this.leaders`): een simpele lijn
+   * van uniforme schermdikte (counter-scaled), bijna wit. Optioneel licht gebogen
+   * (deterministisch per kaart via `bowFrac ∈ [-1,1]`) i.p.v. recht. `yEnd` = de
+   * (wereld-)y van de kaart-onderrand; het lijntje start op de as (y=0). */
   private drawLeader(ax: number, yEnd: number, invZ: number, appear: number, bowFrac: number): void {
-    const halfMax = LEADER_HALF_MAX * invZ
     const bow = (this.curvedLeaders ? bowFrac : 0) * LEADER_BOW * invZ
-    const midY = yEnd / 2
-    const cx = ax + bow // zijwaarts controlepunt (kwadratische bezier)
-    const pts: number[] = []
-    const rightSide: number[] = []
-    for (let i = 0; i <= LEADER_SEGMENTS; i++) {
-      const t = i / LEADER_SEGMENTS
-      const mt = 1 - t
-      const x = mt * mt * ax + 2 * mt * t * cx + t * t * ax
-      const y = 2 * mt * t * midY + t * t * yEnd
-      const dx = 2 * (cx - ax) * (1 - 2 * t)
-      const dy = yEnd // constante y-afgeleide (midY = yEnd/2)
-      const len = Math.hypot(dx, dy) || 1
-      const nx = -dy / len
-      const ny = dx / len
-      const hw = halfMax * (0.25 + 0.75 * Math.sin(Math.PI * t)) // dun aan de uiteinden
-      pts.push(x + nx * hw, y + ny * hw)
-      rightSide.push(x - nx * hw, y - ny * hw)
-    }
-    // Sluit de polygoon: linkerrand heen, rechterrand terug.
-    for (let i = rightSide.length - 2; i >= 0; i -= 2) pts.push(rightSide[i], rightSide[i + 1])
-    this.leaders.poly(pts).fill({ color: LEADER_COLOR, alpha: LEADER_ALPHA * appear })
+    this.leaders.moveTo(ax, 0)
+    if (bow !== 0) this.leaders.quadraticCurveTo(ax + bow, yEnd / 2, ax, yEnd)
+    else this.leaders.lineTo(ax, yEnd)
+    this.leaders.stroke({ width: LEADER_WIDTH * invZ, color: LEADER_COLOR, alpha: LEADER_ALPHA * appear })
   }
 
   /** Breedte-dominante fit: het hele jaar past in de breedte; kaarten (constante
