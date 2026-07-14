@@ -73,6 +73,8 @@ interface Settings {
   scatterRotate: boolean
   /** Toon de naam van een memory bij zijn kaart in de jaar-view. */
   showMemoryTitles: boolean
+  /** Teken de lijntjes van de as naar een memory-kaart gebogen (of recht). */
+  curvedLeaders: boolean
   /** Toon de titel bovenin (Memory Lane / jaar / eventnaam). */
   showTitle: boolean
   /** Bij een detailfoto: toon de caption als titel (indien aanwezig; anders de
@@ -97,6 +99,7 @@ const DEFAULT_SETTINGS: Settings = {
   yearCoverMode: 'featured',
   scatterRotate: true,
   showMemoryTitles: true,
+  curvedLeaders: true,
   showTitle: true,
   photoTitleFromCaption: false,
   diaMode: 'kenburns',
@@ -285,8 +288,12 @@ export function AppShell() {
     ) {
       setupLifelineRef.current()
     }
-    // Memory-titels leven in de jaar-scene → herbouw het jaar als het zichtbaar is.
-    if (patch.showMemoryTitles !== undefined && levelRef.current === 'year' && currentYearRef.current) {
+    // Memory-titels + leader-stijl leven in de jaar-scene → herbouw het jaar.
+    if (
+      (patch.showMemoryTitles !== undefined || patch.curvedLeaders !== undefined) &&
+      levelRef.current === 'year' &&
+      currentYearRef.current
+    ) {
       void enterYearRef.current(currentYearRef.current)
     }
   }
@@ -406,6 +413,7 @@ export function AppShell() {
           enabled: settingsRef.current.slideshow,
           speedMs: settingsRef.current.slideshowSpeed * 1000,
           showTitles: settingsRef.current.showMemoryTitles,
+          curvedLeaders: settingsRef.current.curvedLeaders,
         })
         sceneRef.current = scene
         if (ctrlDown) scene.setDayPicker(true)
@@ -1754,6 +1762,14 @@ function SettingsPanel({
                 label="Memory-namen tonen in de jaar-view"
               />
               {desc('De naam bij de kaart, zichtbaar zodra je inzoomt op een thumbnail. Lange namen worden afgekapt.')}
+
+              <div style={{ height: 1, background: '#2c3650', margin: '16px 0' }} />
+              <Toggle
+                on={settings.curvedLeaders}
+                set={(v) => onChange({ curvedLeaders: v })}
+                label="Gebogen verbindingslijntjes (as → memory)"
+              />
+              {desc('Uit = rechte lijntjes. De lijntjes lopen van de tijdlijn naar de memory-kaart.')}
 
               <div style={{ height: 1, background: '#2c3650', margin: '16px 0' }} />
               <Toggle
