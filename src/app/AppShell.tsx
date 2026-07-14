@@ -682,11 +682,17 @@ export function AppShell() {
 
     // Ctrl (in-/uitdrukken) toont/verbergt de dag-indicator op de jaar-tijdlijn.
     const onCtrlKey = (e: KeyboardEvent): void => {
-      if (e.key !== 'Control') return
-      const down = e.type === 'keydown'
-      if (ctrlDown === down) return
-      ctrlDown = down
-      if (levelRef.current === 'year') sceneRef.current?.setDayPicker?.(down)
+      if (e.key !== 'Control' && e.key !== 'Shift') return
+      if (e.key === 'Control') {
+        const down = e.type === 'keydown'
+        if (ctrlDown !== down) {
+          ctrlDown = down
+          if (levelRef.current === 'year') sceneRef.current?.setDayPicker?.(down)
+        }
+      }
+      // Event-canvas: featured-randen (goud = Ctrl, blauw jaar-cover = Ctrl+Shift)
+      // tonen zolang de toets(en) ingedrukt zijn.
+      if (levelRef.current === 'event') sceneRef.current?.setRingKeys?.(e.ctrlKey, e.shiftKey)
     }
     window.addEventListener('keydown', onCtrlKey)
     window.addEventListener('keyup', onCtrlKey)
@@ -694,6 +700,7 @@ export function AppShell() {
     // Vensterfocus verliezen (bijv. Alt-Tab met Ctrl ingedrukt) → de keyup mist,
     // waardoor de indicator/tap-modus "aan" zou blijven. Reset op blur.
     const onBlur = (): void => {
+      if (levelRef.current === 'event') sceneRef.current?.setRingKeys?.(false, false)
       if (!ctrlDown) return
       ctrlDown = false
       if (levelRef.current === 'year') sceneRef.current?.setDayPicker?.(false)

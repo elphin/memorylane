@@ -43,6 +43,7 @@ interface Node {
   halfH: number
   cardW: number
   cardH: number
+  frameBorder: number // huidige (gedempte) witte-rand-dikte waarmee het frame getekend is
   z: number
   // Eigen ("custom") layout: de posities/rotatie/z uit `_canvas.json` (of auto-grid).
   // Grid/scatter herschikken tijdelijk; hiernaar keer je altijd terug.
@@ -70,6 +71,9 @@ export class EventScene implements Scene {
   private hoveredId: string | null = null
   private featuredRef: string | null
   private yearCoverId: string | null
+  // Featured-randen zijn alleen zichtbaar terwijl de toets(en) ingedrukt zijn.
+  private ringCtrl = false
+  private ringShift = false
   private mode: 'custom' | 'grid' | 'scatter' = 'custom'
   // Herpak het grid zodra een foto-verhouding is geladen (grid-modus).
   private regridPending = false
@@ -109,9 +113,9 @@ export class EventScene implements Scene {
         frame = card.frame
         mask = card.mask
         yearRing = this.buildYearRing(container) // onder de gouden ring
-        yearRing.visible = item.id === this.yearCoverId
         ring = this.buildFeaturedRing(container)
-        ring.visible = ref === this.featuredRef
+        // Randen standaard verborgen: alleen zichtbaar terwijl Ctrl / Ctrl+Shift
+        // ingedrukt is (zie setRingKeys).
       }
 
       // Positie: uit _canvas.json of auto-grid.
@@ -144,6 +148,7 @@ export class EventScene implements Scene {
         halfH: half,
         cardW: PHOTO,
         cardH: PHOTO,
+        frameBorder: BORDER,
         z,
         baseX: x,
         baseY: y,
@@ -191,23 +196,41 @@ export class EventScene implements Scene {
     n.cardH = h
     n.halfW = w / 2 + BORDER
     n.halfH = h / 2 + BORDER
-    n.frame?.clear()
-    n.frame?.roundRect(-w / 2 - BORDER, -h / 2 - BORDER, w + BORDER * 2, h + BORDER * 2, 4).fill(0xf5f5f0)
     n.mask?.clear()
     n.mask?.rect(-w / 2, -h / 2, w, h).fill(0xffffff)
+    n.sprite?.setSize(w, h)
+    this.drawFrameBorder(n)
+  }
+
+  /** Effectieve witte-rand-dikte: dempt mee met de eigen schaal, zodat een
+   * opgeschaalde foto geen evenredig dikke (log-uit-proportie) rand krijgt. */
+  private effBorder(scale: number): number {
+    return BORDER / Math.sqrt(Math.max(1, scale))
+  }
+
+  /** (Her)teken de witte rand + de (goud/blauw) rings op de huidige kaartmaat met
+   * de gedempte rand-dikte. Wijzigt geen zichtbaarheid (die stuurt refreshRings). */
+  private drawFrameBorder(n: Node): void {
+    if (!n.frame) return
+    const eb = this.effBorder(n.scale)
+    n.frameBorder = eb
+    const w = n.cardW
+    const h = n.cardH
+    n.frame.clear()
+    n.frame.roundRect(-w / 2 - eb, -h / 2 - eb, w + eb * 2, h + eb * 2, 4).fill(0xf5f5f0)
+    const k = eb / BORDER // schaalt ring-dikte + -offset mee met de gedempte rand
     if (n.ring) {
-      const rw = w / 2 + BORDER + 3
-      const rh = h / 2 + BORDER + 3
+      const rw = w / 2 + eb + 3 * k
+      const rh = h / 2 + eb + 3 * k
       n.ring.clear()
-      n.ring.roundRect(-rw, -rh, rw * 2, rh * 2, 6).stroke({ width: 4, color: 0xffc24b, alignment: 0 })
+      n.ring.roundRect(-rw, -rh, rw * 2, rh * 2, 6).stroke({ width: 4 * k, color: 0xffc24b, alignment: 0 })
     }
     if (n.yearRing) {
-      const rw = w / 2 + BORDER + 8
-      const rh = h / 2 + BORDER + 8
+      const rw = w / 2 + eb + 8 * k
+      const rh = h / 2 + eb + 8 * k
       n.yearRing.clear()
-      n.yearRing.roundRect(-rw, -rh, rw * 2, rh * 2, 8).stroke({ width: 4, color: 0x4b9bff, alignment: 0 })
+      n.yearRing.roundRect(-rw, -rh, rw * 2, rh * 2, 8).stroke({ width: 4 * k, color: 0x4b9bff, alignment: 0 })
     }
-    n.sprite?.setSize(w, h)
   }
 
   /** Gekleurde rand die de uitgelichte (featured) foto markeert; standaard uit. */
@@ -230,19 +253,31 @@ export class EventScene implements Scene {
     return ring
   }
 
-  /** Zet de uitgelichte foto (op ref) — werkt de rand in-place bij. */
+  /** Zet de uitgelichte foto (op ref) — de rand toont pas bij ingedrukte toets. */
   setFeatured(ref: string | null): void {
     this.featuredRef = ref
-    for (const n of this.nodes) {
-      if (n.ring) n.ring.visible = n.ref === ref
-    }
+    this.refreshRings()
   }
 
-  /** Zet de vaste jaar-cover (op item-id) — werkt de blauwe rand in-place bij. */
+  /** Zet de vaste jaar-cover (op item-id) — de blauwe rand toont pas bij toets. */
   setYearFeatured(itemId: string | null): void {
     this.yearCoverId = itemId
+    this.refreshRings()
+  }
+
+  /** Toon de featured-randen alleen terwijl de toets(en) ingedrukt zijn: Ctrl =
+   * gouden memory-cover, Ctrl+Shift = blauwe jaar-cover. */
+  setRingKeys(ctrl: boolean, shift: boolean): void {
+    if (this.ringCtrl === ctrl && this.ringShift === shift) return
+    this.ringCtrl = ctrl
+    this.ringShift = shift
+    this.refreshRings()
+  }
+
+  private refreshRings(): void {
     for (const n of this.nodes) {
-      if (n.yearRing) n.yearRing.visible = n.item.id === itemId
+      if (n.ring) n.ring.visible = this.ringCtrl && n.ref === this.featuredRef
+      if (n.yearRing) n.yearRing.visible = this.ringCtrl && this.ringShift && n.item.id === this.yearCoverId
     }
   }
 
@@ -709,6 +744,12 @@ export class EventScene implements Scene {
       const target = n.scale * (n.item.id === this.hoveredId ? 1.05 : 1)
       const s = n.container.scale.x + (target - n.container.scale.x) * 0.2
       n.container.scale.set(s)
+
+      // Witte rand mee dempen als de eigen schaal wijzigt (Shift-slepen), zodat
+      // een opgeschaalde foto geen te dikke rand krijgt.
+      if (n.frame && Math.abs(this.effBorder(n.scale) - n.frameBorder) > 0.15) {
+        this.drawFrameBorder(n)
+      }
 
       if (!n.sprite || !n.item.media) continue
 
