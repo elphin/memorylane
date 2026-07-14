@@ -41,7 +41,7 @@ const STICKY_GAP_PX = 4 // lossere gap voor een kaart die z'n lane behoudt (hyst
 // scherp getekend op schermresolutie (de leader-laag wordt met 1/zoom
 // counter-scaled en in scherm-coördinaten getekend).
 const LEADER_WIDTH = 1 // schermdikte (px)
-const LEADER_COLOR = 0xeef1f7 // bijna wit
+const LEADER_COLOR = 0xbcc5d6 // licht blauw-grijs (iets minder wit)
 const LEADER_ALPHA = 0.85
 // Horizontale offset (scherm-px) van een kaart t.o.v. zijn datummarkering, zodat
 // de leader een mooie S-bezier kan maken (recht omhoog → opzij → recht de tegel in).
