@@ -571,6 +571,8 @@ export function AppShell() {
       // instelling). Op de lifeline volgt de lock de instelling.
       engine.camera.lockY =
         lvl === 'year' || (settingsRef.current.lockVerticalPan && lvl === 'lifeline')
+      // Bij een actieve lock de as/inhoud precies verticaal centreren (y=0).
+      if (engine.camera.lockY) engine.camera.y = 0
     }
     applyPanLockRef.current = applyPanLock
 
