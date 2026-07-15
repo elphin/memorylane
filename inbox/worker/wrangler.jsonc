@@ -27,7 +27,7 @@
     {
       "binding": "DB",
       "database_name": "memorylane-inbox",
-      "database_id": "REPLACE_ME_NA_D1_CREATE",
+      "database_id": "057d6f3e-097c-4d95-90aa-d5f97bd6a9ce",
       "migrations_dir": "migrations"
     }
   ],
