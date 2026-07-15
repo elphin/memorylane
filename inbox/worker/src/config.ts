@@ -6,8 +6,12 @@ export interface Env {
   BUCKET: R2Bucket
   // Static assets: de telefoon-PWA (SPA-fallback). Serveert /pair en de rest.
   ASSETS: Fetcher
-  // Config-var (wrangler.jsonc → vars)
+  // Config-vars (wrangler.jsonc → vars)
   MAILBOX_LIMIT_GIB?: string
+  // R2 S3-endpoint. R2_JURISDICTION "eu" → <acct>.eu.r2.cloudflarestorage.com;
+  // leeg → <acct>.r2.cloudflarestorage.com. R2_BUCKET = de R2-bucketnaam.
+  R2_JURISDICTION?: string
+  R2_BUCKET?: string
   // Secrets (wrangler secret put)
   INVITE_CODE: string
   R2_ACCESS_KEY_ID: string

@@ -13,7 +13,12 @@
     // Max openstaande (uploading+ready) opslag per brievenbus, in GiB.
     // 8 = strikt binnen de R2-free-tier (€0). Zet op "20" voor ruimer
     // (kán centen kosten; de 30-dagen-opruiming begrenst het). Zie §14 van het plan.
-    "MAILBOX_LIMIT_GIB": "8"
+    "MAILBOX_LIMIT_GIB": "8",
+    // R2-bucketnaam + jurisdictie voor het S3-presign-endpoint. "eu" → het
+    // <acct>.eu.r2.cloudflarestorage.com-endpoint (EU-bucket). Leeg ("") = de
+    // standaard (niet-jurisdictie) bucket. Moet kloppen met de bucket-locatie.
+    "R2_BUCKET": "memorylane",
+    "R2_JURISDICTION": "eu"
   },
 
   // ---- D1 (metadata-administratie) ------------------------------------------
@@ -28,10 +33,14 @@
   ],
 
   // ---- R2 (versleutelde blobs) ----------------------------------------------
+  // `jurisdiction` moet kloppen met de bucket-locatie (EU-bucket → "eu"). Weglaten
+  // voor een standaard-bucket. Zowel dit als R2_JURISDICTION hierboven moeten
+  // dezelfde jurisdictie aangeven.
   "r2_buckets": [
     {
       "binding": "BUCKET",
-      "bucket_name": "memorylane-inbox"
+      "bucket_name": "memorylane",
+      "jurisdiction": "eu"
     }
   ],
 

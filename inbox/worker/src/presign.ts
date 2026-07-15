@@ -7,7 +7,6 @@
 import { AwsClient } from 'aws4fetch'
 import type { Env } from './config'
 
-export const BUCKET = 'memorylane-inbox'
 const DEFAULT_EXPIRES_SEC = 900 // 15 min (§5.5)
 
 function client(env: Env): AwsClient {
@@ -19,13 +18,22 @@ function client(env: Env): AwsClient {
   })
 }
 
+/** Het S3-object-URL. De host krijgt een jurisdictie-infix (`.eu.`) als
+ * `R2_JURISDICTION` gezet is — een EU-bucket is anders niet bereikbaar. */
+function s3ObjectUrl(env: Env, key: string): string {
+  const jur = env.R2_JURISDICTION?.trim()
+  const host = `${env.R2_ACCOUNT_ID}${jur ? `.${jur}` : ''}.r2.cloudflarestorage.com`
+  const bucket = env.R2_BUCKET?.trim() || 'memorylane'
+  return `https://${host}/${bucket}/${key}`
+}
+
 async function presign(
   env: Env,
   key: string,
   method: 'PUT' | 'GET',
   expiresSec: number,
 ): Promise<string> {
-  const url = new URL(`https://${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com/${BUCKET}/${key}`)
+  const url = new URL(s3ObjectUrl(env, key))
   url.searchParams.set('X-Amz-Expires', String(expiresSec))
   const signed = await client(env).sign(url.toString(), {
     method,

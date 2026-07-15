@@ -65,9 +65,16 @@ Je krijgt een blokje tekst terug met o.a. een regel `database_id = "……"`.
 > ik 'm voor je in het bestand.
 
 ## Stap 4 🖥️ — de bucket (kluis) aanmaken
+> Heb je de bucket al via het dashboard gemaakt met de naam **`memorylane`**? Dan
+> sla je deze stap over. Anders, via de terminal (in de **EU**-jurisdictie, zodat
+> je data in Europa blijft):
 ```
-npx wrangler r2 bucket create memorylane-inbox
+npx wrangler r2 bucket create memorylane --jurisdiction eu
 ```
+> Belangrijk: de bucketnaam (`memorylane`) en de jurisdictie (`eu`) moeten kloppen
+> met wat in `inbox/worker/wrangler.jsonc` staat (`R2_BUCKET`, `R2_JURISDICTION` en
+> `jurisdiction`). Staat jouw bucket NIET in de EU maar in de standaard-locatie?
+> Zeg het me, dan zet ik die drie waarden om.
 
 ## Stap 5 🖥️ — de database-tabellen aanmaken
 ```
@@ -120,12 +127,13 @@ Onderaan zie je je URL, bijvoorbeeld
 1. Open in Cursor `inbox/worker/cors.json` en vervang `REPLACE_ME_INBOX_ORIGIN`
    door je URL uit stap 8 (alleen `https://…workers.dev`, zonder pad erachter).
    Opslaan.
-2. In de terminal:
+2. In de terminal (de `-J eu` zegt: de bucket zit in de EU-jurisdictie):
    ```
-   npx wrangler r2 bucket cors put memorylane-inbox --file cors.json
-   npx wrangler r2 bucket lifecycle add memorylane-inbox --prefix mb/ --expire-days 35
+   npx wrangler r2 bucket cors put memorylane --file cors.json -J eu
+   npx wrangler r2 bucket lifecycle add memorylane --prefix mb/ --expire-days 35 -J eu
    ```
    > Klaagt hij dat `cors put` niet bestaat? Probeer dan `cors set` i.p.v. `cors put`.
+   > Staat je bucket in de standaard-locatie (niet EU)? Laat dan de `-J eu` weg.
 
 ---
 
