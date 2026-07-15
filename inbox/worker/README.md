@@ -1,16 +1,26 @@
-# MemoryLane Onderweg — Worker (fase 0: fundament)
+# MemoryLane Onderweg — Worker (fase 0–1)
 
-Cloudflare Worker die straks de brievenbus-API (§5.5) én de PWA serveert. Nu bevat
-hij alleen een hello-pagina + `/api/health`. Losstaand van de root-app (eigen
-`package.json`, geen koppeling met de Vite-build).
+Cloudflare Worker die de brievenbus-API (§5.5) serveert (en straks in fase 3 ook de
+PWA via static assets). Losstaand van de root-app (eigen `package.json`, geen
+koppeling met de Vite-build).
 
 ## Wat zit erin
 - `wrangler.jsonc` — Worker-config: D1-binding `DB`, R2-binding `BUCKET`, dagelijkse
-  cron, en de config-var `MAILBOX_LIMIT_GIB` (zie *Config-knoppen*).
+  cron, `nodejs_compat`, en de config-var `MAILBOX_LIMIT_GIB` (zie *Config-knoppen*).
 - `migrations/0001_init.sql` — D1-schema (mailboxes, memories, files, rate_limits).
-- `src/index.ts` — Hono-app (hello + health; `/api/*` volgt in fase 1).
-- `src/config.ts` — `Env`-bindings + de server-side limieten (§5.6).
+- `src/` — Hono-app + alle endpoints (§5.5): `index.ts` (router + cron + hello/health),
+  `mailboxes.ts`, `memories.ts`, `auth.ts` (timing-safe token-hash + rate-limit),
+  `presign.ts` (aws4fetch presigned R2-URLs), `r2.ts`, `cron.ts`, `config.ts`
+  (`Env` + limieten §5.6), `util.ts`, `http.ts`, `api-types.ts`.
+- `test/api.test.ts` — 15 integratietests (Miniflare + echte lokale D1/R2): auth,
+  registratie-idempotentie, de create→complete→ack-lus, het 409-resume-pad,
+  limieten, autorisatie-isolatie en cron. `npm run test`.
 - `cors.json` — R2-bucket CORS (nodig voor browser-PUT/GET vanuit de PWA).
+
+> **Toolchain-noot:** de dev-deps zijn gepind op **wrangler 3.114 + vitest-pool-workers
+> 0.5** (die combinatie heeft een werkende test-integratie; wrangler 4 + de nieuwe
+> vitest-pool-workers waren tijdelijk incompatibel). De `wrangler.jsonc` en de deploy
+> werken óók met een globaal geïnstalleerde wrangler 4 als je dat liever gebruikt.
 
 ## Config-knoppen
 - **Mailbox-opslaglimiet:** `vars.MAILBOX_LIMIT_GIB` in `wrangler.jsonc`. Standaard
@@ -61,7 +71,8 @@ wrangler r2 bucket lifecycle add memorylane-inbox --prefix mb/ --expire-days 35
 
 ## Lokaal ontwikkelen / verifiëren (geen account nodig)
 ```bash
-npm run typecheck   # tsc
+npm run typecheck   # tsc (src)
+npm run test        # 15 integratietests in Miniflare (lokale D1/R2)
 npm run check       # wrangler deploy --dry-run (bouwt de bundle, deployt niet)
 npm run dev         # lokale Worker + Miniflare (D1/R2 lokaal)
 ```

@@ -5,6 +5,7 @@
   "name": "memorylane-inbox",
   "main": "src/index.ts",
   "compatibility_date": "2024-12-05",
+  "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
 
   // ---- Config-knoppen (niet-geheim). Wijzig hier + `npm run deploy` ----------

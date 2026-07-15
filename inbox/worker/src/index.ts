@@ -1,9 +1,15 @@
-// MemoryLane Onderweg — Worker-entry (router + cron).
-// Fase 0: alleen een hello-pagina + health-check. De echte endpoints (§5.5)
-// komen in fase 1; ze worden hier onder `/api/*` gemonteerd.
+// MemoryLane Onderweg — Worker-entry: router + cron.
+// De echte brievenbus-API (§5.5) leeft onder /api/*. Static assets (PWA) worden
+// in fase 3 toegevoegd.
 
 import { Hono } from 'hono'
+import type { ContentfulStatusCode } from 'hono/utils/http-status'
 import type { Env } from './config'
+import { ApiError } from './http'
+import { authMailbox } from './auth'
+import { mailboxes } from './mailboxes'
+import { memories } from './memories'
+import { runCron } from './cron'
 
 const VERSION = '0.1.0'
 
@@ -23,19 +29,37 @@ h1{font-weight:600}small{color:#a89c8e}</style></head>
   ),
 )
 
-// Health-check (goedkoop, ongeauthenticeerd) — bevestigt dat de Worker leeft.
 app.get('/api/health', (c) => c.json({ ok: true, service: 'memorylane-inbox', version: VERSION }))
 
-// Nette 404 voor onbekende API-routes (echte endpoints volgen in fase 1).
-app.all('/api/*', (c) =>
-  c.json({ error: { code: 'not_found', message: 'Onbekend endpoint' } }, 404),
-)
+app.route('/api/mailboxes', mailboxes)
+app.route('/api/memories', memories)
+
+// GET /api/outbox — upload. Voor de telefoon: staat-klaar vs. ✓-geïmporteerd.
+app.get('/api/outbox', async (c) => {
+  const mailboxId = await authMailbox(c, 'upload')
+  const rows = await c.env.DB.prepare(
+    'SELECT id, status, created_at FROM memories WHERE mailbox_id = ?1 ORDER BY created_at',
+  )
+    .bind(mailboxId)
+    .all<{ id: string; status: string; created_at: string }>()
+  return c.json(rows.results.map((r) => ({ memoryId: r.id, status: r.status, createdAt: r.created_at })))
+})
+
+// Nette 404 voor onbekende API-routes.
+app.all('/api/*', (c) => c.json({ error: { code: 'not_found', message: 'Onbekend endpoint' } }, 404))
+
+// Uniforme foutvorm: ApiError → { error: { code, message } }; onbekend → 500.
+app.onError((err, c) => {
+  if (err instanceof ApiError) {
+    return c.json({ error: { code: err.code, message: err.message } }, err.status as ContentfulStatusCode)
+  }
+  console.error('Onverwachte fout:', err)
+  return c.json({ error: { code: 'internal', message: 'Interne serverfout.' } }, 500)
+})
 
 export default {
   fetch: app.fetch,
-
-  // Dagelijkse opruiming (§5.7) — implementatie volgt in fase 1.
-  async scheduled(_event: ScheduledController, _env: Env, _ctx: ExecutionContext): Promise<void> {
-    // TODO(fase 1): verlopen uploads/ready/tombstones + rate_limits opruimen.
+  async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(runCron(env))
   },
 } satisfies ExportedHandler<Env>
