@@ -62,10 +62,17 @@ const field: React.CSSProperties = {
 const label: React.CSSProperties = { fontSize: 12, color: C.sub, margin: '10px 0 5px' }
 const desc: React.CSSProperties = { fontSize: 12, color: C.faint, marginTop: 6 }
 
+// Ingebakken standaard-brievenbus (build-time, uit .env). Zijn beide gezet, dan
+// hoeft de gebruiker niets in te vullen — alleen op "Koppel telefoon" klikken.
+const DEFAULT_SERVER = ((import.meta.env.VITE_INBOX_SERVER_URL as string | undefined) ?? '').trim()
+const DEFAULT_INVITE = ((import.meta.env.VITE_INBOX_INVITE_CODE as string | undefined) ?? '').trim()
+const HAS_DEFAULTS = DEFAULT_SERVER !== '' && DEFAULT_INVITE !== ''
+
 export function SettingsPhone({ backend, onImported }: { backend: Backend; onImported?: () => void }) {
   const [status, setStatus] = useState<InboxStatus | null>(null)
-  const [serverUrl, setServerUrl] = useState('')
-  const [inviteCode, setInviteCode] = useState('')
+  const [serverUrl, setServerUrl] = useState(DEFAULT_SERVER)
+  const [inviteCode, setInviteCode] = useState(DEFAULT_INVITE)
+  const [showAdvanced, setShowAdvanced] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [pending, setPending] = useState<number | null>(null)
@@ -238,6 +245,9 @@ export function SettingsPhone({ backend, onImported }: { backend: Backend; onImp
 
   // ---- Niet gekoppeld: pair-formulier ----
   if (!status.configured) {
+    // Eén-klik als er een ingebakken brievenbus is (en de gebruiker niet expliciet
+    // "andere server" koos): geen velden, alleen een koppelknop.
+    const oneClick = HAS_DEFAULTS && !showAdvanced
     return (
       <div>
         <div style={{ fontSize: 15, fontWeight: 600, color: C.ink }}>Telefoon koppelen</div>
@@ -246,36 +256,56 @@ export function SettingsPhone({ backend, onImported }: { backend: Backend; onImp
           end-to-end versleuteld — de server ziet nooit je foto's of tekst.
         </div>
 
-        <div style={label}>Server-URL</div>
-        <input
-          style={field}
-          value={serverUrl}
-          onChange={(e) => setServerUrl(e.target.value)}
-          placeholder="https://…workers.dev"
-          spellCheck={false}
-          autoCapitalize="off"
-        />
-        <div style={label}>Invite-code</div>
-        <input
-          style={field}
-          value={inviteCode}
-          onChange={(e) => setInviteCode(e.target.value)}
-          placeholder="De code uit je Cloudflare-instellingen"
-          spellCheck={false}
-          autoCapitalize="off"
-        />
+        {oneClick ? (
+          <>
+            {error && <div style={{ color: C.danger, fontSize: 12, marginTop: 12 }}>{error}</div>}
+            <div style={{ marginTop: 14 }}>
+              <button style={{ ...btnPrimary, opacity: busy ? 0.5 : 1 }} disabled={busy} onClick={() => void pair()}>
+                {busy ? 'Bezig…' : 'Koppel telefoon'}
+              </button>
+            </div>
+            <button
+              className="link"
+              style={{ marginTop: 12, background: 'none', border: 0, color: C.sub, fontSize: 12, cursor: 'pointer', padding: 0 }}
+              onClick={() => setShowAdvanced(true)}
+            >
+              Een andere server gebruiken…
+            </button>
+          </>
+        ) : (
+          <>
+            <div style={label}>Server-URL</div>
+            <input
+              style={field}
+              value={serverUrl}
+              onChange={(e) => setServerUrl(e.target.value)}
+              placeholder="https://…workers.dev"
+              spellCheck={false}
+              autoCapitalize="off"
+            />
+            <div style={label}>Invite-code</div>
+            <input
+              style={field}
+              value={inviteCode}
+              onChange={(e) => setInviteCode(e.target.value)}
+              placeholder="De code uit je Cloudflare-instellingen"
+              spellCheck={false}
+              autoCapitalize="off"
+            />
 
-        {error && <div style={{ color: C.danger, fontSize: 12, marginTop: 10 }}>{error}</div>}
+            {error && <div style={{ color: C.danger, fontSize: 12, marginTop: 10 }}>{error}</div>}
 
-        <div style={{ marginTop: 14 }}>
-          <button
-            style={{ ...btnPrimary, opacity: busy || !serverUrl.trim() || !inviteCode.trim() ? 0.5 : 1 }}
-            disabled={busy || !serverUrl.trim() || !inviteCode.trim()}
-            onClick={() => void pair()}
-          >
-            {busy ? 'Bezig…' : 'Koppel telefoon'}
-          </button>
-        </div>
+            <div style={{ marginTop: 14 }}>
+              <button
+                style={{ ...btnPrimary, opacity: busy || !serverUrl.trim() || !inviteCode.trim() ? 0.5 : 1 }}
+                disabled={busy || !serverUrl.trim() || !inviteCode.trim()}
+                onClick={() => void pair()}
+              >
+                {busy ? 'Bezig…' : 'Koppel telefoon'}
+              </button>
+            </div>
+          </>
+        )}
       </div>
     )
   }
