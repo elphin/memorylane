@@ -9,7 +9,7 @@ use std::path::Path;
 
 use serde::Serialize;
 
-use crate::model::CanvasItem;
+use crate::model::{CanvasItem, ItemType};
 
 // ---- Slug- en YAML-helpers (port van v1 generator.ts) --------------------
 
@@ -113,17 +113,37 @@ pub fn text_item_markdown(id: &str, caption: Option<&str>, body: &str, category:
     }
 }
 
-/// Markdown voor een foto-item (`<slug>.md`) dat naar een mediabestand wijst.
-pub fn photo_item_markdown(id: &str, media: &str, caption: Option<&str>) -> String {
+/// Markdown voor een media-item (`<slug>.md`) dat naar een mediabestand wijst.
+/// `item_type` is "photo"/"video"/"audio" (afgeleid uit de extensie — de scanner
+/// laat frontmatter-`type` winnen van de extensie, dus een `.mp4` MOET hier
+/// `video` krijgen, niet `photo`). `happened_at` zet optioneel het `happenedAt`-
+/// tijdstip voor volgorde-behoud (moet een RFC 3339-string met offset zijn, bv.
+/// `…T12:00:05Z`).
+pub fn media_item_markdown(
+    id: &str,
+    item_type: &str,
+    media: &str,
+    caption: Option<&str>,
+    happened_at: Option<&str>,
+) -> String {
     let now = now_iso();
-    let mut fm = format!("---\nid: {id}\ntype: photo\nmedia: {}\n", yaml_str(media));
+    let mut fm = format!("---\nid: {id}\ntype: {item_type}\nmedia: {}\n", yaml_str(media));
     if let Some(c) = caption {
         fm.push_str(&format!("caption: {}\n", yaml_str(c)));
+    }
+    if let Some(h) = happened_at {
+        fm.push_str(&format!("happenedAt: {}\n", yaml_str(h)));
     }
     fm.push_str(&format!("createdAt: {}\n", yaml_str(&now)));
     fm.push_str(&format!("updatedAt: {}\n", yaml_str(&now)));
     fm.push_str("---\n");
     fm
+}
+
+/// Itemtype-string voor een media-extensie; valt terug op "photo" voor onbekende
+/// (de bestaande, tolerante default van de drag&drop-import).
+fn media_type_for_ext(ext: &str) -> &'static str {
+    ItemType::from_extension(ext).map(|t| t.as_str()).unwrap_or("photo")
 }
 
 /// Markdown voor een event (`_event.md`). `end_at` optioneel (period).
@@ -838,7 +858,10 @@ pub fn import_photo(
         return Err(format!("kopiëren mislukt: {e}"));
     }
 
-    let md = photo_item_markdown(&id, &media, Some(stem));
+    // §9.3: leid het type af uit de extensie zodat een geïmporteerde `.mp4` als
+    // `video` wordt geïndexeerd, niet als `photo`. Repareert ook de bestaande
+    // drag&drop-import van video's.
+    let md = media_item_markdown(&id, media_type_for_ext(&ext), &media, Some(stem), None);
     write_atomic(&dir.join(format!("{slug}.md")), &md).map_err(|e| e.to_string())?;
     Ok(id)
 }
@@ -968,6 +991,23 @@ mod tests {
         assert_eq!(parsed.get_str("type").unwrap(), "text");
         assert_eq!(parsed.get_str("caption").unwrap(), "Titel: met dubbele punt");
         assert_eq!(parsed.body, "De body.");
+    }
+
+    #[test]
+    fn media_item_type_follows_extension() {
+        // §9.3-regressie: video-extensies moeten `type: video` krijgen, foto's
+        // `type: photo`, onbekende vallen tolerant terug op `photo`.
+        assert_eq!(media_type_for_ext("mp4"), "video");
+        assert_eq!(media_type_for_ext("MOV"), "video");
+        assert_eq!(media_type_for_ext("jpg"), "photo");
+        assert_eq!(media_type_for_ext("heic"), "photo");
+        assert_eq!(media_type_for_ext("xyz"), "photo");
+
+        let md = media_item_markdown("id1", media_type_for_ext("mp4"), "clip_ab12cd34.mp4", None, Some("2026-07-11T12:00:05Z"));
+        let parsed = crate::vault::frontmatter::parse(&md);
+        assert_eq!(parsed.get_str("type").unwrap(), "video");
+        assert_eq!(parsed.get_str("media").unwrap(), "clip_ab12cd34.mp4");
+        assert_eq!(parsed.get_str("happenedAt").unwrap(), "2026-07-11T12:00:05Z");
     }
 
     #[test]
