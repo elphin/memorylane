@@ -5,7 +5,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { QRCodeSVG } from 'qrcode.react'
-import type { Backend, InboxStatus } from '../lib/backend'
+import type { Backend, ImportProgress, ImportReport, InboxStatus } from '../lib/backend'
 
 const C = {
   ink: '#fff',
@@ -15,6 +15,13 @@ const C = {
   card: '#1b2233',
   accent: '#3b82f6',
   danger: '#e0574f',
+}
+
+const STEP_LABEL: Record<ImportProgress['step'], string> = {
+  download: 'downloaden',
+  decrypt: 'ontsleutelen',
+  write: 'wegschrijven',
+  ack: 'afronden',
 }
 
 /** Tauri geeft een Err(String) terug als een kale string; normaliseer naar tekst. */
@@ -55,7 +62,7 @@ const field: React.CSSProperties = {
 const label: React.CSSProperties = { fontSize: 12, color: C.sub, margin: '10px 0 5px' }
 const desc: React.CSSProperties = { fontSize: 12, color: C.faint, marginTop: 6 }
 
-export function SettingsPhone({ backend }: { backend: Backend }) {
+export function SettingsPhone({ backend, onImported }: { backend: Backend; onImported?: () => void }) {
   const [status, setStatus] = useState<InboxStatus | null>(null)
   const [serverUrl, setServerUrl] = useState('')
   const [inviteCode, setInviteCode] = useState('')
@@ -63,6 +70,9 @@ export function SettingsPhone({ backend }: { backend: Backend }) {
   const [error, setError] = useState('')
   const [pending, setPending] = useState<number | null>(null)
   const [qr, setQr] = useState<string | null>(null) // QR-payload na pair/rotate
+  const [importing, setImporting] = useState(false)
+  const [progress, setProgress] = useState<ImportProgress | null>(null)
+  const [report, setReport] = useState<ImportReport | null>(null)
   const mounted = useRef(true)
 
   async function refresh(): Promise<void> {
@@ -161,6 +171,30 @@ export function SettingsPhone({ backend }: { backend: Backend }) {
       setError(errMsg(e))
     } finally {
       setBusy(false)
+    }
+  }
+
+  async function doImport(): Promise<void> {
+    setError('')
+    setReport(null)
+    setImporting(true)
+    setProgress(null)
+    let unlisten: (() => void) | null = null
+    try {
+      unlisten = await backend.onInboxProgress((p) => mounted.current && setProgress(p))
+      const r = await backend.inboxImport()
+      if (!mounted.current) return
+      setReport(r)
+      if (r.imported > 0) onImported?.() // tijdlijn verversen
+      await refresh()
+    } catch (e) {
+      if (mounted.current) setError(errMsg(e))
+    } finally {
+      if (unlisten) unlisten()
+      if (mounted.current) {
+        setImporting(false)
+        setProgress(null)
+      }
     }
   }
 
@@ -271,6 +305,48 @@ export function SettingsPhone({ backend }: { backend: Backend }) {
         {pending !== null && (
           <div style={{ fontSize: 12, color: pending > 0 ? '#e0b34f' : C.sub, marginTop: 6 }}>
             {pending > 0 ? `📥 ${pending} memory${pending === 1 ? '' : "'s"} onderweg — klaar om te importeren` : 'Geen memories onderweg'}
+          </div>
+        )}
+      </div>
+
+      {/* Importeren */}
+      <div style={{ marginTop: 12 }}>
+        <button
+          style={{ ...btnPrimary, width: '100%', opacity: importing ? 0.6 : 1 }}
+          disabled={importing}
+          onClick={() => void doImport()}
+        >
+          {importing ? 'Bezig met importeren…' : 'Importeer openstaande memories'}
+        </button>
+        {importing && progress && (
+          <div style={{ marginTop: 10 }}>
+            <div style={{ height: 8, background: C.line, borderRadius: 999, overflow: 'hidden' }}>
+              <div
+                style={{
+                  width: `${progress.memoryCount ? Math.round(((progress.memoryIndex + 1) / progress.memoryCount) * 100) : 0}%`,
+                  height: '100%',
+                  background: C.accent,
+                  transition: 'width .2s',
+                }}
+              />
+            </div>
+            <div style={{ fontSize: 12, color: C.sub, marginTop: 6 }}>
+              Memory {progress.memoryIndex + 1} van {progress.memoryCount} · {STEP_LABEL[progress.step]}
+              {progress.fileCount > 0 && progress.step !== 'ack' ? ` (bestand ${progress.fileIndex + 1}/${progress.fileCount})` : ''}
+            </div>
+          </div>
+        )}
+        {report && (
+          <div style={{ marginTop: 10, fontSize: 13, color: C.ink }}>
+            ✓ {report.imported} geïmporteerd
+            {report.skipped > 0 && <span style={{ color: '#e0b34f' }}> · {report.skipped} overgeslagen</span>}
+            {report.errors.length > 0 && (
+              <ul style={{ margin: '6px 0 0', paddingLeft: 18, color: C.danger, fontSize: 12 }}>
+                {report.errors.slice(0, 5).map((er) => (
+                  <li key={er.memoryId}>{er.message}</li>
+                ))}
+              </ul>
+            )}
           </div>
         )}
       </div>

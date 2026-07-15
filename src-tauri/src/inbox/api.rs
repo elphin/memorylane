@@ -158,3 +158,51 @@ pub fn delete_memory(server: &str, mailbox_id: &str, owner_token: &str, memory_i
         .map_err(neterr)?;
     check(resp).map(|_| ())
 }
+
+/// GET /api/memories/:id/urls — owner. Verse presigned GET-URLs `{fileId: url}`
+/// (incl. `envelope`).
+pub fn memory_urls(
+    server: &str,
+    mailbox_id: &str,
+    owner_token: &str,
+    memory_id: &str,
+) -> Result<std::collections::HashMap<String, String>, String> {
+    let resp = client()?
+        .get(format!("{server}/api/memories/{memory_id}/urls"))
+        .header("X-Mailbox", mailbox_id)
+        .bearer_auth(owner_token)
+        .send()
+        .map_err(neterr)?;
+    let resp = check(resp)?;
+    resp.json::<std::collections::HashMap<String, String>>()
+        .map_err(|e| format!("antwoord lezen: {e}"))
+}
+
+/// POST /api/memories/:id/ack — owner. Import gelukt: server verwijdert R2 + zet
+/// de memory op `imported` (tombstone).
+pub fn ack_memory(server: &str, mailbox_id: &str, owner_token: &str, memory_id: &str) -> Result<(), String> {
+    let resp = client()?
+        .post(format!("{server}/api/memories/{memory_id}/ack"))
+        .header("X-Mailbox", mailbox_id)
+        .bearer_auth(owner_token)
+        .send()
+        .map_err(neterr)?;
+    check(resp).map(|_| ())
+}
+
+/// Presigned R2 GET → geheel in geheugen (alleen voor de kleine envelope). Geen
+/// auth-headers: de URL is zelf al ondertekend.
+pub fn download_bytes(url: &str) -> Result<Vec<u8>, String> {
+    let resp = client()?.get(url).send().map_err(neterr)?;
+    let resp = check(resp)?;
+    Ok(resp.bytes().map_err(|e| format!("download lezen: {e}"))?.to_vec())
+}
+
+/// Presigned R2 GET → streaming naar een bestand (voor grote media; niet in RAM).
+pub fn download_to_file(url: &str, dest: &std::path::Path) -> Result<u64, String> {
+    let resp = client()?.get(url).send().map_err(neterr)?;
+    let mut resp = check(resp)?;
+    let mut file = std::fs::File::create(dest).map_err(|e| format!("temp aanmaken: {e}"))?;
+    let n = std::io::copy(&mut resp, &mut file).map_err(|e| format!("download schrijven: {e}"))?;
+    Ok(n)
+}

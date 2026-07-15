@@ -824,22 +824,47 @@ fn unique_event_folder(vault_root: &Path, year_folder: &str, base_name: &str, id
     format!("{year_folder}/{base_name} {short}")
 }
 
-/// Importeert een foto: kopieert het bronbestand de eventmap in met een unieke
-/// naam en schrijft een bijbehorend item-`.md`. Geeft het nieuwe item-id terug.
-pub fn import_photo(
+/// Importeert een foto (drag&drop-pad): kopieert het bronbestand de eventmap in
+/// en schrijft een item-`.md` met de bestandsnaam-stam als caption, zonder
+/// `happenedAt`. Geeft het nieuwe item-id terug.
+pub fn import_photo(vault_root: &Path, folder_path: &str, source: &Path) -> Result<String, String> {
+    let name = source.file_name().and_then(|s| s.to_str()).unwrap_or("foto.jpg");
+    import_media_inner(vault_root, folder_path, source, name, true, None)
+}
+
+/// Importeert een mediabestand (inbox-pad): kopieert `source` de eventmap in met
+/// een naam afgeleid van `original_name` (uit de envelope — de bron-temp heeft een
+/// `<order>_`-prefix die we hier níét willen), zonder caption, en met een
+/// `happened_at`-tijdstip voor volgorde-behoud (moet `…T12:MM:SSZ` zijn — de `Z`
+/// is verplicht, anders faalt `to_millis` stil). Geeft het nieuwe item-id terug.
+pub fn import_media(
     vault_root: &Path,
     folder_path: &str,
     source: &Path,
+    original_name: &str,
+    happened_at: &str,
 ) -> Result<String, String> {
-    let ext = source
+    import_media_inner(vault_root, folder_path, source, original_name, false, Some(happened_at))
+}
+
+/// Gedeelde kern van `import_photo`/`import_media`. `name` levert extensie + stam
+/// (bepaalt het vault-bestandsnaam-patroon en het itemtype); `caption_from_stem`
+/// zet de stam als caption (drag&drop) of niet (inbox).
+fn import_media_inner(
+    vault_root: &Path,
+    folder_path: &str,
+    source: &Path,
+    name: &str,
+    caption_from_stem: bool,
+    happened_at: Option<&str>,
+) -> Result<String, String> {
+    let name_path = Path::new(name);
+    let ext = name_path
         .extension()
         .and_then(|e| e.to_str())
         .map(|e| e.to_ascii_lowercase())
         .unwrap_or_else(|| "jpg".to_string());
-    let stem = source
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("foto");
+    let stem = name_path.file_stem().and_then(|s| s.to_str()).unwrap_or("bestand");
     let id = uuid::Uuid::new_v4().to_string();
     let base = generate_slug(stem, 40);
     let short: String = id.chars().filter(|c| *c != '-').take(8).collect();
@@ -858,12 +883,28 @@ pub fn import_photo(
         return Err(format!("kopiëren mislukt: {e}"));
     }
 
-    // §9.3: leid het type af uit de extensie zodat een geïmporteerde `.mp4` als
-    // `video` wordt geïndexeerd, niet als `photo`. Repareert ook de bestaande
-    // drag&drop-import van video's.
-    let md = media_item_markdown(&id, media_type_for_ext(&ext), &media, Some(stem), None);
+    // §9.3: leid het type af uit de extensie zodat een `.mp4` als `video` wordt
+    // geïndexeerd, niet als `photo` (de scanner laat frontmatter-type winnen).
+    let caption = if caption_from_stem { Some(stem) } else { None };
+    let md = media_item_markdown(&id, media_type_for_ext(&ext), &media, caption, happened_at);
     write_atomic(&dir.join(format!("{slug}.md")), &md).map_err(|e| e.to_string())?;
     Ok(id)
+}
+
+/// Verplaatst een hele eventmap naar de OS-prullenbak (omkeerbaar). Gebruikt door
+/// de inbox-import om een half geïmporteerd event op te ruimen vóór een herstart.
+/// Containment: weiger elk pad buiten de vault én de vault-root zelf.
+pub fn delete_event(vault_root: &Path, folder_path: &str) -> Result<(), String> {
+    let path = vault_root.join(folder_path);
+    if !path.exists() {
+        return Ok(());
+    }
+    let canon = std::fs::canonicalize(&path).map_err(|e| e.to_string())?;
+    let canon_vault = std::fs::canonicalize(vault_root).map_err(|e| e.to_string())?;
+    if !canon.starts_with(&canon_vault) || canon == canon_vault {
+        return Err(format!("map buiten de vault (of de vault zelf) geweigerd: {folder_path}"));
+    }
+    trash::delete(&canon).map_err(|e| e.to_string())
 }
 
 /// Verplaatst een bestand naar de OS-prullenbak (omkeerbaar).

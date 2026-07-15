@@ -128,6 +128,52 @@ pub fn decrypt_blob(
     Ok(out)
 }
 
+/// Streaming-ontsleuteling: leest een container van `reader` en schrijft de
+/// plaintext naar `writer`, chunk voor chunk — nooit meer dan één 8-MiB-chunk in
+/// het geheugen (voor grote video's). Valideert magic/version + elke GCM-tag +
+/// de totale grootte. Geeft het aantal plaintext-bytes terug.
+pub fn decrypt_stream<R: std::io::Read, W: std::io::Write>(
+    mut reader: R,
+    mut writer: W,
+    master: &[u8; 32],
+    memory_id: &str,
+    file_id: &str,
+) -> Result<u64, String> {
+    let mut header = [0u8; HEADER];
+    reader.read_exact(&mut header).map_err(|_| "header lezen".to_string())?;
+    if &header[0..4] != MAGIC {
+        return Err("verkeerde magic".into());
+    }
+    if header[4] != VERSION {
+        return Err("verkeerde versie".into());
+    }
+    let plain_size = u64::from_le_bytes(header[8..16].try_into().unwrap()) as usize;
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&file_key(master, memory_id, file_id)));
+    let n = chunk_count(plain_size);
+    let mut buf = vec![0u8; NONCE_LEN + CHUNK + TAG_LEN];
+    let mut written = 0usize;
+    for i in 0..n {
+        let expected = CHUNK.min(plain_size - i * CHUNK);
+        let need = NONCE_LEN + expected + TAG_LEN;
+        reader.read_exact(&mut buf[..need]).map_err(|_| "getrunceerd".to_string())?;
+        let (nonce, ct) = buf[..need].split_at(NONCE_LEN);
+        let pt = cipher
+            .decrypt(Nonce::from_slice(nonce), Payload { msg: ct, aad: &aad(memory_id, file_id, i, n) })
+            .map_err(|_| "auth-fout".to_string())?;
+        writer.write_all(&pt).map_err(|_| "schrijven".to_string())?;
+        written += pt.len();
+    }
+    // Er mogen geen bytes meer volgen (anders is de container niet wat hij beweert).
+    if reader.read(&mut [0u8; 1]).map_err(|_| "lezen".to_string())? != 0 {
+        return Err("bytes over aan het eind".into());
+    }
+    if written != plain_size {
+        return Err("plaintextSize klopt niet".into());
+    }
+    writer.flush().map_err(|_| "flush".to_string())?;
+    Ok(written as u64)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -267,6 +313,26 @@ mod tests {
         assert!(decrypt_blob(&container, &wrong, &v.memory_id, &v.file_id).is_err());
         assert!(decrypt_blob(&container, &master, &v.memory_id, "ander-bestand").is_err());
         assert!(decrypt_blob(&container, &master, "99999999-9999-4999-8999-999999999999", &v.file_id).is_err());
+    }
+
+    #[test]
+    fn decrypt_stream_matches_decrypt_blob() {
+        let f = load();
+        let master: [u8; 32] = hex_decode(&f.master_key_hex).try_into().unwrap();
+        // Meerdere chunks (vector-02) is de interessante: streaming over de grens heen.
+        let v = f.vectors.iter().find(|v| v.name == "vector-02-multichunk").unwrap();
+        let plaintext = build_plaintext(&v.plaintext);
+        let n = plaintext.len().div_ceil(CHUNK).max(1);
+        let container = encrypt_blob(&plaintext, &master, &v.memory_id, &v.file_id, &fixed_nonces(n)).unwrap();
+        let mut out = Vec::new();
+        let written =
+            decrypt_stream(std::io::Cursor::new(&container), &mut out, &master, &v.memory_id, &v.file_id).unwrap();
+        assert_eq!(written as usize, plaintext.len());
+        assert_eq!(out, plaintext);
+        // Corrupte tag → auth-fout, geen half resultaat naar buiten.
+        let bad = mutate(&container, "flip_last_byte");
+        let mut sink = Vec::new();
+        assert!(decrypt_stream(std::io::Cursor::new(&bad), &mut sink, &master, &v.memory_id, &v.file_id).is_err());
     }
 
     #[test]

@@ -128,6 +128,7 @@ pub fn run() {
             inbox::inbox_rotate_upload_token,
             inbox::inbox_discard_pending,
             inbox::inbox_unpair,
+            inbox::inbox_import,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

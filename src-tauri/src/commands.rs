@@ -118,7 +118,7 @@ impl VaultService {
         media::thumbs::ensure_thumb(&src, tier, cache_root, &hash).map_err(|e| e.to_string())
     }
 
-    fn current_vault(&self) -> Result<PathBuf, String> {
+    pub(crate) fn current_vault(&self) -> Result<PathBuf, String> {
         self.vault_path
             .lock()
             .map_err(lock_err)?
@@ -127,7 +127,7 @@ impl VaultService {
     }
 
     /// Herindexeert het huidige vault-pad (na een structurele wijziging).
-    fn rescan(&self) -> Result<(), String> {
+    pub(crate) fn rescan(&self) -> Result<(), String> {
         let path = self.current_vault()?;
         let model = vault::scan(&path);
         let mut conn = self.conn.lock().map_err(lock_err)?;

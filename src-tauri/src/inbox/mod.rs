@@ -7,11 +7,15 @@
 
 pub mod crypto;
 mod api;
+mod import;
 mod store;
 
 use base64::Engine;
 use rand::RngCore;
 use serde::Serialize;
+use tauri::{AppHandle, State, Window};
+
+use crate::commands::VaultService;
 
 /// Resultaat van pairing/rotate: de QR-payload (éénmalig terug te geven, nergens
 /// gelogd) + een korte mailbox-id voor de UI.
@@ -223,6 +227,26 @@ pub async fn inbox_unpair() -> Result<(), String> {
         .await;
     }
     store::clear()
+}
+
+/// Importeer alle klaarstaande memories in de vault (§9.2). Het zware werk (HTTP +
+/// ontsleutelen + schrijven) draait in `spawn_blocking`; daarna herindexeert de
+/// VaultService één keer zodat de nieuwe events in de UI verschijnen.
+#[tauri::command]
+pub async fn inbox_import(
+    app: AppHandle,
+    window: Window,
+    state: State<'_, VaultService>,
+) -> Result<import::ImportReport, String> {
+    let vault_root = state
+        .current_vault()
+        .map_err(|_| "Kies eerst een vault-map in Instellingen → Opslag.".to_string())?;
+    let pairing = store::load()?.ok_or("Niet gekoppeld.")?;
+    let report = tauri::async_runtime::spawn_blocking(move || import::run(&app, &window, &vault_root, &pairing))
+        .await
+        .map_err(|e| format!("taak-fout: {e}"))??;
+    state.rescan()?;
+    Ok(report)
 }
 
 #[cfg(test)]

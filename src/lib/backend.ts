@@ -184,6 +184,23 @@ export interface PairResult {
   mailboxShortId: string
 }
 
+/** Voortgang van een lopende inbox-import (Tauri-event `inbox://progress`). */
+export interface ImportProgress {
+  memoryId: string
+  memoryIndex: number
+  memoryCount: number
+  step: 'download' | 'decrypt' | 'write' | 'ack'
+  fileIndex: number
+  fileCount: number
+}
+
+/** Eindrapport van een inbox-import. */
+export interface ImportReport {
+  imported: number
+  skipped: number
+  errors: { memoryId: string; message: string }[]
+}
+
 export interface Backend {
   readonly isMock: boolean
   getVaultPath(): Promise<string | null>
@@ -268,6 +285,10 @@ export interface Backend {
   inboxDiscardPending(): Promise<number>
   /** Ontkoppel deze desktop (mailbox weg op server + geheimen lokaal gewist). */
   inboxUnpair(): Promise<void>
+  /** Importeer alle klaarstaande memories in de vault; geeft een rapport terug. */
+  inboxImport(): Promise<ImportReport>
+  /** Abonneer op voortgang van een lopende import; geeft een unsubscribe terug. */
+  onInboxProgress(cb: (p: ImportProgress) => void): Promise<() => void>
 }
 
 // ---- Tauri-detectie ------------------------------------------------------
@@ -514,6 +535,14 @@ class TauriBackend implements Backend {
   async inboxUnpair(): Promise<void> {
     const invoke = await this.api()
     await invoke('inbox_unpair')
+  }
+  async inboxImport(): Promise<ImportReport> {
+    const invoke = await this.api()
+    return await invoke<ImportReport>('inbox_import')
+  }
+  async onInboxProgress(cb: (p: ImportProgress) => void): Promise<() => void> {
+    const { listen } = await import('@tauri-apps/api/event')
+    return await listen<ImportProgress>('inbox://progress', (e) => cb(e.payload))
   }
 }
 
@@ -945,5 +974,11 @@ class MockBackend implements Backend {
   }
   async inboxUnpair(): Promise<void> {
     /* mock: niets te ontkoppelen */
+  }
+  async inboxImport(): Promise<ImportReport> {
+    throw new Error('Importeren kan alleen in de desktop-app.')
+  }
+  async onInboxProgress(): Promise<() => void> {
+    return () => {}
   }
 }

@@ -1526,6 +1526,7 @@ export function AppShell() {
           onReindex={() => void reindexVault()}
           onResetSettings={resetAppSettings}
           backend={backendRef.current}
+          onImported={() => void rebuildLifeline()}
         />
       )}
       {screensaverIds && (
@@ -1736,6 +1737,7 @@ function SettingsPanel({
   onReindex,
   onResetSettings,
   backend,
+  onImported,
 }: {
   settings: Settings
   onChange: (patch: Partial<Settings>) => void
@@ -1745,6 +1747,7 @@ function SettingsPanel({
   onReindex: () => void
   onResetSettings: () => void
   backend: Backend | null
+  onImported: () => void
 }) {
   const [tab, setTab] = useState<'weergave' | 'tijdlijn' | 'dia' | 'beheer' | 'telefoon' | 'sneltoetsen'>('weergave')
   const seg = (m: 'custom' | 'grid' | 'scatter'): React.CSSProperties => ({
@@ -2075,7 +2078,7 @@ function SettingsPanel({
           {tab === 'telefoon' && (
             <>
               {backend ? (
-                <SettingsPhone backend={backend} />
+                <SettingsPhone backend={backend} onImported={onImported} />
               ) : (
                 <div style={{ color: '#8a97b0', fontSize: 13 }}>Backend nog niet gereed…</div>
               )}
