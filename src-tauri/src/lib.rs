@@ -124,6 +124,7 @@ pub fn run() {
             commands::get_index_errors,
             inbox::inbox_pair,
             inbox::inbox_status,
+            inbox::inbox_show_qr,
             inbox::inbox_pending_count,
             inbox::inbox_rotate_upload_token,
             inbox::inbox_discard_pending,

@@ -276,6 +276,8 @@ export interface Backend {
   inboxStatus(): Promise<InboxStatus>
   /** Koppel een nieuwe telefoon; geeft de QR-payload éénmalig terug. */
   inboxPair(serverUrl: string, inviteCode: string): Promise<PairResult>
+  /** Toon de bestaande koppel-QR opnieuw (geen rotatie), uit de bewaarde koppeling. */
+  inboxShowQr(): Promise<PairResult>
   /** Aantal klaarstaande memories (badge). Werpt bij offline/niet-gekoppeld. */
   inboxPendingCount(): Promise<number>
   /** Nieuwe koppelcode (roteert upload-token + masterKey). Werpt `pending:<n>`
@@ -519,6 +521,10 @@ class TauriBackend implements Backend {
   async inboxPair(serverUrl: string, inviteCode: string): Promise<PairResult> {
     const invoke = await this.api()
     return await invoke<PairResult>('inbox_pair', { serverUrl, inviteCode })
+  }
+  async inboxShowQr(): Promise<PairResult> {
+    const invoke = await this.api()
+    return await invoke<PairResult>('inbox_show_qr')
   }
   async inboxPendingCount(): Promise<number> {
     const invoke = await this.api()
@@ -962,6 +968,9 @@ class MockBackend implements Backend {
   }
   async inboxPair(): Promise<PairResult> {
     throw new Error('Telefoon koppelen werkt alleen in de desktop-app.')
+  }
+  async inboxShowQr(): Promise<PairResult> {
+    throw new Error('Alleen in de desktop-app.')
   }
   async inboxPendingCount(): Promise<number> {
     throw new Error('niet gekoppeld')

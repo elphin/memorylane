@@ -48,6 +48,15 @@ fn b64url(bytes: &[u8]) -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
 }
 
+fn hex_to_bytes(hex: &str) -> Result<Vec<u8>, String> {
+    if hex.len() % 2 != 0 {
+        return Err("ongeldige hex-lengte".into());
+    }
+    (0..hex.len() / 2)
+        .map(|i| u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).map_err(|_| "geen hex".to_string()))
+        .collect()
+}
+
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
@@ -153,6 +162,19 @@ pub async fn inbox_status() -> Result<InboxStatus, String> {
         }),
         None => Ok(InboxStatus::default()),
     }
+}
+
+/// Toon de bestaande koppel-QR opnieuw (geen netwerk, geen rotatie): bouwt exact
+/// dezelfde payload uit de bewaarde koppeling. Handig als de QR kwijt is of om een
+/// extra telefoon te koppelen.
+#[tauri::command]
+pub async fn inbox_show_qr() -> Result<PairResult, String> {
+    let p = store::load()?.ok_or("Niet gekoppeld.")?;
+    let master_b64 = b64url(&hex_to_bytes(&p.master_key_hex)?);
+    Ok(PairResult {
+        qr_payload: qr(&p.server_url, &p.mailbox_id, &p.upload_token, &master_b64),
+        mailbox_short_id: short(&p.mailbox_id),
+    })
 }
 
 /// Aantal klaarstaande memories (voor de badge). Fout = niet gekoppeld of offline;

@@ -148,6 +148,16 @@ export function SettingsPhone({ backend, onImported }: { backend: Backend; onImp
     }
   }
 
+  async function showQr(): Promise<void> {
+    setError('')
+    try {
+      const r = await backend.inboxShowQr()
+      setQr(r.qrPayload)
+    } catch (e) {
+      setError(errMsg(e))
+    }
+  }
+
   async function unpair(): Promise<void> {
     setError('')
     // Verse telling ophalen (§9.1 eist een expliciete waarschuwing) — niet op de
@@ -411,6 +421,9 @@ export function SettingsPhone({ backend, onImported }: { backend: Backend; onImp
       {error && <div style={{ color: C.danger, fontSize: 12, marginTop: 10 }}>{error}</div>}
 
       <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
+        <button style={btn} disabled={busy} onClick={() => void showQr()}>
+          Toon QR-code
+        </button>
         <button style={btn} disabled={busy} onClick={() => void rotate(false)}>
           Nieuwe koppelcode
         </button>
@@ -423,8 +436,8 @@ export function SettingsPhone({ backend, onImported }: { backend: Backend; onImp
         </button>
       </div>
       <div style={desc}>
-        "Nieuwe koppelcode" vervangt je oude telefoon-koppeling (bijv. als je telefoon kwijt is). De
-        importknop voor klaarstaande memories komt bij de volgende stap.
+        "Toon QR-code" laat dezelfde koppeling opnieuw zien (om te heropenen of een tweede telefoon te
+        koppelen). "Nieuwe koppelcode" vervángt je oude koppeling (bijv. als je telefoon kwijt is).
       </div>
     </div>
   )
