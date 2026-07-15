@@ -1,6 +1,6 @@
 [
   {
-    "AllowedOrigins": ["https://REPLACE_ME_INBOX_ORIGIN"],
+    "AllowedOrigins": ["https://memorylane-inbox.misty-band-827b.workers.dev"],
     "AllowedMethods": ["PUT", "GET", "HEAD"],
     "AllowedHeaders": ["content-type"],
     "MaxAgeSeconds": 3600
