@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { Pairing } from '../store/db'
-import { deleteDraft, listDrafts, putMedia, saveDraft, type Draft } from '../store/db'
+import { deleteDraft, getMedia, listDrafts, putMedia, saveDraft, type Draft } from '../store/db'
 import { formatBytes, formatDateShort, todayISO, uuid } from '../util'
 import { DatePicker } from './DatePicker'
 import { UploadView } from './UploadView'
@@ -30,12 +30,37 @@ export function NewMemoryScreen({
   const [fileError, setFileError] = useState<string | null>(null)
   const fileInput = useRef<HTMLInputElement>(null)
 
-  // Herstel het laatste openstaande concept bij openen.
+  // Herstel het laatste openstaande concept bij openen — inclusief de thumbnails
+  // uit de opgeslagen media-blobs (object-URL's overleven een herlaad niet, dus
+  // zonder dit tonen herstelde foto's een lege placeholder i.p.v. de foto).
   useEffect(() => {
-    void listDrafts().then((all) => {
-      if (all[0]) setDraft(all[0])
+    void listDrafts().then(async (all) => {
+      // Alleen concepten mét inhoud tellen; lege rijen (uit oudere sessies)
+      // opruimen zodat listDrafts niet vervuilt en het herstel eenduidig is.
+      const withContent = all.filter((d) => d.title.trim() !== '' || d.note.trim() !== '' || d.media.length > 0)
+      for (const d of all) if (!withContent.includes(d)) void deleteDraft(d.id)
+      const keep = withContent[0] // listDrafts is op updatedAt aflopend gesorteerd
+      if (!keep) return
+      setDraft(keep)
+      const t: Record<string, string> = {}
+      for (const m of keep.media) {
+        if (!m.mime.startsWith('image/')) continue
+        const blob = await getMedia(keep.id, m.fileId)
+        if (blob) t[m.fileId] = URL.createObjectURL(blob)
+      }
+      setThumbs(t)
     })
   }, [])
+
+  // Object-URL's opruimen bij het verlaten van het scherm (geen geheugenlek).
+  const thumbsRef = useRef(thumbs)
+  thumbsRef.current = thumbs
+  useEffect(
+    () => () => {
+      for (const url of Object.values(thumbsRef.current)) URL.revokeObjectURL(url)
+    },
+    [],
+  )
 
   // Online/offline.
   useEffect(() => {
@@ -49,11 +74,17 @@ export function NewMemoryScreen({
     }
   }, [])
 
-  // Debounced concept-opslag (~300 ms).
+  // Debounced concept-opslag (~300 ms). NIET opslaan tijdens uploaden — anders kan
+  // een net-ingeplande timer het concept ná het wissen terugschrijven (met al
+  // verwijderde media-blobs). En een leeg concept slaan we niet op (voorkomt
+  // ophoping van lege rijen).
   useEffect(() => {
+    if (phase === 'uploading') return
+    const empty = draft.title.trim() === '' && draft.note.trim() === '' && draft.media.length === 0
+    if (empty) return
     const t = setTimeout(() => void saveDraft({ ...draft, updatedAt: new Date().toISOString() }), 300)
     return () => clearTimeout(t)
-  }, [draft])
+  }, [draft, phase])
 
   const patch = (p: Partial<Draft>): void => setDraft((d) => ({ ...d, ...p }))
 
@@ -85,6 +116,18 @@ export function NewMemoryScreen({
     // media-blob laten staan tot draft-delete; hier alleen uit de lijst.
   }
 
+  // Wis het concept (blobs incl.) en begin fris. Ook de uitweg voor een concept
+  // dat na een eerdere verzending is blijven hangen.
+  async function discardDraft(): Promise<void> {
+    if (!confirm('Dit concept weggooien? De foto’s en tekst worden gewist.')) return
+    await deleteDraft(draft.id)
+    for (const url of Object.values(thumbs)) URL.revokeObjectURL(url)
+    setThumbs({})
+    setDraft(emptyDraft())
+  }
+
+  const hasContent = draft.title.trim() !== '' || draft.note.trim() !== '' || draft.media.length > 0
+
   const totalBytes = draft.media.reduce((s, m) => s + m.plainBytes, 0)
   const videoCount = draft.media.filter((m) => m.mime.startsWith('video/')).length
   const photoCount = draft.media.length - videoCount
@@ -106,10 +149,15 @@ export function NewMemoryScreen({
           draft={draft}
           pairing={pairing}
           onExpired={onExpired}
-          onDone={async () => {
+          onUploaded={async () => {
+            // Meteen na een geslaagde upload: concept + blobs weg, zodat het niet
+            // opnieuw opduikt (ook niet na een herlaad) en niet nog eens te
+            // versturen is.
             await deleteDraft(draft.id)
             for (const url of Object.values(thumbs)) URL.revokeObjectURL(url)
             setThumbs({})
+          }}
+          onDone={() => {
             setDraft(emptyDraft())
             setPhase('form')
           }}
@@ -214,6 +262,16 @@ export function NewMemoryScreen({
             onChange={(e) => void addFiles(e.target.files)}
           />
         </div>
+
+        {hasContent && (
+          <button
+            className="muted"
+            onClick={() => void discardDraft()}
+            style={{ background: 'none', border: 0, textDecoration: 'underline', cursor: 'pointer', fontSize: 13, padding: 4, alignSelf: 'center' }}
+          >
+            Concept weggooien
+          </button>
+        )}
 
         <div className="sticky-cta">
           <button

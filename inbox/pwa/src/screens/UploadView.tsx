@@ -8,12 +8,16 @@ export function UploadView({
   draft,
   pairing,
   onExpired,
+  onUploaded,
   onDone,
   onKeepDraft,
 }: {
   draft: Draft
   pairing: Pairing
   onExpired: () => void
+  /** Vuurt zodra de upload IS geslaagd — ruim het concept hier op zodat het na
+   * een herlaad niet opnieuw als bewerkbaar/verstuurbaar concept opduikt. */
+  onUploaded: () => void | Promise<void>
   onDone: () => void
   onKeepDraft: () => void
 }) {
@@ -28,6 +32,13 @@ export function UploadView({
     try {
       await runUpload(draft, pairing, memoryId.current, setProgress)
       setState('done')
+      // Geslaagd → concept opruimen (best-effort; faalt dit zelden, dan blijft het
+      // concept staan maar is de upload al veilig binnen).
+      try {
+        await onUploaded()
+      } catch {
+        /* opruimen mislukt — niet fataal */
+      }
     } catch (e) {
       if (e instanceof ApiError && e.status === 401) {
         onExpired()
