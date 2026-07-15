@@ -1,6 +1,6 @@
 // MemoryLane Onderweg — Worker-entry: router + cron.
-// De echte brievenbus-API (§5.5) leeft onder /api/*. Static assets (PWA) worden
-// in fase 3 toegevoegd.
+// De brievenbus-API (§5.5) leeft onder /api/*; al het overige serveert de PWA
+// via de ASSETS-binding (static assets + SPA-fallback), zodat /pair de app opent.
 
 import { Hono } from 'hono'
 import type { ContentfulStatusCode } from 'hono/utils/http-status'
@@ -14,20 +14,6 @@ import { runCron } from './cron'
 const VERSION = '0.1.0'
 
 const app = new Hono<{ Bindings: Env }>()
-
-// Landingspagina (wordt in fase 3 vervangen door de PWA via static assets).
-app.get('/', (c) =>
-  c.html(
-    `<!doctype html><html lang="nl"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MemoryLane Onderweg</title>
-<style>body{font-family:system-ui,sans-serif;background:#171412;color:#f2ece4;
-display:grid;place-items:center;height:100vh;margin:0}main{text-align:center}
-h1{font-weight:600}small{color:#a89c8e}</style></head>
-<body><main><h1>MemoryLane&nbsp;Onderweg</h1>
-<small>Brievenbus actief · v${VERSION}</small></main></body></html>`,
-  ),
-)
 
 app.get('/api/health', (c) => c.json({ ok: true, service: 'memorylane-inbox', version: VERSION }))
 
@@ -47,6 +33,11 @@ app.get('/api/outbox', async (c) => {
 
 // Nette 404 voor onbekende API-routes.
 app.all('/api/*', (c) => c.json({ error: { code: 'not_found', message: 'Onbekend endpoint' } }, 404))
+
+// Al het overige (een pad zonder eigen asset) → de PWA. Bestaande assets (/, JS,
+// CSS, icon, manifest, sw) serveert Cloudflare zelf; hier serveren we index.html
+// zodat een onbekend pad de app opent i.p.v. een 404 (SPA-fallback).
+app.all('*', (c) => c.env.ASSETS.fetch(new URL('/', c.req.url).toString()))
 
 // Uniforme foutvorm: ApiError → { error: { code, message } }; onbekend → 500.
 app.onError((err, c) => {

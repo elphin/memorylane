@@ -4,6 +4,8 @@ export interface Env {
   // Bindings (wrangler.jsonc)
   DB: D1Database
   BUCKET: R2Bucket
+  // Static assets: de telefoon-PWA (SPA-fallback). Serveert /pair en de rest.
+  ASSETS: Fetcher
   // Config-var (wrangler.jsonc → vars)
   MAILBOX_LIMIT_GIB?: string
   // Secrets (wrangler secret put)

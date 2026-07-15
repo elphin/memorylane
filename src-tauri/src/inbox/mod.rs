@@ -84,10 +84,12 @@ fn is_local_http(s: &str) -> bool {
     host == "localhost" || host == "127.0.0.1"
 }
 
-/// De QR-payload (§7.1). Het fragment (`#…`) wordt door browsers niet naar de
-/// server gestuurd, dus token + sleutel blijven client-side.
+/// De QR-payload (§7.1). Wijst naar de root (`/#…`), niet naar een aparte
+/// /pair-route: de PWA leest het fragment ongeacht het pad, en de Worker serveert
+/// de PWA op `/`. Het fragment (`#…`) wordt door browsers niet naar de server
+/// gestuurd, dus token + sleutel blijven client-side.
 fn qr(server: &str, mailbox_id: &str, upload_token: &str, master_key_b64: &str) -> String {
-    format!("{server}/pair#v=1&mb={mailbox_id}&t={upload_token}&k={master_key_b64}")
+    format!("{server}/#v=1&mb={mailbox_id}&t={upload_token}&k={master_key_b64}")
 }
 
 fn now_iso() -> String {
@@ -269,7 +271,7 @@ mod tests {
 
     #[test]
     fn qr_payload_shape() {
-        assert_eq!(qr("https://h", "mb-1", "tok", "keyb64"), "https://h/pair#v=1&mb=mb-1&t=tok&k=keyb64");
+        assert_eq!(qr("https://h", "mb-1", "tok", "keyb64"), "https://h/#v=1&mb=mb-1&t=tok&k=keyb64");
     }
 
     #[test]
