@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <rect width="512" height="512" rx="112" fill="#B4552D"/>
+  <!-- tijdlijn -->
+  <line x1="96" y1="300" x2="416" y2="300" stroke="#F3E3D3" stroke-width="10" stroke-linecap="round"/>
+  <!-- kaarten die uit de lijn opstijgen -->
+  <rect x="120" y="150" width="96" height="72" rx="12" fill="#F3E3D3"/>
+  <rect x="300" y="120" width="96" height="72" rx="12" fill="#FAF6F0"/>
+  <line x1="168" y1="222" x2="168" y2="300" stroke="#F3E3D3" stroke-width="8" stroke-linecap="round"/>
+  <line x1="348" y1="192" x2="348" y2="300" stroke="#F3E3D3" stroke-width="8" stroke-linecap="round"/>
+  <!-- huidig moment -->
+  <circle cx="256" cy="300" r="26" fill="#F3E3D3"/>
+  <circle cx="256" cy="300" r="12" fill="#B4552D"/>
+</svg>

@@ -3,16 +3,29 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "MemoryLane Onderweg — telefoon-PWA. Fase 2: alleen de cryptolaag + testvectoren.",
+  "description": "MemoryLane Onderweg — telefoon-PWA: memory vastleggen → versleuteld naar de brievenbus.",
   "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "gen-vectors": "tsx scripts/gen-vectors.ts"
   },
+  "dependencies": {
+    "idb": "^8.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
   "devDependencies": {
     "@types/node": "^22.10.2",
+    "@types/react": "^19.0.1",
+    "@types/react-dom": "^19.0.2",
+    "@vitejs/plugin-react": "^4.3.4",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
+    "vite": "^6.0.5",
+    "vite-plugin-pwa": "^0.21.1",
     "vitest": "^2.1.9"
   }
 }

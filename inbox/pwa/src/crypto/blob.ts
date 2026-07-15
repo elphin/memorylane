@@ -50,7 +50,7 @@ export async function encryptBlob(
   memoryId: string,
   fileId: string,
   nonceFn: NonceFn = randomNonce,
-): Promise<Uint8Array> {
+): Promise<Uint8Array<ArrayBuffer>> {
   if (plaintext.length === 0) throw new Error('leeg bestand is verboden')
   const key = await crypto.subtle.importKey(
     'raw',
@@ -88,7 +88,7 @@ export async function decryptBlob(
   masterKey: Uint8Array,
   memoryId: string,
   fileId: string,
-): Promise<Uint8Array> {
+): Promise<Uint8Array<ArrayBuffer>> {
   if (blob.length < 16) throw new Error('te kort')
   if (!eq(blob.subarray(0, 4), MAGIC)) throw new Error('verkeerde magic')
   if (blob[4] !== VERSION) throw new Error('verkeerde versie')
@@ -130,7 +130,7 @@ export async function decryptBlob(
 }
 
 // ---- helpers ----
-function concat(parts: Uint8Array[]): Uint8Array {
+function concat(parts: Uint8Array[]): Uint8Array<ArrayBuffer> {
   const len = parts.reduce((s, p) => s + p.length, 0)
   const out = new Uint8Array(len)
   let o = 0
