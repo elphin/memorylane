@@ -4,6 +4,7 @@ import type { Pairing } from '../store/db'
 import { deleteDraft, getMedia, listDrafts, putMedia, saveDraft, type Draft } from '../store/db'
 import { formatBytes, formatDateShort, todayISO, uuid } from '../util'
 import { DatePicker } from './DatePicker'
+import { InstallHint } from './InstallHint'
 import { UploadView } from './UploadView'
 
 const MAX_FILE_BYTES = 500 * 1024 * 1024 // 500 MB praktische PWA-limiet (§6.5)
@@ -176,6 +177,7 @@ export function NewMemoryScreen({
         </div>
       )}
       <div className="screen stack">
+        <InstallHint />
         <div>
           <label className="label" htmlFor="titel">
             Titel
