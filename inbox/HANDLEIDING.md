@@ -7,6 +7,16 @@ al klaar; dit zijn de stappen die alleen jij kunt doen (inloggen is interactief)
 Werk in de map `inbox/worker/`. Commando's gebruiken `npx wrangler` (de meegeleverde
 versie); een globaal geïnstalleerde `wrangler` mag ook.
 
+## Voordat je begint
+- **Node.js** geïnstalleerd (versie 20 of nieuwer). Check: `node -v`.
+- Een **Cloudflare-account** (gratis; heb je al). Verder niets — geen creditcard
+  nodig voor de free tiers.
+- Wat je aan het eind hebt: een URL zoals
+  `https://memorylane-inbox.<jouw-account>.workers.dev` die de brievenbus-API
+  draait. Die URL vul je later in de desktop-app in bij het koppelen van je
+  telefoon (dat komt in een volgende fase; nu nog niet nodig).
+- **Tijd:** ~10–15 minuten, eenmalig.
+
 ---
 
 ## Stap 0 — eerst de R2 API-sleutels maken (in het dashboard)
