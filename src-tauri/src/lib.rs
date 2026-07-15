@@ -122,6 +122,12 @@ pub fn run() {
             commands::search,
             commands::get_screensaver_photos,
             commands::get_index_errors,
+            inbox::inbox_pair,
+            inbox::inbox_status,
+            inbox::inbox_pending_count,
+            inbox::inbox_rotate_upload_token,
+            inbox::inbox_discard_pending,
+            inbox::inbox_unpair,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

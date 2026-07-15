@@ -169,6 +169,21 @@ export interface ThumbSource {
   hue?: number
 }
 
+/** Niet-geheime koppelstatus van de telefoon-brievenbus (fase 4). */
+export interface InboxStatus {
+  configured: boolean
+  serverUrl?: string
+  mailboxShortId?: string
+  /** RFC 3339-tijdstip van koppelen. */
+  pairedAt?: string
+}
+
+/** Resultaat van pairen/roteren: de QR-payload + korte mailbox-id (éénmalig). */
+export interface PairResult {
+  qrPayload: string
+  mailboxShortId: string
+}
+
 export interface Backend {
   readonly isMock: boolean
   getVaultPath(): Promise<string | null>
@@ -238,6 +253,21 @@ export interface Backend {
     exclude: string[],
   ): Promise<string[]>
   thumb(itemId: string, size: 64 | 128 | 256 | 1024 | 2048): ThumbSource
+
+  // ---- Mobiele inbox (telefoon-brievenbus, fase 4) ----
+  /** Niet-geheime koppelstatus (nooit tokens/sleutels). */
+  inboxStatus(): Promise<InboxStatus>
+  /** Koppel een nieuwe telefoon; geeft de QR-payload éénmalig terug. */
+  inboxPair(serverUrl: string, inviteCode: string): Promise<PairResult>
+  /** Aantal klaarstaande memories (badge). Werpt bij offline/niet-gekoppeld. */
+  inboxPendingCount(): Promise<number>
+  /** Nieuwe koppelcode (roteert upload-token + masterKey). Werpt `pending:<n>`
+   * zolang er nog te importeren memories staan. */
+  inboxRotateUploadToken(): Promise<PairResult>
+  /** Gooit alle nog-pending memories weg; geeft het aantal terug. */
+  inboxDiscardPending(): Promise<number>
+  /** Ontkoppel deze desktop (mailbox weg op server + geheimen lokaal gewist). */
+  inboxUnpair(): Promise<void>
 }
 
 // ---- Tauri-detectie ------------------------------------------------------
@@ -459,6 +489,31 @@ class TauriBackend implements Backend {
 
   thumb(itemId: string, size: number): ThumbSource {
     return { url: thumbUrl(itemId, size) }
+  }
+
+  async inboxStatus(): Promise<InboxStatus> {
+    const invoke = await this.api()
+    return await invoke<InboxStatus>('inbox_status')
+  }
+  async inboxPair(serverUrl: string, inviteCode: string): Promise<PairResult> {
+    const invoke = await this.api()
+    return await invoke<PairResult>('inbox_pair', { serverUrl, inviteCode })
+  }
+  async inboxPendingCount(): Promise<number> {
+    const invoke = await this.api()
+    return await invoke<number>('inbox_pending_count')
+  }
+  async inboxRotateUploadToken(): Promise<PairResult> {
+    const invoke = await this.api()
+    return await invoke<PairResult>('inbox_rotate_upload_token')
+  }
+  async inboxDiscardPending(): Promise<number> {
+    const invoke = await this.api()
+    return await invoke<number>('inbox_discard_pending')
+  }
+  async inboxUnpair(): Promise<void> {
+    const invoke = await this.api()
+    await invoke('inbox_unpair')
   }
 }
 
@@ -869,5 +924,26 @@ class MockBackend implements Backend {
       this.thumbCache.set(itemId, url)
     }
     return { url }
+  }
+
+  // Mobiele inbox: alleen echt in de desktop-app (keyring + HTTP in Rust). In
+  // browser-dev doen we alsof er niets gekoppeld is en weigeren we de acties net.
+  async inboxStatus(): Promise<InboxStatus> {
+    return { configured: false }
+  }
+  async inboxPair(): Promise<PairResult> {
+    throw new Error('Telefoon koppelen werkt alleen in de desktop-app.')
+  }
+  async inboxPendingCount(): Promise<number> {
+    throw new Error('niet gekoppeld')
+  }
+  async inboxRotateUploadToken(): Promise<PairResult> {
+    throw new Error('Alleen in de desktop-app.')
+  }
+  async inboxDiscardPending(): Promise<number> {
+    return 0
+  }
+  async inboxUnpair(): Promise<void> {
+    /* mock: niets te ontkoppelen */
   }
 }

@@ -10,6 +10,7 @@ import { RenderEngine } from '../render/core/engine'
 import { EventScene } from '../render/scenes/event'
 import type { NodePosition } from '../render/scenes/scene'
 import { Screensaver } from './Screensaver'
+import { SettingsPhone } from './SettingsPhone'
 import { FocusScene } from '../render/scenes/focus'
 import { LifelineScene } from '../render/scenes/lifeline'
 import type { Scene } from '../render/scenes/scene'
@@ -1524,6 +1525,7 @@ export function AppShell() {
           onChangeVault={() => void pickVault()}
           onReindex={() => void reindexVault()}
           onResetSettings={resetAppSettings}
+          backend={backendRef.current}
         />
       )}
       {screensaverIds && (
@@ -1733,6 +1735,7 @@ function SettingsPanel({
   onChangeVault,
   onReindex,
   onResetSettings,
+  backend,
 }: {
   settings: Settings
   onChange: (patch: Partial<Settings>) => void
@@ -1741,8 +1744,9 @@ function SettingsPanel({
   onChangeVault: () => void
   onReindex: () => void
   onResetSettings: () => void
+  backend: Backend | null
 }) {
-  const [tab, setTab] = useState<'weergave' | 'tijdlijn' | 'dia' | 'beheer' | 'sneltoetsen'>('weergave')
+  const [tab, setTab] = useState<'weergave' | 'tijdlijn' | 'dia' | 'beheer' | 'telefoon' | 'sneltoetsen'>('weergave')
   const seg = (m: 'custom' | 'grid' | 'scatter'): React.CSSProperties => ({
     ...ghostBtn,
     background: settings.defaultLayout === m ? '#3b82f6' : 'transparent',
@@ -1835,6 +1839,7 @@ function SettingsPanel({
           {tabBtn('tijdlijn', 'Tijdlijn & canvas')}
           {tabBtn('dia', 'Diavoorstelling')}
           {tabBtn('beheer', 'Beheer')}
+          {tabBtn('telefoon', 'Telefoon')}
           {tabBtn('sneltoetsen', 'Sneltoetsen')}
         </div>
         <div style={{ overflowY: 'auto', padding: '14px 22px 6px', flex: '1 1 auto' }}>
@@ -2064,6 +2069,15 @@ function SettingsPanel({
               </button>
               {desc(
                 'Zet alle app-instellingen (weergave, diavoorstelling, per-memory onthouden standen) terug naar standaard. Je foto’s, memories en curatie in de vault blijven ongemoeid.',
+              )}
+            </>
+          )}
+          {tab === 'telefoon' && (
+            <>
+              {backend ? (
+                <SettingsPhone backend={backend} />
+              ) : (
+                <div style={{ color: '#8a97b0', fontSize: 13 }}>Backend nog niet gereed…</div>
               )}
             </>
           )}
