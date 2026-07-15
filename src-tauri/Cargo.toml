@@ -30,6 +30,11 @@ kamadak-exif = "0.6"
 blake3 = "1"
 uuid = { version = "1", features = ["v4"] }
 trash = "5"
+# Inbox-cryptolaag (mobiele brievenbus): AES-256-GCM + HKDF-SHA256, spiegel van
+# de TS-kant (inbox/pwa/src/crypto). Bewezen byte-identiek via de gedeelde vectoren.
+aes-gcm = "0.10"
+hkdf = "0.12"
+sha2 = "0.10"
 
 [dev-dependencies]
 tempfile = "3"

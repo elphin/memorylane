@@ -1,4 +1,5 @@
 mod commands;
+mod inbox;
 mod index;
 mod media;
 mod model;

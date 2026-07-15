@@ -1,0 +1,56 @@
+{
+  "masterKeyHex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "vectors": [
+    {
+      "name": "vector-01-text",
+      "memoryId": "11111111-1111-4111-8111-111111111111",
+      "fileId": "22222222-2222-4222-8222-222222222222",
+      "plaintext": {
+        "kind": "utf8",
+        "value": "Hallo MemoryLane! 🌍\nTweede regel: café — ‘quote’."
+      },
+      "expectedSha256": "9578046fb30db3469169e40aad1050a82470a41b209533e52589638991cc121f",
+      "expectedLen": 103
+    },
+    {
+      "name": "vector-02-multichunk",
+      "memoryId": "11111111-1111-4111-8111-111111111111",
+      "fileId": "33333333-3333-4333-8333-333333333333",
+      "plaintext": {
+        "kind": "pattern",
+        "len": 16777316,
+        "seed": 7
+      },
+      "expectedSha256": "2ff332f4717ecdfdc59bb46bc7cfdb679eeb578e7446ab15ac84b213034e14da",
+      "expectedLen": 16777416
+    },
+    {
+      "name": "vector-03-envelope",
+      "memoryId": "11111111-1111-4111-8111-111111111111",
+      "fileId": "envelope",
+      "plaintext": {
+        "kind": "utf8",
+        "value": "{\"v\":1,\"memoryId\":\"11111111-1111-4111-8111-111111111111\",\"title\":\"Weekend\",\"startAt\":\"2026-07-11\",\"files\":[]}"
+      },
+      "expectedSha256": "958b48529553e6c227a529c94af745891e771d3dda1c458b7bc8d86674cc025f",
+      "expectedLen": 153
+    }
+  ],
+  "corruptions": [
+    {
+      "name": "vector-04-tag-bitflip",
+      "base": "vector-01-text",
+      "mutation": "flip_last_byte"
+    },
+    {
+      "name": "vector-05-swap-chunks",
+      "base": "vector-02-multichunk",
+      "mutation": "swap_first_two_chunks"
+    },
+    {
+      "name": "vector-06-lie-size",
+      "base": "vector-01-text",
+      "mutation": "increment_plaintext_size"
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "name": "memorylane-inbox-pwa",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "MemoryLane Onderweg — telefoon-PWA. Fase 2: alleen de cryptolaag + testvectoren.",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "gen-vectors": "tsx scripts/gen-vectors.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.9"
+  }
+}
