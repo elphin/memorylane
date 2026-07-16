@@ -22,6 +22,10 @@ const AXIS_W = 2400 // wereldbreedte van de jaar-as (Jan..Dec) bij zoom=1
 const THUMB_W = 168
 const THUMB_H = 126
 const BORDER = 8
+// Zichtbare witte rand-dikte in scherm-px (constant over alle tegels, los van hun
+// grootte). BORDER blijft de layout-marge (hit-box, titel-offset); de getekende
+// rand is dunner en gelijk voor elke tegel.
+const BORDER_PX = 6
 const CARD_ASPECT = THUMB_W / THUMB_H
 
 // Kaart-schermhoogtes (px) naar zwaarte. Vast op het scherm, ongeacht de zoom.
@@ -393,7 +397,7 @@ export class YearScene implements Scene {
     const card = new Container()
     const frame = new Graphics()
     frame
-      .roundRect(-THUMB_W / 2 - BORDER, -THUMB_H / 2 - BORDER, THUMB_W + BORDER * 2, THUMB_H + BORDER * 2, 5)
+      .rect(-THUMB_W / 2 - BORDER, -THUMB_H / 2 - BORDER, THUMB_W + BORDER * 2, THUMB_H + BORDER * 2)
       .fill(0xf5f5f0)
     card.addChild(frame)
     if (hasCover) {
@@ -775,16 +779,15 @@ export class YearScene implements Scene {
         const showCard = inView && n.appear > 0.01
         n.card.visible = showCard
         if (showCard) {
-          // Witte rand op CONSTANTE schermdikte houden: de kaart wordt met
-          // baseScreenScale geschaald, dus teken de rand-breedte omgekeerd mee
-          // (b = BORDER / baseScreenScale) → grote/belangrijke tegels krijgen
+          // Witte rand op CONSTANTE schermdikte (BORDER_PX) houden: de kaart wordt
+          // met baseScreenScale geschaald, dus teken de rand-breedte omgekeerd mee
+          // (b = BORDER_PX / baseScreenScale) → grote/belangrijke tegels krijgen
           // geen dikkere rand. Alleen hertekenen als de schaal wijzigt (resize).
           if (n.frame && n.frameDrawnScale !== n.baseScreenScale) {
             n.frameDrawnScale = n.baseScreenScale
-            const b = BORDER / n.baseScreenScale
-            const r = 5 / n.baseScreenScale
+            const b = BORDER_PX / n.baseScreenScale
             n.frame.clear()
-            n.frame.roundRect(-THUMB_W / 2 - b, -THUMB_H / 2 - b, THUMB_W + b * 2, THUMB_H + b * 2, r).fill(0xf5f5f0)
+            n.frame.rect(-THUMB_W / 2 - b, -THUMB_H / 2 - b, THUMB_W + b * 2, THUMB_H + b * 2).fill(0xf5f5f0)
           }
           const targetHover = n.eventId === this.hoveredId ? 1.05 : 1
           n.hover += (targetHover - n.hover) * 0.2
