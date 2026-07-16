@@ -11,6 +11,7 @@ import { EventScene } from '../render/scenes/event'
 import type { NodePosition } from '../render/scenes/scene'
 import { Screensaver } from './Screensaver'
 import { SettingsPhone } from './SettingsPhone'
+import { FocusVideoLayer } from './FocusVideoLayer'
 import { FocusScene } from '../render/scenes/focus'
 import { LifelineScene } from '../render/scenes/lifeline'
 import type { Scene } from '../render/scenes/scene'
@@ -287,6 +288,12 @@ export function AppShell() {
   // "Alles passend"-knop: zichtbaar als er inhoud buiten beeld valt (L2).
   const [showFit, setShowFit] = useState(false)
   const showFitRef = useRef(false)
+  // L3 video-overlay: id van de gefocuste video (null = geen overlay). De ref is
+  // de vergelijkings-spiegel voor de frame-lus; de wrapper wordt imperatief
+  // gepositioneerd.
+  const [focusVideoId, setFocusVideoId] = useState<string | null>(null)
+  const focusVideoIdRef = useRef<string | null>(null)
+  const videoWrapRef = useRef<HTMLDivElement>(null)
   // Ref-spiegel zodat de (één keer opgezette) engine-closures de actuele
   // voorkeuren lezen zonder stale closure.
   const settingsRef = useRef(settings)
@@ -767,6 +774,29 @@ export function AppShell() {
 
       engine.onFrame = (ctx) => {
         sceneRef.current?.update(ctx)
+
+        // L3 video-overlay: mount de DOM-speler alleen als het gefocuste item een
+        // video is én er geen transitie loopt (anders staat 'ie fout t.o.v. de
+        // inzoomende poster). Positie elke frame imperatief (geen React-render).
+        const focusScene =
+          levelRef.current === 'focus' && !ctx.engine.isTransitioning ? sceneRef.current : null
+        const focusItem = focusScene?.currentItem?.() ?? null
+        const vidId = focusItem && focusItem.itemType === 'video' ? focusItem.id : null
+        if (vidId !== focusVideoIdRef.current) {
+          focusVideoIdRef.current = vidId
+          setFocusVideoId(vidId)
+        }
+        if (vidId) {
+          const r = focusScene?.screenRect?.()
+          const wrap = videoWrapRef.current
+          if (r && wrap) {
+            wrap.style.left = `${r.left}px`
+            wrap.style.top = `${r.top}px`
+            wrap.style.width = `${r.width}px`
+            wrap.style.height = `${r.height}px`
+            wrap.style.visibility = 'visible'
+          }
+        }
         // Buiten de jaar-view geen elastische scroll-grens (de jaar-scene zet 'm
         // elke frame; andere niveaus zouden anders een stale grens erven).
         if (levelRef.current !== 'year') ctx.engine.camera.boundsX = null
@@ -1536,6 +1566,16 @@ export function AppShell() {
           speedMs={settings.diaSpeed * 1000}
           mode={settings.diaMode}
           onClose={() => setScreensaverIds(null)}
+        />
+      )}
+      {focusVideoId && backendRef.current && (
+        <FocusVideoLayer
+          ref={videoWrapRef}
+          src={backendRef.current.mediaUrl(focusVideoId)}
+          poster={backendRef.current.thumb(focusVideoId, 1024).url ?? ''}
+          canStep={(currentItemsRef.current?.length ?? 0) > 1}
+          onPrev={() => sceneRef.current?.step?.(-1)}
+          onNext={() => sceneRef.current?.step?.(1)}
         />
       )}
       {showFit &&

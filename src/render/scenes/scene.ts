@@ -89,6 +89,11 @@ export interface Scene {
   readonly baseZoom?: number
   /** Id van het momenteel gefocuste item (alleen L3), voor bijv. verwijderen. */
   currentId?(): string | null
+  /** Het momenteel gefocuste item (alleen L3) — voor de video-overlay (type). */
+  currentItem?(): Item | null
+  /** CSS-schermrechthoek van het gefocuste item (alleen L3), of null. Alleen
+   * betrouwbaar buiten een transitie. Voor het plaatsen van de DOM-video. */
+  screenRect?(): { left: number; top: number; width: number; height: number } | null
   /** Muis-hover op een wereldpunt (of null bij verlaten) — voor micro-animaties. */
   onHover?(worldX: number | null, worldY: number): void
   destroy(): void

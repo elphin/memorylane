@@ -26,6 +26,10 @@ export class FocusScene implements Scene {
   // tekst) — bepaalt de camera-fit én de hit-test.
   private contentW = FOCUS
   private contentH = FOCUS
+  // Werkelijk WEERGEGEVEN afmeting (foto na contain-fit = tw×th; tekst = kaart).
+  // Voor de DOM-video-overlay die exact over de video moet liggen.
+  private dispW = FOCUS
+  private dispH = FOCUS
   // Laatst gefitte (geklemde) zoom; de app-shell gebruikt dit als referentie voor
   // de "ver uitzoomen = terug"-drempel, zodat stappen naar een grotere sibling
   // (lange notitie) niet meteen als uitzoomen wordt gelezen.
@@ -90,6 +94,8 @@ export class FocusScene implements Scene {
       this.display.addChild(text)
       this.contentW = CARD_W
       this.contentH = cardH
+      this.dispW = CARD_W
+      this.dispH = cardH
     } else {
       // Witte fotorand die zich straks (na load) om de werkelijke foto vouwt.
       const frame = new Graphics()
@@ -104,6 +110,8 @@ export class FocusScene implements Scene {
       this.currentKey = `focus-${item.id}`
       this.contentW = FOCUS
       this.contentH = FOCUS
+      this.dispW = FOCUS
+      this.dispH = FOCUS
       this.drawPhotoFrame(FOCUS, FOCUS)
     }
 
@@ -159,7 +167,9 @@ export class FocusScene implements Scene {
     // Niet navigeren terwijl de gebruiker in een invoerveld typt (bewerk-overlay):
     // dan zijn de pijltjes voor de tekstcursor, niet voor vorige/volgende item.
     const el = document.activeElement
-    if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) return
+    // Ook een gefocuste <video> overslaan: dan zijn de pijltjes voor spoelen (de
+    // chevrons/klik doen de sibling-navigatie), niet voor vorige/volgende item.
+    if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'VIDEO')) return
     if (e.key === 'ArrowLeft') this.step(-1)
     else if (e.key === 'ArrowRight') this.step(1)
   }
@@ -178,6 +188,8 @@ export class FocusScene implements Scene {
       const tw = tex.width * s
       const th = tex.height * s
       this.sprite.setSize(tw, th)
+      this.dispW = tw
+      this.dispH = th
       this.drawPhotoFrame(tw, th)
       if (this.caption) this.caption.position.set(0, th / 2 + PHOTO_BORDER + 18)
       this.loaded = true
@@ -201,6 +213,27 @@ export class FocusScene implements Scene {
 
   currentId(): string | null {
     return this.current?.id ?? null
+  }
+
+  /** Het huidige item (voor de app-shell: type-detectie t.b.v. de video-overlay). */
+  currentItem(): Item | null {
+    return this.current ?? null
+  }
+
+  /** CSS-schermrechthoek van het weergegeven item (of null). Alleen betrouwbaar
+   * als er GEEN transitie loopt (de reveal transformeert de root los van de
+   * camera; dan klopt worldToScreen niet). De app-shell gebruikt dit om de
+   * DOM-video exact over de video te leggen. */
+  screenRect(): { left: number; top: number; width: number; height: number } | null {
+    const item = this.current
+    if (!item) return null
+    const vp = this.engine.viewport()
+    const cam = this.engine.camera
+    const hw = this.dispW / 2
+    const hh = this.dispH / 2
+    const tl = cam.worldToScreen(-hw, -hh, vp)
+    const br = cam.worldToScreen(hw, hh, vp)
+    return { left: tl.x, top: tl.y, width: br.x - tl.x, height: br.y - tl.y }
   }
 
   destroy(): void {

@@ -270,6 +270,8 @@ export interface Backend {
     exclude: string[],
   ): Promise<string[]>
   thumb(itemId: string, size: 64 | 128 | 256 | 1024 | 2048): ThumbSource
+  /** URL naar het originele mediabestand (voor <video>-afspelen). Leeg in de mock. */
+  mediaUrl(itemId: string): string
 
   // ---- Mobiele inbox (telefoon-brievenbus, fase 4) ----
   /** Niet-geheime koppelstatus (nooit tokens/sleutels). */
@@ -307,6 +309,13 @@ function thumbUrl(itemId: string, size: number): string {
   return isWindows
     ? `http://thumb.localhost/${id}?size=${size}`
     : `thumb://localhost/${id}?size=${size}`
+}
+
+/** media://-URL voor het ORIGINELE bestand (video afspelen). Windows → http-map. */
+function mediaUrlFor(itemId: string): string {
+  const isWindows = typeof navigator !== 'undefined' && /Windows/i.test(navigator.userAgent)
+  const id = encodeURIComponent(itemId)
+  return isWindows ? `http://media.localhost/${id}` : `media://localhost/${id}`
 }
 
 // ---- Tauri-backend -------------------------------------------------------
@@ -512,6 +521,9 @@ class TauriBackend implements Backend {
 
   thumb(itemId: string, size: number): ThumbSource {
     return { url: thumbUrl(itemId, size) }
+  }
+  mediaUrl(itemId: string): string {
+    return mediaUrlFor(itemId)
   }
 
   async inboxStatus(): Promise<InboxStatus> {
@@ -960,6 +972,10 @@ class MockBackend implements Backend {
       this.thumbCache.set(itemId, url)
     }
     return { url }
+  }
+  mediaUrl(): string {
+    // Geen echt bestand in browser-dev; de speler-UI (poster/chevrons) is wel te zien.
+    return ''
   }
 
   // Mobiele inbox: alleen echt in de desktop-app (keyring + HTTP in Rust). In
