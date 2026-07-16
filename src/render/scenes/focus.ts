@@ -3,7 +3,7 @@
 // terug naar het canvas (L2). Foto's contain-fit (hele foto zichtbaar), tekst
 // als grote kaart.
 
-import { Container, Graphics, Sprite, Text, Texture } from 'pixi.js'
+import { BlurFilter, Container, Graphics, Sprite, Text, Texture } from 'pixi.js'
 import type { Backend, Item } from '../../lib/backend'
 import type { FrameContext, RenderEngine } from '../core/engine'
 import type { Scene } from './scene'
@@ -18,6 +18,10 @@ const easeOutCubic = (t: number): number => 1 - Math.pow(1 - t, 3)
 
 export class FocusScene implements Scene {
   readonly root = new Container()
+  // Geblurde achtergrond-vulling (alleen in content-beeldvullend): een uitvergrote,
+  // vervaagde kopie van de huidige foto/poster die de zwarte balken vult. Achter
+  // `display`, zodat de slide-transitie en de video-verberging 'm niet raken.
+  private bgBlur = new Sprite(Texture.WHITE)
   private display = new Container()
   private index: number
   private sprite: Sprite | null = null
@@ -57,6 +61,16 @@ export class FocusScene implements Scene {
     private onStep?: (delta: number, currentId: string | null) => void,
   ) {
     this.index = Math.max(0, Math.min(startIndex, items.length - 1))
+    // Blur-achtergrond als EERSTE child (achter alles). Donkere tint voor contrast
+    // met de scherpe voorgrond; de blur-filter met ruime padding zodat de vervaging
+    // niet hard afkapt aan de sprite-rand.
+    this.bgBlur.anchor.set(0.5)
+    this.bgBlur.tint = 0x707070
+    this.bgBlur.visible = false
+    const blur = new BlurFilter({ strength: 40, quality: 4 })
+    blur.padding = 60
+    this.bgBlur.filters = [blur]
+    this.root.addChild(this.bgBlur)
     this.root.addChild(this.display)
     engine.world.addChild(this.root)
     this.build()
@@ -196,6 +210,34 @@ export class FocusScene implements Scene {
       this.baseZoom = Math.max(this.engine.camera.minZoom, Math.min(zoom, 2))
     }
     this.engine.jumpCamera(0, 0, this.baseZoom)
+    this.updateBlurBg()
+  }
+
+  /** (Her)plaats de geblurde achtergrond-vulling. Alleen in content-beeldvullend en
+   * voor foto/video met een geladen textuur: schaal een uitvergrote, vervaagde
+   * kopie zó dat 'ie de hele viewport (op baseZoom) dekt, ruim overschaald zodat de
+   * zachte blur-rand buiten beeld valt. Tekst-items (geen sprite) tonen geen bg; een
+   * nog-niet-geladen foto laat de vorige bg staan (geen wit-flikker per item-stap). */
+  private updateBlurBg(): void {
+    const bg = this.bgBlur
+    if (!this.fullscreen || this.sprite === null) {
+      bg.visible = false
+      return
+    }
+    // Nog geen echte textuur (foto laadt) → vorige bg ongemoeid laten.
+    const tex = this.sprite.texture
+    if (!this.loaded || tex === Texture.WHITE) return
+    bg.texture = tex
+    const vp = this.engine.viewport()
+    const z = this.baseZoom || 1
+    const worldW = vp.width / z
+    const worldH = vp.height / z
+    const OVER = 1.4 // overschaal-marge: zachte blur-rand blijft buiten beeld
+    const cover = Math.max((worldW * OVER) / tex.width, (worldH * OVER) / tex.height)
+    bg.width = tex.width * cover
+    bg.height = tex.height * cover
+    bg.position.set(0, 0)
+    bg.visible = true
   }
 
   /** Werkelijk weergegeven inhoudsmaat (foto = tw×th; video = kader op ware
