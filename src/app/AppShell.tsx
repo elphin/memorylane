@@ -523,6 +523,16 @@ export function AppShell() {
       })
       sceneRef.current = scene
       engine.revealScene(scene.root, 'out')
+      // Wis de elastische jaar-scroll-staat SYNCHROON. Anders draait op de
+      // eerstvolgende tick `tickInertia` nog met de oude jaar-`boundsX` (die pas
+      // later in `onFrame` op null gaat) én een `rawX` die door de pointerdown van
+      // de klik op een uit-de-band gescrollde camera-x gepegd is → de bounce-tak
+      // vuurt, verspringt de camera én roept `onChange()` aan, wat de net gestarte
+      // reveal/exit hard afbreekt (abrupte terugsprong). Escape mist die pointerdown
+      // en trof dit niet. jumpCamera zette de camera al op de lifeline; peg de
+      // elastische positie daarop en haal de grens weg.
+      engine.camera.boundsX = null
+      engine.syncElastic()
       levelRef.current = 'lifeline'
       setUiLevel('lifeline')
       setHeader({ text: 'Memory Lane', dir: 'out' })
@@ -685,6 +695,13 @@ export function AppShell() {
         // camera-fit meteen klopt); valt terug op de globale standaard.
         initEventView(scene, eventId)
         revealScene(engine, scene, dir)
+        // Zelfde elastische-staat-reset als bij het uitzoomen naar de lifeline: een
+        // naar de rand gescrollde jaar-view (camera buiten `boundsX`) + de pointerdown
+        // van een klik op de rand-tegel pegt `rawX` uit de band; zonder deze reset
+        // zou `tickInertia` op de eerstvolgende tick (met nog de oude jaar-`boundsX`)
+        // de camera verspringen en de zojuist gestarte reveal hard afbreken.
+        engine.camera.boundsX = null
+        engine.syncElastic()
         levelRef.current = 'event'
         setUiLevel('event')
         setHeader({ text: detail.event.title || detail.event.startAt, dir })
