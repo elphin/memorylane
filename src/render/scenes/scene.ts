@@ -109,5 +109,16 @@ export interface Scene {
   setContentHidden?(hidden: boolean): void
   /** Muis-hover op een wereldpunt (of null bij verlaten) — voor micro-animaties. */
   onHover?(worldX: number | null, worldY: number): void
+
+  // ---- Toetsenbord-navigatie (spatial focus, L0/L1/L2) ----
+  /** Zet de focus op het item het dichtst bij het scherm-midden; geeft het id. */
+  focusFirst?(): string | null
+  /** Verplaats de focus naar de dichtstbijzijnde buur in een richting; geeft het id. */
+  focusNeighbor?(dir: 'left' | 'right' | 'up' | 'down'): string | null
+  /** Id van het momenteel toetsenbord-gefocuste item, of null. */
+  focusedId?(): string | null
+  /** Wis de toetsenbord-focus (terug naar muis-modus). */
+  clearKbFocus?(): void
+
   destroy(): void
 }

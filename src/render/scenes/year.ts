@@ -197,6 +197,9 @@ export class YearScene implements Scene {
   private cardNodes: Node[] = [] // alle memory-tegels, op belang gesorteerd (packing-volgorde)
   private monthLabels: { text: Text; midX: number }[] = []
   private hoveredId: string | null = null
+  // Toetsenbord-focus (spatial nav): id van de gefocuste memory + de markeer-ring.
+  private kbFocusId: string | null = null
+  private focusRing = new Graphics()
   private primed = false // eerste frame snapt naar de packing-toestand; daarna animeren
   private yearStart = 0
   private span = 1
@@ -294,6 +297,8 @@ export class YearScene implements Scene {
     this.root.addChild(this.leaders)
     this.root.addChild(this.dotsLayer)
     this.root.addChild(this.cardsLayer)
+    this.focusRing.visible = false
+    this.root.addChild(this.focusRing) // bovenop de kaarten
 
     // ---- Nodes bouwen -------------------------------------------------------
     for (const ev of detail.events) {
@@ -853,7 +858,82 @@ export class YearScene implements Scene {
         n.hitHalfW = 0
       }
     }
+    this.drawFocusRing()
     this.primed = true
+  }
+
+  /** Markeer-ring om de toetsenbord-gefocuste memory (als die in beeld staat). */
+  private drawFocusRing(): void {
+    const n = this.kbFocusId ? this.nodes.find((x) => x.eventId === this.kbFocusId) : null
+    if (!n || n.hitHalfW <= 0) {
+      this.focusRing.visible = false
+      return
+    }
+    const invZ = 1 / this.engine.camera.zoom
+    const pad = 6 * invZ
+    const w = n.hitHalfW + pad
+    const h = n.hitHalfH + pad
+    this.focusRing.clear()
+    this.focusRing
+      .roundRect(n.hitCx - w, n.hitCy - h, w * 2, h * 2, 12 * invZ)
+      .stroke({ width: 3 * invZ, color: 0x6ab7ff, alpha: 0.95 })
+    this.focusRing.visible = true
+  }
+
+  // ---- Toetsenbord-navigatie (spatial) --------------------------------------
+
+  /** Nodes in navigatievolgorde: op datum (anchorX), dan verticaal (curY). */
+  private focusOrder(): Node[] {
+    return [...this.nodes].sort((a, b) => a.anchorX - b.anchorX || a.curY - b.curY || a.hash - b.hash)
+  }
+
+  private scrollIntoView(n: Node): void {
+    const z = this.engine.camera.zoom
+    // Wereld-x van de kaart zelf (incl. horizontale offset t.o.v. z'n datum).
+    const cardX = n.anchorX + (this.curvedLeaders ? n.offX : 0) / z
+    const b = this.engine.camera.worldBounds(this.engine.viewport())
+    const margin = (b.maxX - b.minX) * 0.18
+    if (cardX < b.minX + margin || cardX > b.maxX - margin) {
+      this.engine.animateCamera(cardX, 0, z, 300)
+    }
+  }
+
+  focusFirst(): string | null {
+    if (this.nodes.length === 0) return null
+    const cx = this.engine.camera.x
+    let best: Node | null = null
+    let bestD = Infinity
+    for (const n of this.nodes) {
+      const d = Math.abs(n.anchorX - cx)
+      if (d < bestD) {
+        bestD = d
+        best = n
+      }
+    }
+    this.kbFocusId = best?.eventId ?? null
+    if (best) this.scrollIntoView(best)
+    return this.kbFocusId
+  }
+
+  focusNeighbor(dir: 'left' | 'right' | 'up' | 'down'): string | null {
+    const order = this.focusOrder()
+    if (order.length === 0) return null
+    const cur = order.findIndex((n) => n.eventId === this.kbFocusId)
+    if (cur < 0) return this.focusFirst()
+    const step = dir === 'right' || dir === 'down' ? 1 : -1
+    const n = order[Math.max(0, Math.min(order.length - 1, cur + step))]
+    this.kbFocusId = n.eventId
+    this.scrollIntoView(n)
+    return this.kbFocusId
+  }
+
+  focusedId(): string | null {
+    return this.kbFocusId
+  }
+
+  clearKbFocus(): void {
+    this.kbFocusId = null
+    this.focusRing.visible = false
   }
 
   private tickSlideshow(n: Node, engine: RenderEngine, frame: number, now: number, dt: number): void {

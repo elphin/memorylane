@@ -289,6 +289,8 @@ export function AppShell() {
   const [fullscreen, setFullscreen] = useState(false)
   const fullscreenRef = useRef(false)
   const toggleFsRef = useRef<() => void>(() => {})
+  // Toetsenbord-navigatie actief (focus-markering zichtbaar)?
+  const kbNavRef = useRef(false)
   // De zoekknop verbergt na muis-inactiviteit; muisbeweging toont 'm weer. (De ▶-
   // en ⚙-knop blijven altijd staan.)
   const [chromeVisible, setChromeVisible] = useState(true)
@@ -405,6 +407,53 @@ export function AppShell() {
     }
     window.addEventListener('resize', onResize)
     return () => window.removeEventListener('resize', onResize)
+  }, [])
+
+  // Toetsenbord-navigatie (Fase 1: jaar-view). Pijltjes verplaatsen de focus (de
+  // eerste druk toont 'm bij het scherm-midden), Enter opent de gefocuste memory.
+  // Een muisklik zet 'm terug naar muis-modus (focus verdwijnt).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.ctrlKey || e.metaKey || e.altKey) return
+      const el = document.activeElement
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) return
+      if (dialogOpenRef.current || overlayOpenRef.current) return
+      if (levelRef.current !== 'year' || engineRef.current?.isTransitioning) return
+      const scene = sceneRef.current
+      const dir =
+        e.key === 'ArrowLeft' ? 'left'
+        : e.key === 'ArrowRight' ? 'right'
+        : e.key === 'ArrowUp' ? 'up'
+        : e.key === 'ArrowDown' ? 'down'
+        : null
+      if (dir) {
+        if (!scene?.focusNeighbor) return
+        e.preventDefault()
+        kbNavRef.current = true
+        if (!scene.focusedId?.()) scene.focusFirst?.()
+        else scene.focusNeighbor(dir)
+      } else if (e.key === 'Enter') {
+        const id = scene?.focusedId?.()
+        if (id) {
+          e.preventDefault()
+          enterEventRef.current(id)
+        }
+      }
+    }
+    const clearNav = (): void => {
+      if (kbNavRef.current) {
+        kbNavRef.current = false
+        sceneRef.current?.clearKbFocus?.()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    window.addEventListener('pointerdown', clearNav)
+    window.addEventListener('pointermove', clearNav) // muis bewegen = terug naar muis-modus
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      window.removeEventListener('pointerdown', clearNav)
+      window.removeEventListener('pointermove', clearNav)
+    }
   }, [])
 
   const [draft, setDraft] = useState('')
