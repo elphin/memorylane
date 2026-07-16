@@ -116,6 +116,7 @@ interface Node {
   card: Container | null // cover-events
   frame: Graphics | null // de witte rand (dient als toetsenbord-focus-indicator)
   borderAlpha: number // huidige rand-alpha (animeert weg voor niet-gefocuste tegels)
+  frameDrawnScale: number // baseScreenScale waarvoor de frame laatst getekend is (-1 = nog niet)
   title: Text | null
   titleSide: number // laatst toegepaste titel-kant (om niet elke frame te herzetten)
   dot: Container | null // stip-marker (non-cover, of cover-overflow bij een niet-span)
@@ -493,6 +494,7 @@ export class YearScene implements Scene {
       card,
       frame,
       borderAlpha: 1,
+      frameDrawnScale: -1,
       title,
       titleSide: 0,
       dot,
@@ -773,6 +775,17 @@ export class YearScene implements Scene {
         const showCard = inView && n.appear > 0.01
         n.card.visible = showCard
         if (showCard) {
+          // Witte rand op CONSTANTE schermdikte houden: de kaart wordt met
+          // baseScreenScale geschaald, dus teken de rand-breedte omgekeerd mee
+          // (b = BORDER / baseScreenScale) → grote/belangrijke tegels krijgen
+          // geen dikkere rand. Alleen hertekenen als de schaal wijzigt (resize).
+          if (n.frame && n.frameDrawnScale !== n.baseScreenScale) {
+            n.frameDrawnScale = n.baseScreenScale
+            const b = BORDER / n.baseScreenScale
+            const r = 5 / n.baseScreenScale
+            n.frame.clear()
+            n.frame.roundRect(-THUMB_W / 2 - b, -THUMB_H / 2 - b, THUMB_W + b * 2, THUMB_H + b * 2, r).fill(0xf5f5f0)
+          }
           const targetHover = n.eventId === this.hoveredId ? 1.05 : 1
           n.hover += (targetHover - n.hover) * 0.2
           const grow = 0.5 + 0.5 * n.appear // van ~half (bij de as) naar vol
@@ -892,7 +905,8 @@ export class YearScene implements Scene {
     // laatste moment; langere, zachte pan voor een organischer gevoel.
     const margin = (b.maxX - b.minX) * 0.28
     if (cardX < b.minX + margin || cardX > b.maxX - margin) {
-      this.engine.animateCamera(cardX, 0, z, 620)
+      // Snel starten, zacht/lang uitlopen (easeOutQuint) → vloeiend en organisch.
+      this.engine.animateCamera(cardX, 0, z, 820, (t) => 1 - Math.pow(1 - t, 5))
     }
   }
 

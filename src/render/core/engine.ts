@@ -54,6 +54,7 @@ export class RenderEngine {
     toZoom: number
     start: number
     dur: number
+    ease?: (t: number) => number
   } | null = null
   // Reveal-animatie van nieuwe scene-inhoud: inzoomen = groeien uit het
   // aangeklikte punt, uitzoomen = krimpen naar het midden.
@@ -345,7 +346,7 @@ export class RenderEngine {
   }
 
   /** Animeert de camera vloeiend naar een doel (voor niveau-transities). */
-  animateCamera(toX: number, toY: number, toZoom: number, dur = 420): void {
+  animateCamera(toX: number, toY: number, toZoom: number, dur = 420, ease?: (t: number) => number): void {
     this.camAnim = {
       fromX: this.camera.x,
       fromY: this.camera.y,
@@ -355,6 +356,7 @@ export class RenderEngine {
       toZoom,
       start: performance.now(),
       dur,
+      ease,
     }
   }
 
@@ -362,7 +364,7 @@ export class RenderEngine {
     if (!this.camAnim) return
     const a = this.camAnim
     const t = Math.min(1, (performance.now() - a.start) / a.dur)
-    const e = easeInOutCubic(t)
+    const e = (a.ease ?? easeInOutCubic)(t)
     this.camera.x = a.fromX + (a.toX - a.fromX) * e
     this.camera.y = a.fromY + (a.toY - a.fromY) * e
     // Zoom exponentieel interpoleren → uniform aanvoelende zoombeweging.
