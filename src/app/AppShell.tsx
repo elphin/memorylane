@@ -2024,7 +2024,24 @@ function SettingsPanel({
   backend: Backend | null
   onImported: () => void
 }) {
-  const [tab, setTab] = useState<'weergave' | 'tijdlijn' | 'dia' | 'beheer' | 'telefoon' | 'sneltoetsen'>('weergave')
+  const [tab, setTab] = useState<
+    'weergave' | 'tijdlijn' | 'dia' | 'beheer' | 'telefoon' | 'sneltoetsen' | 'over'
+  >('weergave')
+  // Versie runtime uit de app-bundle halen (klopt zo automatisch met de installer);
+  // in browser-dev bestaat de Tauri-API niet → val terug op de laatst-bekende versie.
+  const [appVersion, setAppVersion] = useState('2.1.0')
+  useEffect(() => {
+    let alive = true
+    void import('@tauri-apps/api/app')
+      .then((m) => m.getVersion())
+      .then((v) => {
+        if (alive) setAppVersion(v)
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [])
   const seg = (m: 'custom' | 'grid' | 'scatter'): React.CSSProperties => ({
     ...ghostBtn,
     background: settings.defaultLayout === m ? '#3b82f6' : 'transparent',
@@ -2119,6 +2136,7 @@ function SettingsPanel({
           {tabBtn('beheer', 'Beheer')}
           {tabBtn('telefoon', 'Telefoon')}
           {tabBtn('sneltoetsen', 'Sneltoetsen')}
+          {tabBtn('over', 'Over')}
         </div>
         <div style={{ overflowY: 'auto', padding: '14px 22px 6px', flex: '1 1 auto' }}>
           {tab === 'weergave' && (
@@ -2439,6 +2457,45 @@ function SettingsPanel({
                   ))}
                 </div>
               ))}
+            </>
+          )}
+          {tab === 'over' && (
+            <>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginTop: 4 }}>
+                <div style={{ fontSize: 22, fontWeight: 700, color: '#fff' }}>MemoryLane</div>
+                <div style={{ fontSize: 13, color: '#8a97b0' }}>versie {appVersion}</div>
+              </div>
+              <div style={{ fontSize: 14, color: '#cfd6e4', lineHeight: 1.6, marginTop: 10 }}>
+                Een persoonlijke, inzoombare tijdlijn voor je herinneringen — van een overzicht van
+                alle jaren tot één foto in detail. Alles blijft lokaal op je eigen computer.
+              </div>
+
+              {subhead('In het kort')}
+              <div style={{ fontSize: 13.5, color: '#cfd6e4', lineHeight: 1.8 }}>
+                • <b>Zoomen</b> (scrollen, of pijltjes + Enter) brengt je dieper: levenslijn → jaar →
+                memory → detailfoto. <b>Uitzoomen</b> of <b>Esc</b> gaat terug.
+                <br />• <b>Pijltjes</b> verplaatsen de focus (witte rand), <b>Enter</b> dieper,{' '}
+                <b>Esc</b> terug — je kunt puur op het toetsenbord door alles heen.
+                <br />• <b>F</b> = volledig scherm; <b>Shift+F</b> (of Enter op een foto) ={' '}
+                beeldvullend met een geblurde achtergrond.
+                <br />• <b>S</b> diavoorstelling · <b>Ctrl+K</b> zoeken · <b>T</b> titel aan/uit ·{' '}
+                <b>E</b> kijkmodus.
+                <br />• Je telefoon koppel je onder de tab <b>Telefoon</b>; de volledige toetsenlijst
+                staat onder <b>Sneltoetsen</b>.
+              </div>
+
+              {subhead('Je herinneringen')}
+              <div style={{ fontSize: 13.5, color: '#cfd6e4', lineHeight: 1.6 }}>
+                Alles staat als gewone bestanden in je eigen map (die je bij de eerste start kiest).
+                Een back-up maak je simpelweg door die map te kopiëren.
+              </div>
+
+              {subhead('Gemaakt door')}
+              <div style={{ fontSize: 14, color: '#cfd6e4', lineHeight: 1.7 }}>
+                Jim
+                <br />
+                <span style={{ color: '#8a97b0' }}>info@elphinstone.nl</span>
+              </div>
             </>
           )}
         </div>
