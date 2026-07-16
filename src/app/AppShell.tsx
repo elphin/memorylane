@@ -285,10 +285,16 @@ export function AppShell() {
   // Screensaver: null = dicht, anders de (context-afhankelijke) foto-ids.
   const [screensaverIds, setScreensaverIds] = useState<string[] | null>(null)
   const [toast, setToast] = useState<string | null>(null)
-  // Fullscreen (venster + beeldvullend L3-item + titel weg).
+  // App-fullscreen (chromeless): OS-venster fullscreen + alle app-chrome weg
+  // (titel/tandwiel/knoppen). Los van de content-beeldvullend hieronder.
   const [fullscreen, setFullscreen] = useState(false)
   const fullscreenRef = useRef(false)
   const toggleFsRef = useRef<() => void>(() => {})
+  // Content-beeldvullend (alleen L3): het item vult het scherm + geblurde
+  // achtergrond-vulling. Een voorkeur (ref) die bij het openen van een item wordt
+  // toegepast; geen chrome-effect, dus geen React-state nodig.
+  const contentFillRef = useRef(false)
+  const toggleContentFillRef = useRef<() => void>(() => {})
   // Toetsenbord-navigatie actief (focus-markering zichtbaar)?
   const kbNavRef = useRef(false)
   // De zoekknop verbergt na muis-inactiviteit; muisbeweging toont 'm weer. (De ▶-
@@ -355,17 +361,30 @@ export function AppShell() {
     }
   }
 
-  // Fullscreen aan/uit: venster + beeldvullende L3-fit + titel weg. Herfit een paar
-  // frames (na Pixi's resize). We volgen de staat zelf (F11/'f' zijn de enige togglers).
+  // App-fullscreen aan/uit: OS-venster fullscreen + alle chrome weg. Raakt de
+  // content-fit NIET (dat is Shift+F). Herfit een paar frames zodat de normale
+  // L3-fit na de viewport-wijziging klopt. We volgen de staat zelf.
   const doToggleFullscreen = (): void => {
     void toggleFullscreen()
     const on = !fullscreenRef.current
     fullscreenRef.current = on
     setFullscreen(on)
-    sceneRef.current?.setFullscreen?.(on)
     refitFramesRef.current = 8
   }
   toggleFsRef.current = doToggleFullscreen
+
+  // Content-beeldvullend aan/uit (Shift+F). Alleen zinvol op L3: dan vult het item
+  // het scherm (langste zijde) met geblurde achtergrond-vulling. Buiten focus
+  // onthouden we alleen de voorkeur (toegepast bij het openen van een item).
+  const doToggleContentFill = (): void => {
+    const on = !contentFillRef.current
+    contentFillRef.current = on
+    if (levelRef.current === 'focus') {
+      sceneRef.current?.setFullscreen?.(on)
+      refitFramesRef.current = 8
+    }
+  }
+  toggleContentFillRef.current = doToggleContentFill
 
   // Sneltoetsen op een kale letter: E = view-modus (knoppen tonen/verbergen),
   // S = diavoorstelling starten. (Geen Ctrl/Alt/Meta; niet in een invoerveld of
@@ -389,9 +408,10 @@ export function AppShell() {
         e.preventDefault()
         startScreensaverRef.current()
       } else if (e.key === 'f' || e.key === 'F') {
-        // Fullscreen aan/uit; op L3 herfit de focus-scene zodat het item vult.
+        // Kale f = app-fullscreen (chromeless); Shift+F = content-beeldvullend (L3).
         e.preventDefault()
-        toggleFsRef.current()
+        if (e.shiftKey) toggleContentFillRef.current()
+        else toggleFsRef.current()
       }
     }
     window.addEventListener('keydown', onKey)
@@ -746,7 +766,7 @@ export function AppShell() {
         setHeader({ text: focusTitleFor(it), dir: delta > 0 ? 'in' : 'out' })
       })
       scene.setAnimateSteps(settingsRef.current.l3StepAnimation)
-      if (fullscreenRef.current) scene.setFullscreen(true)
+      if (contentFillRef.current) scene.setFullscreen(true)
       sceneRef.current = scene
       revealScene(engine, scene, 'in')
       levelRef.current = 'focus'
@@ -1675,12 +1695,12 @@ export function AppShell() {
       {phase === 'ready' && settings.showTitle && !screensaverIds && !fullscreen && (
         <TitleBar text={header.text} dir={header.dir} />
       )}
-      {phase === 'ready' && !modal && !editing && !eventForm && !metaForm && !searchOpen && !settingsOpen && !settings.viewMode && chromeVisible && settings.showSearchButton && (
+      {phase === 'ready' && !modal && !editing && !eventForm && !metaForm && !searchOpen && !settingsOpen && !settings.viewMode && !fullscreen && chromeVisible && settings.showSearchButton && (
         <button onClick={() => setSearchOpen(true)} style={searchBtn} title="Zoeken (Ctrl+K)">
           Zoeken…
         </button>
       )}
-      {phase === 'ready' && !modal && !editing && !eventForm && !metaForm && !searchOpen && !settingsOpen && !settings.viewMode && (
+      {phase === 'ready' && !modal && !editing && !eventForm && !metaForm && !searchOpen && !settingsOpen && !settings.viewMode && !fullscreen && (
         <button onClick={() => setSettingsOpen(true)} style={gearBtn} title="Instellingen">
           ⚙
         </button>
@@ -1733,6 +1753,7 @@ export function AppShell() {
         !metaForm &&
         !searchOpen &&
         !settingsOpen &&
+        !fullscreen &&
         !screensaverIds && (
           <button
             onClick={() => {
@@ -1752,7 +1773,7 @@ export function AppShell() {
           </button>
         )}
       {toast && <div style={toastStyle}>{toast}</div>}
-      {phase === 'ready' && !modal && !editing && !eventForm && !metaForm && !searchOpen && !settingsOpen && !settings.viewMode && (
+      {phase === 'ready' && !modal && !editing && !eventForm && !metaForm && !searchOpen && !settingsOpen && !settings.viewMode && !fullscreen && (
         <Fab
           uiLevel={uiLevel}
           layoutMode={layoutMode}
@@ -2289,7 +2310,9 @@ function SettingsPanel({
                     { k: ['S'], d: 'Diavoorstelling starten' },
                     { k: ['E'], d: 'Kijkmodus (bewerkknoppen tonen/verbergen)' },
                     { k: ['Esc'], d: 'Sluiten — dialoog, zoeken of diavoorstelling' },
-                    { k: ['F11'], d: 'Volledig scherm aan/uit' },
+                    { k: ['F11'], d: 'Volledig scherm — app (chromeless) aan/uit' },
+                    { k: ['F'], d: 'Volledig scherm — app (chromeless) aan/uit' },
+                    { k: ['Shift', 'F'], d: 'Foto/video beeldvullend in focus (met blur-vulling)' },
                   ],
                 },
                 {
