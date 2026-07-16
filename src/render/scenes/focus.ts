@@ -30,6 +30,9 @@ export class FocusScene implements Scene {
   // Voor de DOM-video-overlay die exact over de video moet liggen.
   private dispW = FOCUS
   private dispH = FOCUS
+  // Werkelijke video-verhouding (b/h), pas bekend na loadedmetadata — de overlay
+  // wordt daarmee exact op de video gelegd (geen zwarte klikbare randen).
+  private videoAspect: number | null = null
   // Laatst gefitte (geklemde) zoom; de app-shell gebruikt dit als referentie voor
   // de "ver uitzoomen = terug"-drempel, zodat stappen naar een grotere sibling
   // (lange notitie) niet meteen als uitzoomen wordt gelezen.
@@ -61,6 +64,8 @@ export class FocusScene implements Scene {
     this.frame = null
     this.caption = null
     this.loaded = false
+    this.videoAspect = null
+    this.display.visible = true // een vorige video kan 'm verborgen hebben
     const item = this.current
     if (!item) return
 
@@ -220,6 +225,18 @@ export class FocusScene implements Scene {
     return this.current ?? null
   }
 
+  /** Zet de werkelijke video-verhouding (b/h) zodat de overlay-rect exact op de
+   * video valt (geen zwarte randen). Null = terug naar de thumbnail-maat. */
+  setVideoAspect(aspect: number | null): void {
+    this.videoAspect = aspect && Number.isFinite(aspect) && aspect > 0 ? aspect : null
+  }
+
+  /** Verberg/toon de Pixi-inhoud (poster+kader) — aan tijdens DOM-video-afspelen,
+   * zodat een afwijkend-geroteerde thumbnail niet naast de video piept. */
+  setContentHidden(hidden: boolean): void {
+    this.display.visible = !hidden
+  }
+
   /** CSS-schermrechthoek van het weergegeven item (of null). Alleen betrouwbaar
    * als er GEEN transitie loopt (de reveal transformeert de root los van de
    * camera; dan klopt worldToScreen niet). De app-shell gebruikt dit om de
@@ -227,12 +244,23 @@ export class FocusScene implements Scene {
   screenRect(): { left: number; top: number; width: number; height: number } | null {
     const item = this.current
     if (!item) return null
+    let w = this.dispW
+    let h = this.dispH
+    // Video: gebruik de échte verhouding (contain-fit in het FOCUS-vlak) i.p.v. de
+    // thumbnail-maat, zodat de overlay exact op de video valt.
+    if (item.itemType === 'video' && this.videoAspect) {
+      if (this.videoAspect >= 1) {
+        w = FOCUS
+        h = FOCUS / this.videoAspect
+      } else {
+        h = FOCUS
+        w = FOCUS * this.videoAspect
+      }
+    }
     const vp = this.engine.viewport()
     const cam = this.engine.camera
-    const hw = this.dispW / 2
-    const hh = this.dispH / 2
-    const tl = cam.worldToScreen(-hw, -hh, vp)
-    const br = cam.worldToScreen(hw, hh, vp)
+    const tl = cam.worldToScreen(-w / 2, -h / 2, vp)
+    const br = cam.worldToScreen(w / 2, h / 2, vp)
     return { left: tl.x, top: tl.y, width: br.x - tl.x, height: br.y - tl.y }
   }
 

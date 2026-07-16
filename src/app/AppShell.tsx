@@ -382,6 +382,7 @@ export function AppShell() {
 
   const enterEventRef = useRef<(id: string) => void>(() => {})
   const enterYearRef = useRef<(id: string) => void>(() => {})
+  const goBackRef = useRef<() => void>(() => {})
   // Re-entrancy-slot voor mutaties: `busy`-state is niet betrouwbaar tegen een
   // dubbele klik binnen dezelfde tick (stale closure) — een ref wel.
   const mutatingRef = useRef(false)
@@ -644,6 +645,7 @@ export function AppShell() {
 
     enterYearRef.current = (id) => void enterYear(id)
     enterEventRef.current = (id) => void enterEvent(id)
+    goBackRef.current = () => goBack()
 
     // Verticale-pan-lock toepassen op basis van niveau + instelling (alleen de
     // horizontale niveaus L0/L1).
@@ -789,9 +791,12 @@ export function AppShell() {
           setFocusVideoId(vidId)
         }
         if (vidId) {
+          focusScene?.setContentHidden?.(true) // Pixi-poster weg → alleen de DOM-video
           const r = focusScene?.screenRect?.()
           const wrap = videoWrapRef.current
-          if (r && wrap) {
+          // Tijdens fullscreen niet zelf herpositioneren (dan vecht de inline-stijl
+          // met de browser-fullscreen-maat).
+          if (r && wrap && !document.fullscreenElement) {
             wrap.style.left = `${r.left}px`
             wrap.style.top = `${r.top}px`
             wrap.style.width = `${r.width}px`
@@ -1594,6 +1599,8 @@ export function AppShell() {
           canStep={(currentItemsRef.current?.length ?? 0) > 1}
           onPrev={() => sceneRef.current?.step?.(-1)}
           onNext={() => sceneRef.current?.step?.(1)}
+          onClose={() => goBackRef.current()}
+          onAspect={(a) => sceneRef.current?.setVideoAspect?.(a)}
         />
       )}
       {showFit &&

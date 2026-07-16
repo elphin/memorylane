@@ -94,6 +94,10 @@ export interface Scene {
   /** CSS-schermrechthoek van het gefocuste item (alleen L3), of null. Alleen
    * betrouwbaar buiten een transitie. Voor het plaatsen van de DOM-video. */
   screenRect?(): { left: number; top: number; width: number; height: number } | null
+  /** Zet de werkelijke video-verhouding (b/h) voor een exacte overlay (alleen L3). */
+  setVideoAspect?(aspect: number | null): void
+  /** Verberg/toon de Pixi-inhoud tijdens DOM-video-afspelen (alleen L3). */
+  setContentHidden?(hidden: boolean): void
   /** Muis-hover op een wereldpunt (of null bij verlaten) — voor micro-animaties. */
   onHover?(worldX: number | null, worldY: number): void
   destroy(): void
