@@ -13,6 +13,9 @@ const TILE_H = 240
 const GAP = 80
 const COVER_H = TILE_H - 56
 const COVER_W = TILE_W - 16
+// Zoveel scherm-px van de rand-tegel blijft altijd zichtbaar bij het pannen: verder
+// pannen (rand-tegel het scherm uit) veert elastisch terug (zie de gesture-laag).
+const EDGE_MARGIN = 80
 
 interface Tile {
   year: YearSummary
@@ -249,6 +252,17 @@ export class LifelineScene implements Scene {
     const now = performance.now()
     const dt = Math.min(dtMS, 100)
     const kf = Math.min(1, dtMS / 130)
+
+    // Elastische horizontale pan-grens: houd altijd een stukje van de rand-tegels in
+    // beeld (aan beide kanten). Voorbij de grens veert de camera terug (rubber-band
+    // in de gesture-laag). Past alles al in beeld (uitgezoomd) → geen pan mogelijk.
+    const vp = engine.viewport()
+    const count = Math.max(1, this.tiles.length)
+    const totalW = count * TILE_W + (count - 1) * GAP
+    const cx = totalW / 2
+    const restMax = Math.max(0, totalW / 2 - (vp.width / 2 - EDGE_MARGIN) / engine.camera.zoom)
+    engine.camera.boundsX = { min: cx - restMax, max: cx + restMax }
+
     for (const tile of this.tiles) {
       // Vloeiende hover-schaal (lerp naar doel).
       const target = tile.year.id === this.hoveredId ? 1.05 : 1

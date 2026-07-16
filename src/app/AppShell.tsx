@@ -60,8 +60,6 @@ interface Settings {
   slideshow: boolean
   /** Seconden per foto in de slideshow. */
   slideshowSpeed: number
-  /** Vergrendel verticaal pannen op het overzicht (L0) en de jaar-tijdlijn (L1). */
-  lockVerticalPan: boolean
   /** View-modus: verberg alle knoppen voor een schone weergave (toets E schakelt). */
   viewMode: boolean
   /** Screensaver-tagfilter: alleen foto's met minstens één van deze tags (komma-gescheiden). */
@@ -101,7 +99,6 @@ const DEFAULT_SETTINGS: Settings = {
   defaultLayout: 'custom',
   slideshow: true,
   slideshowSpeed: 5,
-  lockVerticalPan: false,
   viewMode: false,
   screensaverInclude: '',
   screensaverExclude: '',
@@ -837,11 +834,10 @@ export function AppShell() {
     const applyPanLock = (): void => {
       if (!engine) return
       const lvl = levelRef.current
-      // De jaar-view rekent kaart-posities t.o.v. een verticaal gecentreerde as
-      // (camera.y=0), dus daar staat de verticale lock ALTIJD aan (los van de
-      // instelling). Op de lifeline volgt de lock de instelling.
-      engine.camera.lockY =
-        lvl === 'year' || (settingsRef.current.lockVerticalPan && lvl === 'lifeline')
+      // Op de horizontale niveaus (lifeline + jaar-view) staat de verticale lock
+      // ALTIJD aan: je schuift/zoomt daar alleen zijwaarts. De inhoud staat verticaal
+      // gecentreerd (camera.y=0); verticaal pannen heeft er geen zin.
+      engine.camera.lockY = lvl === 'year' || lvl === 'lifeline'
       // Bij een actieve lock de as/inhoud precies verticaal centreren (y=0).
       if (engine.camera.lockY) engine.camera.y = 0
     }
@@ -1012,9 +1008,12 @@ export function AppShell() {
             wrap.style.visibility = 'visible'
           }
         }
-        // Buiten de jaar-view geen elastische scroll-grens (de jaar-scene zet 'm
-        // elke frame; andere niveaus zouden anders een stale grens erven).
-        if (levelRef.current !== 'year') ctx.engine.camera.boundsX = null
+        // Alleen de jaar-view én de lifeline hebben een elastische scroll-grens
+        // (die scenes zetten 'm elke frame); andere niveaus zouden anders een stale
+        // grens erven, dus daar wissen we 'm.
+        if (levelRef.current !== 'year' && levelRef.current !== 'lifeline') {
+          ctx.engine.camera.boundsX = null
+        }
         // "Alles passend"-knop tonen zodra er inhoud buiten beeld valt (alleen L2,
         // niet tijdens een transitie). Alleen setState bij een echte verandering.
         const cb =
@@ -2176,13 +2175,6 @@ function SettingsPanel({
                   Een schone weergave zonder knoppen. Druk op <b>E</b> om te wisselen.
                 </>,
               )}
-              <div style={{ height: 1, background: '#2c3650', margin: '16px 0' }} />
-              <Toggle
-                on={settings.lockVerticalPan}
-                set={(v) => onChange({ lockVerticalPan: v })}
-                label="Verticaal pannen vergrendelen (overzicht + jaar-tijdlijn)"
-              />
-              {desc('Houdt de horizontale niveaus verticaal gecentreerd; je scrollt/zoomt alleen zijwaarts.')}
               <div style={{ height: 1, background: '#2c3650', margin: '16px 0' }} />
               <Toggle
                 on={settings.l3StepAnimation}
