@@ -8,6 +8,7 @@ pub mod cache;
 pub mod decode;
 pub mod exif_read;
 pub mod hash;
+pub mod serve;
 pub mod thumbs;
 
 #[cfg(test)]

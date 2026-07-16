@@ -5,16 +5,25 @@ mod media;
 mod model;
 mod vault;
 
+use std::path::Path;
 use std::sync::mpsc::{sync_channel, TrySendError};
 use std::sync::{Arc, Mutex};
 
 use commands::VaultService;
 use media::cache::Tier;
+use media::serve;
 use tauri::http::{Request, Response};
 use tauri::{AppHandle, Manager, UriSchemeResponder};
 
 /// Een `thumb://`-request in de wachtrij naar de worker-pool.
 struct ThumbJob {
+    app: AppHandle,
+    request: Request<Vec<u8>>,
+    responder: UriSchemeResponder,
+}
+
+/// Een `media://`-request (origineel bestand streamen) naar de media-pool.
+struct MediaJob {
     app: AppHandle,
     request: Request<Vec<u8>>,
     responder: UriSchemeResponder,
@@ -62,6 +71,31 @@ pub fn run() {
         });
     }
 
+    // Aparte, kleinere pool voor `media://` (grote reads; gescheiden van de
+    // thumbnail-pool zodat een streamende video de thumbnails niet blokkeert).
+    let (mtx, mrx) = sync_channel::<MediaJob>(128);
+    let mrx = Arc::new(Mutex::new(mrx));
+    for _ in 0..worker_count().min(4) {
+        let mrx = Arc::clone(&mrx);
+        std::thread::spawn(move || loop {
+            let job = {
+                let guard = match mrx.lock() {
+                    Ok(g) => g,
+                    Err(_) => break,
+                };
+                guard.recv()
+            };
+            match job {
+                Ok(MediaJob { app, request, responder }) => {
+                    let resp = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| handle_media(&app, &request)))
+                        .unwrap_or_else(|_| error_response());
+                    responder.respond(resp);
+                }
+                Err(_) => break,
+            }
+        });
+    }
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .register_asynchronous_uri_scheme_protocol("thumb", move |ctx, request, responder| {
@@ -72,6 +106,19 @@ pub fn run() {
             };
             // Non-blocking inleveren; bij een volle wachtrij meteen 503.
             if let Err(err) = tx.try_send(job) {
+                let job = match err {
+                    TrySendError::Full(j) | TrySendError::Disconnected(j) => j,
+                };
+                job.responder.respond(busy_response());
+            }
+        })
+        .register_asynchronous_uri_scheme_protocol("media", move |ctx, request, responder| {
+            let job = MediaJob {
+                app: ctx.app_handle().clone(),
+                request,
+                responder,
+            };
+            if let Err(err) = mtx.try_send(job) {
                 let job = match err {
                     TrySendError::Full(j) | TrySendError::Disconnected(j) => j,
                 };
@@ -185,6 +232,73 @@ fn thumb_bytes(app: &AppHandle, item_id: &str, tier: Tier) -> Result<Vec<u8>, St
     let service = app.state::<VaultService>();
     let path = service.resolve_thumb(&cache_root, item_id, tier)?;
     std::fs::read(&path).map_err(|e| e.to_string())
+}
+
+/// Behandelt een `media://`-request. URL-vorm: `media://localhost/<itemId>`
+/// (op Windows `http://media.localhost/...`). Streamt het ORIGINELE bestand in
+/// stukjes met Range-ondersteuning (voor `<video>`-afspelen en spoelen).
+fn handle_media(app: &AppHandle, request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
+    let uri = request.uri();
+    let from_path = uri.path().rsplit('/').find(|s| !s.is_empty()).map(percent_decode);
+    let item_id = from_path.or_else(|| uri.host().map(percent_decode)).unwrap_or_default();
+    if item_id.is_empty() {
+        return not_found();
+    }
+    let path = match app.state::<VaultService>().resolve_media(&item_id) {
+        Ok(p) => p,
+        Err(e) => {
+            log::warn!("media '{item_id}' faalde: {e}");
+            return not_found();
+        }
+    };
+    let range = request.headers().get("range").and_then(|v| v.to_str().ok()).map(|s| s.to_string());
+    serve_file(&path, range.as_deref()).unwrap_or_else(|e| {
+        log::warn!("media serve '{item_id}': {e}");
+        error_response()
+    })
+}
+
+/// Bouwt een (gedeeltelijke) file-response volgens de Range-planning uit `serve`.
+fn serve_file(path: &Path, range: Option<&str>) -> Result<Response<Vec<u8>>, String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let total = file.metadata().map_err(|e| e.to_string())?.len();
+    let ctype = serve::content_type_for_ext(path.extension().and_then(|e| e.to_str()).unwrap_or(""));
+    let slice = serve::plan_slice(range, total);
+
+    if slice.status == 416 {
+        return Response::builder()
+            .status(416)
+            .header("Content-Range", format!("bytes */{total}"))
+            .header("Accept-Ranges", "bytes")
+            .header("Access-Control-Allow-Origin", "*")
+            .body(Vec::new())
+            .map_err(|e| e.to_string());
+    }
+
+    let mut buf = vec![0u8; slice.len as usize];
+    if slice.len > 0 {
+        file.seek(SeekFrom::Start(slice.start)).map_err(|e| e.to_string())?;
+        file.read_exact(&mut buf).map_err(|e| e.to_string())?;
+    }
+    let served = buf.len() as u64;
+
+    let mut builder = Response::builder()
+        .status(slice.status)
+        .header("Content-Type", ctype)
+        .header("Accept-Ranges", "bytes")
+        .header("Content-Length", served.to_string())
+        .header("Access-Control-Allow-Origin", "*")
+        .header("Cache-Control", "no-cache");
+    if slice.partial {
+        let end = slice.start + served.saturating_sub(1);
+        builder = builder.header("Content-Range", format!("bytes {}-{}/{}", slice.start, end, total));
+    }
+    builder.body(buf).map_err(|e| e.to_string())
+}
+
+fn not_found() -> Response<Vec<u8>> {
+    Response::builder().status(404).body(Vec::new()).unwrap_or_else(|_| error_response())
 }
 
 /// Haalt de `size`-parameter uit een query-string (`size=256`).

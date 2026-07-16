@@ -118,6 +118,30 @@ impl VaultService {
         media::thumbs::ensure_thumb(&src, tier, cache_root, &hash).map_err(|e| e.to_string())
     }
 
+    /// Resolvet een item-id naar het pad van het ORIGINELE mediabestand (voor het
+    /// `media://`-protocol — video afspelen). Zelfde containment-bescherming als
+    /// `resolve_thumb`: het `media:`-veld komt uit (onvertrouwde) frontmatter, dus
+    /// we canonicaliseren en eisen dat het binnen de vault blijft.
+    pub fn resolve_media(&self, item_id: &str) -> Result<PathBuf, String> {
+        let (folder, media) = {
+            let conn = self.conn.lock().map_err(lock_err)?;
+            index::item_media_ref(&conn, item_id)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("geen media voor item {item_id}"))?
+        };
+        let vault = {
+            let guard = self.vault_path.lock().map_err(lock_err)?;
+            guard.clone().ok_or("geen vault ingesteld")?
+        };
+        let src = vault.join(&folder).join(&media);
+        let canon_src = std::fs::canonicalize(&src).map_err(|e| format!("media niet leesbaar: {e}"))?;
+        let canon_vault = std::fs::canonicalize(&vault).map_err(|e| e.to_string())?;
+        if !canon_src.starts_with(&canon_vault) {
+            return Err(format!("media buiten de vault geweigerd: {media}"));
+        }
+        Ok(canon_src)
+    }
+
     pub(crate) fn current_vault(&self) -> Result<PathBuf, String> {
         self.vault_path
             .lock()
