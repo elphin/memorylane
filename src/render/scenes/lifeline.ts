@@ -20,6 +20,8 @@ interface Tile {
   cover: Sprite
   cover2: Sprite // crossfade-overlay voor de slideshow
   bg: Graphics
+  focusRing: Graphics // witte rand bij toetsenbord-focus
+  focusAlpha: number // gedempte zichtbaarheid van de focus-ring (0..1)
   container: Container
   scale: number
   // Slideshow: rouleer de cover door `pool` (crossfade). `pool` is leeg → statisch.
@@ -46,6 +48,9 @@ export class LifelineScene implements Scene {
   private hoveredId: string | null = null
   private slideEnabled: boolean
   private slideMs: number
+  // Toetsenbord-navigatie: year.id van het gefocuste jaar (consistent met hitTest
+  // en enterYear), of null in muis-modus.
+  private kbFocusId: string | null = null
 
   constructor(
     private engine: RenderEngine,
@@ -111,6 +116,15 @@ export class LifelineScene implements Scene {
       sub.position.set(TILE_W / 2, COVER_H + 40)
       tile.addChild(sub)
 
+      // Toetsenbord-focus-ring: witte rand net buiten de tegel. Standaard onzichtbaar.
+      const pad = 6
+      const focusRing = new Graphics()
+      focusRing
+        .roundRect(-pad, -pad, TILE_W + pad * 2, TILE_H + pad * 2, 16)
+        .stroke({ width: 3, color: 0xffffff, alignment: 0 })
+      focusRing.visible = false
+      tile.addChild(focusRing)
+
       this.root.addChild(tile)
 
       // Vaste jaar-cover (geprikt) wint altijd: geen slideshow, één vaste foto.
@@ -133,6 +147,8 @@ export class LifelineScene implements Scene {
         cover,
         cover2,
         bg,
+        focusRing,
+        focusAlpha: 0,
         container: tile,
         scale: 1,
         pool,
@@ -164,15 +180,81 @@ export class LifelineScene implements Scene {
     this.hoveredId = worldX === null ? null : this.hitTest(worldX, worldY)
   }
 
+  // ---- Toetsenbord-navigatie (jaren-rij, L0) ----
+
+  /** Focus het jaar het dichtst bij het scherm-midden (camera-x). Geeft year.id. */
+  focusFirst(): string | null {
+    if (this.tiles.length === 0) return null
+    const cx = this.engine.camera.x
+    let best: Tile | null = null
+    let bestD = Infinity
+    for (const t of this.tiles) {
+      const center = t.worldX + TILE_W / 2
+      const d = Math.abs(center - cx)
+      if (d < bestD) {
+        bestD = d
+        best = t
+      }
+    }
+    if (!best) return null
+    this.kbFocusId = best.year.id
+    this.scrollIntoView(best)
+    return this.kbFocusId
+  }
+
+  /** Verplaats de focus naar het vorige/volgende jaar (links/rechts). De jaren
+   * staan in één horizontale rij, dus boven/onder doen niets. Geeft year.id. */
+  focusNeighbor(dir: 'left' | 'right' | 'up' | 'down'): string | null {
+    if (dir === 'up' || dir === 'down') return this.kbFocusId
+    if (!this.kbFocusId) return this.focusFirst()
+    // Tegels staan al op oplopende worldX (bouwvolgorde); zoek de huidige index.
+    const idx = this.tiles.findIndex((t) => t.year.id === this.kbFocusId)
+    if (idx < 0) return this.focusFirst()
+    const next = Math.max(0, Math.min(this.tiles.length - 1, idx + (dir === 'left' ? -1 : 1)))
+    const t = this.tiles[next]
+    this.kbFocusId = t.year.id
+    this.scrollIntoView(t)
+    return this.kbFocusId
+  }
+
+  focusedId(): string | null {
+    return this.kbFocusId
+  }
+
+  clearKbFocus(): void {
+    this.kbFocusId = null
+  }
+
+  /** Pan de camera horizontaal naar het gefocuste jaar als het buiten een
+   * comfort-marge valt; zoom ongemoeid. Meestal passen alle jaren al in beeld →
+   * geen beweging. Nult eerst resterende inertie. */
+  private scrollIntoView(t: Tile): void {
+    const center = t.worldX + TILE_W / 2
+    const z = this.engine.camera.zoom
+    const b = this.engine.camera.worldBounds(this.engine.viewport())
+    const margin = (b.maxX - b.minX) * 0.2
+    if (center < b.minX + margin || center > b.maxX - margin) {
+      this.engine.syncElastic()
+      this.engine.animateCamera(center, 0, z, 820, (p) => 1 - Math.pow(1 - p, 5))
+    }
+  }
+
   update(ctx: FrameContext): void {
     const { engine, frame, dtMS } = ctx
     const now = performance.now()
     const dt = Math.min(dtMS, 100)
+    const kf = Math.min(1, dtMS / 130)
     for (const tile of this.tiles) {
       // Vloeiende hover-schaal (lerp naar doel).
       const target = tile.year.id === this.hoveredId ? 1.05 : 1
       tile.scale += (target - tile.scale) * 0.2
       tile.container.scale.set(tile.scale)
+
+      // Toetsenbord-focus-ring in-/uitfaden: alleen het gefocuste jaar toont 'm.
+      const fTarget = tile.year.id === this.kbFocusId ? 1 : 0
+      tile.focusAlpha += (fTarget - tile.focusAlpha) * kf
+      tile.focusRing.alpha = tile.focusAlpha
+      tile.focusRing.visible = tile.focusAlpha > 0.01
 
       // Basis-cover laden.
       const baseId = tile.curKey.slice('cover-'.length)

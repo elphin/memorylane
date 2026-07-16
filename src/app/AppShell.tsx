@@ -409,10 +409,10 @@ export function AppShell() {
     return () => window.removeEventListener('resize', onResize)
   }, [])
 
-  // Toetsenbord-navigatie (jaar-view én memory-canvas). Pijltjes verplaatsen de
-  // focus (de eerste druk toont 'm bij het scherm-midden); in de jaar-view opent
-  // Enter de gefocuste memory, in het canvas zoomt Enter in op het gefocuste item.
-  // Een muisklik/-beweging zet 'm terug naar muis-modus (focus verdwijnt).
+  // Toetsenbord-navigatie (lifeline, jaar-view én memory-canvas). Pijltjes
+  // verplaatsen de focus (de eerste druk toont 'm bij het scherm-midden); Enter
+  // gaat een niveau dieper (lifeline→jaar, jaar→memory, canvas→item-focus). Een
+  // muisklik/-beweging zet 'm terug naar muis-modus (focus verdwijnt).
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (e.ctrlKey || e.metaKey || e.altKey) return
@@ -420,7 +420,11 @@ export function AppShell() {
       if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) return
       if (dialogOpenRef.current || overlayOpenRef.current) return
       const lvl = levelRef.current
-      if ((lvl !== 'year' && lvl !== 'event') || engineRef.current?.isTransitioning) return
+      if (
+        (lvl !== 'lifeline' && lvl !== 'year' && lvl !== 'event') ||
+        engineRef.current?.isTransitioning
+      )
+        return
       const scene = sceneRef.current
       const dir =
         e.key === 'ArrowLeft' ? 'left'
@@ -438,7 +442,8 @@ export function AppShell() {
         const id = scene?.focusedId?.()
         if (id) {
           e.preventDefault()
-          if (lvl === 'year') enterEventRef.current(id)
+          if (lvl === 'lifeline') enterYearRef.current(id)
+          else if (lvl === 'year') enterEventRef.current(id)
           else enterFocusRef.current(id) // memory-canvas: zoom in op het item (L3)
         }
       }
