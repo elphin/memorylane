@@ -51,6 +51,11 @@ export class GestureController {
   private downId = -1
   private dragTarget: DragHandle | null = null
 
+  // Soepele wheel-zoom: elke notch verhoogt de doel-zoom; `tickZoom` easet de
+  // camera daar vloeiend naartoe (i.p.v. per notch hard te springen). 0 = inactief.
+  private zoomTarget = 0
+  private zoomAnchor: PointerPos = { x: 0, y: 0 }
+
   constructor(
     private canvas: HTMLCanvasElement,
     private camera: Camera,
@@ -94,7 +99,6 @@ export class GestureController {
 
   private onWheel = (e: WheelEvent): void => {
     e.preventDefault()
-    const vp = this.getVp()
     const p = this.localPos(e)
     this.vx = 0
     this.vy = 0
@@ -103,10 +107,39 @@ export class GestureController {
     // (ctrlKey, kleine delta) voelt fijner.
     const delta = Math.max(-140, Math.min(140, e.deltaY))
     const factor = Math.exp(-delta * (e.ctrlKey ? 0.01 : 0.0016))
-    this.camera.zoomAt(p.x, p.y, factor, vp)
-    // Inzoomen mag niet buiten de elastische grens ontsnappen.
-    this.syncRawX()
+    // Doel-zoom accumuleren (vanaf de lopende doel-zoom als er al een animatie
+    // loopt, anders de huidige zoom) en soepel ernaartoe easen in `tickZoom` —
+    // i.p.v. per notch een harde sprong. Cursor blijft het anker.
+    const base = this.zoomTarget || this.camera.zoom
+    this.zoomTarget = Math.min(this.camera.maxZoom, Math.max(this.camera.minZoom, base * factor))
+    this.zoomAnchor = p
+    // Onderbreek een lopende camera-animatie/reveal; de zoom neemt het over.
     this.onChange()
+  }
+
+  /** Easet de zoom per frame naar de doel-zoom (log-space ease-out), geanchord op
+   * de cursor — voor een soepele wheel-zoom zonder schokken. */
+  tickZoom(dtMS: number): void {
+    if (!this.zoomTarget) return
+    const cam = this.camera
+    const cur = cam.zoom
+    const ratio = this.zoomTarget / cur
+    if (Math.abs(Math.log(ratio)) < 0.002) {
+      // Dicht genoeg: snap op het doel en stop.
+      if (cur !== this.zoomTarget) cam.zoomAt(this.zoomAnchor.x, this.zoomAnchor.y, ratio, this.getVp())
+      this.zoomTarget = 0
+    } else {
+      const k = Math.min(1, dtMS / 55) // tijdconstante ~55ms → soepel maar responsief
+      cam.zoomAt(this.zoomAnchor.x, this.zoomAnchor.y, Math.pow(ratio, k), this.getVp())
+    }
+    // Inzoomen mag niet buiten de elastische grens (jaar-view) ontsnappen. (Geen
+    // onChange nodig: de engine tekent elke frame; wél niet-snappen van een reveal.)
+    if (cam.boundsX) this.syncRawX()
+  }
+
+  /** Stopt een lopende soepele zoom (bij een niveau-wissel / harde camera-jump). */
+  endZoom(): void {
+    this.zoomTarget = 0
   }
 
   private onPointerDown = (e: PointerEvent): void => {
@@ -118,6 +151,7 @@ export class GestureController {
     }
     const p = this.localPos(e)
     this.pointers.set(e.pointerId, p)
+    this.zoomTarget = 0 // een pan/klik/pinch onderbreekt een lopende soepele zoom
     if (this.pointers.size === 1) {
       this.dragging = true
       this.lastDrag = p

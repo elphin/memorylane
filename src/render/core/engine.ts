@@ -163,6 +163,12 @@ export class RenderEngine {
     return this.camAnim !== null
   }
 
+  /** Stopt een lopende soepele wheel-zoom (bijv. wanneer de zoom-uit-drempel een
+   * niveau-terug triggert, zodat de zoom niet doorschiet in de transitie). */
+  endZoom(): void {
+    this.gestures?.endZoom()
+  }
+
   /** True zolang een scene-reveal loopt. */
   get isRevealing(): boolean {
     return this.reveal !== null
@@ -186,6 +192,7 @@ export class RenderEngine {
   /** Zet de camera direct op een doel (de reveal verzorgt de beweging). */
   jumpCamera(x: number, y: number, zoom: number): void {
     this.camAnim = null
+    this.gestures?.endZoom() // een harde jump (niveau-wissel/fit) stopt een lopende zoom
     this.camera.x = x
     this.camera.y = y
     this.camera.zoom = zoom
@@ -347,6 +354,7 @@ export class RenderEngine {
 
   /** Animeert de camera vloeiend naar een doel (voor niveau-transities). */
   animateCamera(toX: number, toY: number, toZoom: number, dur = 420, ease?: (t: number) => number): void {
+    this.gestures?.endZoom() // een camera-animatie neemt de zoom over → stop een lopende wheel-zoom
     this.camAnim = {
       fromX: this.camera.x,
       fromY: this.camera.y,
@@ -410,6 +418,7 @@ export class RenderEngine {
     this.frame++
     this.advanceCameraAnim()
     this.gestures.tickInertia()
+    this.gestures.tickZoom(ticker.deltaMS)
     this.advanceReveal()
     this.advanceExit()
     this.lod.update(this.camera.zoom)

@@ -1044,6 +1044,7 @@ export function AppShell() {
         const backMult = levelRef.current === 'year' ? 0.7 : 0.45
         const backThreshold = ctx.engine.camera.zoom < refZoom * backMult
         if (backThreshold && !enteringRef.current && !ctx.engine.isTransitioning) {
+          ctx.engine.endZoom() // stop de soepele zoom → niet doorschieten in de transitie
           goBack()
         }
         // Jaar-overgang: bewust doortrekken (vinger neer) voorbij de grens tot de
