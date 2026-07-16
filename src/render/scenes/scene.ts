@@ -119,6 +119,10 @@ export interface Scene {
   focusedId?(): string | null
   /** Wis de toetsenbord-focus (terug naar muis-modus). */
   clearKbFocus?(): void
+  /** Zet de toetsenbord-focus direct op een bekend id (als dat bestaat), zonder de
+   * camera te verplaatsen. Voor focus-continuïteit bij het teruggaan (Escape): het
+   * item/de memory/het jaar waar je vandaan komt krijgt de focus op dit niveau. */
+  focusOn?(id: string): void
 
   destroy(): void
 }

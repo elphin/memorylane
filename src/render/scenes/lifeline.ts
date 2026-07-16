@@ -225,6 +225,12 @@ export class LifelineScene implements Scene {
     this.kbFocusId = null
   }
 
+  /** Zet de focus direct op een jaar-id (als het bestaat), zonder camera-beweging.
+   * Voor focus-continuïteit bij terugkeer uit een jaar (L1). */
+  focusOn(id: string): void {
+    if (this.tiles.some((t) => t.year.id === id)) this.kbFocusId = id
+  }
+
   /** Pan de camera horizontaal naar het gefocuste jaar als het buiten een
    * comfort-marge valt; zoom ongemoeid. Meestal passen alle jaren al in beeld →
    * geen beweging. Nult eerst resterende inertie. */

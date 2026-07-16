@@ -537,7 +537,7 @@ export function AppShell() {
     // `ctrlDown` al false en zou de tap anders alsnog navigeren + dubbel openen).
     let rangeJustEnded = false
 
-    const setupLifeline = (): void => {
+    const setupLifeline = (focusAfter?: string): void => {
       if (!engine || !backendRef.current) return
       // Invalideer een eventuele in-flight enterYear.
       enterSeqRef.current++
@@ -566,12 +566,19 @@ export function AppShell() {
       setUiLevel('lifeline')
       setHeader({ text: 'Memory Lane', dir: 'out' })
       applyPanLock()
+      // Focus-continuïteit bij terug (Escape): het jaar waar je vandaan komt krijgt
+      // de toetsenbord-focus (markering verschijnt, muisbeweging wist 'm weer).
+      if (focusAfter) {
+        scene.focusOn?.(focusAfter)
+        kbNavRef.current = true
+      }
     }
     setupLifelineRef.current = setupLifeline
 
     const enterYear = async (
       yearId: string,
       dir: 'in' | 'out' | 'slideNext' | 'slidePrev' = 'in',
+      focusAfter?: string,
     ): Promise<void> => {
       if (!engine || !backendRef.current || enteringRef.current) return
       enteringRef.current = true
@@ -628,6 +635,12 @@ export function AppShell() {
         applyPanLock()
         currentYearRef.current = yearId
         entryZoomRef.current = engine.pendingZoom
+        // Focus-continuïteit bij terug (Escape): de memory waar je vandaan komt
+        // krijgt de toetsenbord-focus op de jaar-tijdlijn.
+        if (focusAfter) {
+          scene.focusOn?.(focusAfter)
+          kbNavRef.current = true
+        }
       } catch (e) {
         if (!disposed) {
           setMessage(String(e))
@@ -685,7 +698,11 @@ export function AppShell() {
       }
     }
 
-    const enterEvent = async (eventId: string, dir: 'in' | 'out' = 'in'): Promise<void> => {
+    const enterEvent = async (
+      eventId: string,
+      dir: 'in' | 'out' = 'in',
+      focusAfter?: string,
+    ): Promise<void> => {
       if (!engine || !backendRef.current || enteringRef.current) return
       enteringRef.current = true
       const seq = ++enterSeqRef.current
@@ -740,6 +757,12 @@ export function AppShell() {
         currentYearCoverRef.current = detail.yearCover ?? null
         currentItemsRef.current = detail.items
         entryZoomRef.current = engine.pendingZoom
+        // Focus-continuïteit bij terug (Escape) uit L3: het item waar je vandaan
+        // komt krijgt de toetsenbord-focus in het canvas.
+        if (focusAfter) {
+          scene.focusOn?.(focusAfter)
+          kbNavRef.current = true
+        }
       } catch (e) {
         if (!disposed) {
           setMessage(String(e))
@@ -795,12 +818,20 @@ export function AppShell() {
     }
     applyPanLockRef.current = applyPanLock
 
-    // Eén niveau terug (Esc / uitzoomen).
-    const goBack = (): void => {
+    // Eén niveau terug (Esc / uitzoomen). Bij `viaKeyboard` (Escape) krijgt het
+    // item/de memory/het jaar waar je vandaan komt de toetsenbord-focus op het
+    // niveau erboven (focus-continuïteit); bij een muisklik-terug niet (muis-modus).
+    const goBack = (viaKeyboard = false): void => {
       if (enteringRef.current) return
-      if (levelRef.current === 'year') setupLifeline()
-      else if (levelRef.current === 'event' && currentYearRef.current) void enterYear(currentYearRef.current, 'out')
-      else if (levelRef.current === 'focus' && currentEventRef.current) void enterEvent(currentEventRef.current, 'out')
+      const lvl = levelRef.current
+      if (lvl === 'year') {
+        setupLifeline(viaKeyboard ? currentYearRef.current ?? undefined : undefined)
+      } else if (lvl === 'event' && currentYearRef.current) {
+        void enterYear(currentYearRef.current, 'out', viaKeyboard ? currentEventRef.current ?? undefined : undefined)
+      } else if (lvl === 'focus' && currentEventRef.current) {
+        const itemId = viaKeyboard ? sceneRef.current?.currentId?.() ?? undefined : undefined
+        void enterEvent(currentEventRef.current, 'out', itemId)
+      }
     }
 
     // Ctrl+klik op een foto (L2): togglet de uitgelichte foto (jaar-omslag).
@@ -853,7 +884,7 @@ export function AppShell() {
       if (overlayOpenRef.current) return
       if (e.key === 'Escape' || e.key === 'Backspace') {
         e.preventDefault()
-        goBack()
+        goBack(true) // toetsenbord-terug → focus-continuïteit op het niveau erboven
       }
     }
     window.addEventListener('keydown', onKeyDown)

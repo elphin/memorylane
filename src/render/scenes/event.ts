@@ -426,6 +426,12 @@ export class EventScene implements Scene {
     this.kbFocusId = null
   }
 
+  /** Zet de focus direct op een item-id (als het bestaat), zonder camera-beweging.
+   * Voor focus-continuïteit bij terugkeer uit L3. */
+  focusOn(id: string): void {
+    if (this.nodes.some((n) => n.item.id === id)) this.kbFocusId = id
+  }
+
   /** Pan de camera (2D) naar het gefocuste item als het buiten een comfort-marge
    * valt; zoom ongemoeid. Meestal past alles al in beeld → geen beweging. Nult
    * eerst resterende fling-inertie zodat die de animatie niet overschrijft. */

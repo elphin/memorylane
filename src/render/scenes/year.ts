@@ -950,6 +950,12 @@ export class YearScene implements Scene {
     this.kbFocusId = null // animateBorders zet alle randen weer terug
   }
 
+  /** Zet de focus direct op een event-id (als het bestaat), zonder camera-beweging.
+   * Voor focus-continuïteit bij terugkeer uit een memory (L2). */
+  focusOn(id: string): void {
+    if (this.nodes.some((n) => n.eventId === id)) this.kbFocusId = id
+  }
+
   private tickSlideshow(n: Node, engine: RenderEngine, frame: number, now: number, dt: number): void {
     const s2 = n.sprite2!
     const s1 = n.sprite!
