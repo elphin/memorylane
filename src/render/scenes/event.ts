@@ -134,6 +134,8 @@ export class EventScene implements Scene {
         ring = this.buildFeaturedRing(container)
         // Randen standaard verborgen: alleen zichtbaar terwijl Ctrl / Ctrl+Shift
         // ingedrukt is (zie setRingKeys).
+        // Video's krijgen een play-badge zodat ze meteen herkenbaar zijn.
+        if (item.itemType === 'video') this.buildPlayBadge(container)
       }
 
       // Positie: uit _canvas.json of auto-grid.
@@ -268,6 +270,18 @@ export class EventScene implements Scene {
     ring.visible = false
     container.addChild(ring)
     return ring
+  }
+
+  /** Gecentreerde play-badge (donkere cirkel + witte driehoek) — markeert een
+   * video onder de foto's. Bovenop de kaart, schaalt mee met de tegel. */
+  private buildPlayBadge(container: Container): Graphics {
+    const R = 40
+    const g = new Graphics()
+    g.circle(0, 0, R).fill({ color: 0x000000, alpha: 0.45 })
+    g.circle(0, 0, R).stroke({ width: 3, color: 0xffffff, alpha: 0.92 })
+    g.poly([-11, -16, -11, 16, 22, 0]).fill({ color: 0xffffff, alpha: 0.96 })
+    container.addChild(g)
+    return g
   }
 
   /** Blauwe rand (net buiten de gouden) die de vaste jaar-cover markeert. */

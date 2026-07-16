@@ -732,8 +732,9 @@ class MockBackend implements Backend {
     const base: Item[] = Array.from({ length: n }, (_, i) => ({
       id: `${eventId}-i${i}`,
       eventId,
-      itemType: i === 0 ? ('text' as const) : ('photo' as const),
-      media: i === 0 ? undefined : 'foto.jpg',
+      // i=0 tekst, i=2 video (test de play-badge + speler), rest foto.
+      itemType: i === 0 ? ('text' as const) : i === 2 ? ('video' as const) : ('photo' as const),
+      media: i === 0 ? undefined : i === 2 ? 'clip.mp4' : 'foto.jpg',
       bodyText:
         i === 0
           ? 'Dit is een periode waarin ik ben geboren en waar ik helemaal niks meer van weet. Ik ben in ieder geval geboren in Amsterdam.\n\nEr zijn een paar foto’s ergens van, en daarna gaat het al vrij snel naar de feestdagen: Sinterklaas en kerst.\n\nDe foto’s die je ziet zijn onder andere van mijn vader, mijn moeder, mijn broer Wout, en natuurlijk mijn oma’s, tante Aaf en oma van Loon. Verder weet ik het even niet.'
