@@ -114,6 +114,8 @@ interface Node {
   curY: number
   // Pixi-objecten.
   card: Container | null // cover-events
+  frame: Graphics | null // de witte rand (dient als toetsenbord-focus-indicator)
+  borderAlpha: number // huidige rand-alpha (animeert weg voor niet-gefocuste tegels)
   title: Text | null
   titleSide: number // laatst toegepaste titel-kant (om niet elke frame te herzetten)
   dot: Container | null // stip-marker (non-cover, of cover-overflow bij een niet-span)
@@ -197,9 +199,9 @@ export class YearScene implements Scene {
   private cardNodes: Node[] = [] // alle memory-tegels, op belang gesorteerd (packing-volgorde)
   private monthLabels: { text: Text; midX: number }[] = []
   private hoveredId: string | null = null
-  // Toetsenbord-focus (spatial nav): id van de gefocuste memory + de markeer-ring.
+  // Toetsenbord-focus (spatial nav): id van de gefocuste memory. Bij actieve nav
+  // houdt alleen de gefocuste tegel z'n witte rand; de rest faadt weg.
   private kbFocusId: string | null = null
-  private focusRing = new Graphics()
   private primed = false // eerste frame snapt naar de packing-toestand; daarna animeren
   private yearStart = 0
   private span = 1
@@ -297,8 +299,6 @@ export class YearScene implements Scene {
     this.root.addChild(this.leaders)
     this.root.addChild(this.dotsLayer)
     this.root.addChild(this.cardsLayer)
-    this.focusRing.visible = false
-    this.root.addChild(this.focusRing) // bovenop de kaarten
 
     // ---- Nodes bouwen -------------------------------------------------------
     for (const ev of detail.events) {
@@ -491,6 +491,8 @@ export class YearScene implements Scene {
       appear: 0,
       curY: 0,
       card,
+      frame,
+      borderAlpha: 1,
       title,
       titleSide: 0,
       dot,
@@ -858,26 +860,20 @@ export class YearScene implements Scene {
         n.hitHalfW = 0
       }
     }
-    this.drawFocusRing()
+    this.animateBorders(ctx.dtMS)
     this.primed = true
   }
 
-  /** Markeer-ring om de toetsenbord-gefocuste memory (als die in beeld staat). */
-  private drawFocusRing(): void {
-    const n = this.kbFocusId ? this.nodes.find((x) => x.eventId === this.kbFocusId) : null
-    if (!n || n.hitHalfW <= 0) {
-      this.focusRing.visible = false
-      return
+  /** Bij actieve toetsenbord-nav houdt alleen de gefocuste tegel z'n witte rand;
+   * de rest faadt weg ("zoep"). Zonder nav hebben alle tegels hun rand. */
+  private animateBorders(dtMS: number): void {
+    const k = Math.min(1, dtMS / 130) // ~130ms fade
+    for (const n of this.nodes) {
+      if (!n.frame) continue
+      const target = this.kbFocusId === null ? 1 : n.eventId === this.kbFocusId ? 1 : 0
+      n.borderAlpha += (target - n.borderAlpha) * k
+      n.frame.alpha = n.borderAlpha
     }
-    const invZ = 1 / this.engine.camera.zoom
-    const pad = 6 * invZ
-    const w = n.hitHalfW + pad
-    const h = n.hitHalfH + pad
-    this.focusRing.clear()
-    this.focusRing
-      .roundRect(n.hitCx - w, n.hitCy - h, w * 2, h * 2, 12 * invZ)
-      .stroke({ width: 1.75 * invZ, color: 0x9fd0ff, alpha: 0.6 })
-    this.focusRing.visible = true
   }
 
   // ---- Toetsenbord-navigatie (spatial) --------------------------------------
@@ -894,9 +890,9 @@ export class YearScene implements Scene {
     const b = this.engine.camera.worldBounds(this.engine.viewport())
     // Iets ruimere marge → begint eerder (rustiger) te schuiven i.p.v. op het
     // laatste moment; langere, zachte pan voor een organischer gevoel.
-    const margin = (b.maxX - b.minX) * 0.26
+    const margin = (b.maxX - b.minX) * 0.28
     if (cardX < b.minX + margin || cardX > b.maxX - margin) {
-      this.engine.animateCamera(cardX, 0, z, 460)
+      this.engine.animateCamera(cardX, 0, z, 620)
     }
   }
 
@@ -934,8 +930,7 @@ export class YearScene implements Scene {
   }
 
   clearKbFocus(): void {
-    this.kbFocusId = null
-    this.focusRing.visible = false
+    this.kbFocusId = null // animateBorders zet alle randen weer terug
   }
 
   private tickSlideshow(n: Node, engine: RenderEngine, frame: number, now: number, dt: number): void {
