@@ -40,6 +40,8 @@ export class FocusScene implements Scene {
   // de nieuwe schuift in vanaf de andere kant.
   private animateSteps = true
   private transition: { outgoing: Container; incoming: Container; delta: number; start: number } | null = null
+  // Fullscreen: beeldvullend fitten (geen marges, langste zijde raakt de rand).
+  private fullscreen = false
   // Laatst gefitte (geklemde) zoom; de app-shell gebruikt dit als referentie voor
   // de "ver uitzoomen = terug"-drempel, zodat stappen naar een grotere sibling
   // (lange notitie) niet meteen als uitzoomen wordt gelezen.
@@ -184,9 +186,34 @@ export class FocusScene implements Scene {
 
   private fitCamera(): void {
     const vp = this.engine.viewport()
-    const zoom = Math.min(vp.width / (this.contentW + 160), vp.height / (this.contentH + 200))
-    this.baseZoom = Math.max(this.engine.camera.minZoom, Math.min(zoom, 2))
+    if (this.fullscreen) {
+      // Beeldvullend: fit op de WERKELIJKE inhoud (foto/videokader), geen marges,
+      // geen zoom-plafond — de langste zijde raakt de schermrand.
+      const { w, h } = this.fitSize()
+      this.baseZoom = Math.max(this.engine.camera.minZoom, Math.min(vp.width / w, vp.height / h))
+    } else {
+      const zoom = Math.min(vp.width / (this.contentW + 160), vp.height / (this.contentH + 200))
+      this.baseZoom = Math.max(this.engine.camera.minZoom, Math.min(zoom, 2))
+    }
     this.engine.jumpCamera(0, 0, this.baseZoom)
+  }
+
+  /** Werkelijk weergegeven inhoudsmaat (foto = tw×th; video = kader op ware
+   * verhouding; tekst = kaart) — voor de beeldvullende fullscreen-fit. */
+  private fitSize(): { w: number; h: number } {
+    const item = this.current
+    if (item?.itemType === 'video' && this.videoAspect) {
+      return this.videoAspect >= 1
+        ? { w: FOCUS, h: FOCUS / this.videoAspect }
+        : { w: FOCUS * this.videoAspect, h: FOCUS }
+    }
+    return { w: this.dispW, h: this.dispH }
+  }
+
+  /** Zet beeldvullende fullscreen-fit aan/uit en herfit meteen. */
+  setFullscreen(on: boolean): void {
+    this.fullscreen = on
+    this.fitCamera()
   }
 
   step(delta: number): void {
@@ -269,6 +296,7 @@ export class FocusScene implements Scene {
       this.drawPhotoFrame(tw, th)
       if (this.caption) this.caption.position.set(0, th / 2 + PHOTO_BORDER + 18)
       this.loaded = true
+      if (this.fullscreen) this.fitCamera() // nu de echte foto-maat bekend is → vullen
     } else {
       // L3 = het detailniveau: laad de scherpe 2048-bron (niet de 1024-thumbnail).
       const src = this.backend.thumb(item.id, 2048)
@@ -300,6 +328,7 @@ export class FocusScene implements Scene {
    * video valt (geen zwarte randen). Null = terug naar de thumbnail-maat. */
   setVideoAspect(aspect: number | null): void {
     this.videoAspect = aspect && Number.isFinite(aspect) && aspect > 0 ? aspect : null
+    if (this.fullscreen) this.fitCamera() // beeldvullend op de ware verhouding
   }
 
   /** Verberg/toon de Pixi-inhoud (poster+kader) — aan tijdens DOM-video-afspelen,

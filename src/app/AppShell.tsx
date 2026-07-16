@@ -285,6 +285,10 @@ export function AppShell() {
   // Screensaver: null = dicht, anders de (context-afhankelijke) foto-ids.
   const [screensaverIds, setScreensaverIds] = useState<string[] | null>(null)
   const [toast, setToast] = useState<string | null>(null)
+  // Fullscreen (venster + beeldvullend L3-item + titel weg).
+  const [fullscreen, setFullscreen] = useState(false)
+  const fullscreenRef = useRef(false)
+  const toggleFsRef = useRef<() => void>(() => {})
   // De zoekknop verbergt na muis-inactiviteit; muisbeweging toont 'm weer. (De ▶-
   // en ⚙-knop blijven altijd staan.)
   const [chromeVisible, setChromeVisible] = useState(true)
@@ -349,6 +353,18 @@ export function AppShell() {
     }
   }
 
+  // Fullscreen aan/uit: venster + beeldvullende L3-fit + titel weg. Herfit een paar
+  // frames (na Pixi's resize). We volgen de staat zelf (F11/'f' zijn de enige togglers).
+  const doToggleFullscreen = (): void => {
+    void toggleFullscreen()
+    const on = !fullscreenRef.current
+    fullscreenRef.current = on
+    setFullscreen(on)
+    sceneRef.current?.setFullscreen?.(on)
+    refitFramesRef.current = 8
+  }
+  toggleFsRef.current = doToggleFullscreen
+
   // Sneltoetsen op een kale letter: E = view-modus (knoppen tonen/verbergen),
   // S = diavoorstelling starten. (Geen Ctrl/Alt/Meta; niet in een invoerveld of
   // onder een open dialog/overlay.)
@@ -357,7 +373,7 @@ export function AppShell() {
       // F11: echte fullscreen aan/uit — werkt overal (ook in invoervelden).
       if (e.key === 'F11') {
         e.preventDefault()
-        void toggleFullscreen()
+        toggleFsRef.current()
         return
       }
       if (e.ctrlKey || e.metaKey || e.altKey) return
@@ -373,7 +389,7 @@ export function AppShell() {
       } else if (e.key === 'f' || e.key === 'F') {
         // Fullscreen aan/uit; op L3 herfit de focus-scene zodat het item vult.
         e.preventDefault()
-        void toggleFullscreen()
+        toggleFsRef.current()
       }
     }
     window.addEventListener('keydown', onKey)
@@ -655,6 +671,7 @@ export function AppShell() {
         setHeader({ text: focusTitleFor(it), dir: delta > 0 ? 'in' : 'out' })
       })
       scene.setAnimateSteps(settingsRef.current.l3StepAnimation)
+      if (fullscreenRef.current) scene.setFullscreen(true)
       sceneRef.current = scene
       revealScene(engine, scene, 'in')
       levelRef.current = 'focus'
@@ -1579,7 +1596,7 @@ export function AppShell() {
           onCreateFirst={openNewEvent}
         />
       )}
-      {phase === 'ready' && settings.showTitle && !screensaverIds && (
+      {phase === 'ready' && settings.showTitle && !screensaverIds && !fullscreen && (
         <TitleBar text={header.text} dir={header.dir} />
       )}
       {phase === 'ready' && !modal && !editing && !eventForm && !metaForm && !searchOpen && !settingsOpen && !settings.viewMode && chromeVisible && settings.showSearchButton && (
@@ -1628,7 +1645,7 @@ export function AppShell() {
           ref={videoWrapRef}
           src={videoSrc}
           poster={backendRef.current.thumb(focusVideoId, 1024).url ?? ''}
-          onFullscreen={() => void toggleFullscreen()}
+          onFullscreen={doToggleFullscreen}
           onAspect={(a) => sceneRef.current?.setVideoAspect?.(a)}
         />
       )}

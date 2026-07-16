@@ -33,6 +33,8 @@ export interface Scene {
   stepping?(): boolean
   /** Zet de slide+fade-animatie tussen items aan/uit (alleen L3-focus). */
   setAnimateSteps?(on: boolean): void
+  /** Zet beeldvullende fullscreen-fit aan/uit (alleen L3-focus). */
+  setFullscreen?(on: boolean): void
   /** Ververs de item-data in-place (alleen L3-focus), na een bewerking. */
   refresh?(items: Item[]): void
   /** Toon/verberg de Ctrl-dag-indicator (alleen L1-jaar). */
