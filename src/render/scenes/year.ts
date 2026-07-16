@@ -876,7 +876,7 @@ export class YearScene implements Scene {
     this.focusRing.clear()
     this.focusRing
       .roundRect(n.hitCx - w, n.hitCy - h, w * 2, h * 2, 12 * invZ)
-      .stroke({ width: 3 * invZ, color: 0x6ab7ff, alpha: 0.95 })
+      .stroke({ width: 1.75 * invZ, color: 0x9fd0ff, alpha: 0.6 })
     this.focusRing.visible = true
   }
 
@@ -892,9 +892,11 @@ export class YearScene implements Scene {
     // Wereld-x van de kaart zelf (incl. horizontale offset t.o.v. z'n datum).
     const cardX = n.anchorX + (this.curvedLeaders ? n.offX : 0) / z
     const b = this.engine.camera.worldBounds(this.engine.viewport())
-    const margin = (b.maxX - b.minX) * 0.18
+    // Iets ruimere marge → begint eerder (rustiger) te schuiven i.p.v. op het
+    // laatste moment; langere, zachte pan voor een organischer gevoel.
+    const margin = (b.maxX - b.minX) * 0.26
     if (cardX < b.minX + margin || cardX > b.maxX - margin) {
-      this.engine.animateCamera(cardX, 0, z, 300)
+      this.engine.animateCamera(cardX, 0, z, 460)
     }
   }
 
