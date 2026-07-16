@@ -462,9 +462,10 @@ export function AppShell() {
         const id = scene?.focusedId?.()
         if (id) {
           e.preventDefault()
-          if (lvl === 'lifeline') enterYearRef.current(id)
-          else if (lvl === 'year') enterEventRef.current(id)
-          else enterFocusRef.current(id) // memory-canvas: zoom in op het item (L3)
+          // Toetsenbord-drill-in: het diepere niveau opent meteen in focus-modus.
+          if (lvl === 'lifeline') enterYearRef.current(id, true)
+          else if (lvl === 'year') enterEventRef.current(id, true)
+          else enterFocusRef.current(id) // memory-canvas → L3 (één item, geen focus-modus)
         }
       }
     }
@@ -491,8 +492,10 @@ export function AppShell() {
   const [searchResults, setSearchResults] = useState<SearchResult[]>([])
   const searchTimerRef = useRef<number | undefined>(undefined)
 
-  const enterEventRef = useRef<(id: string) => void>(() => {})
-  const enterYearRef = useRef<(id: string) => void>(() => {})
+  // `kbDrill` = toetsenbord-drill-in (Enter): het bovenliggende niveau opent meteen
+  // in focus-modus met de eerste memory/foto gefocust.
+  const enterEventRef = useRef<(id: string, kbDrill?: boolean) => void>(() => {})
+  const enterYearRef = useRef<(id: string, kbDrill?: boolean) => void>(() => {})
   const enterFocusRef = useRef<(id: string) => void>(() => {})
   // Afteller: viewport gewijzigd (bv. (uit) fullscreen) → herfit de focus-scene een
   // paar frames lang (Pixi's eigen resize kan een frame later pas settelen).
@@ -579,6 +582,7 @@ export function AppShell() {
       yearId: string,
       dir: 'in' | 'out' | 'slideNext' | 'slidePrev' = 'in',
       focusAfter?: string,
+      focusFirstAfter?: boolean,
     ): Promise<void> => {
       if (!engine || !backendRef.current || enteringRef.current) return
       enteringRef.current = true
@@ -636,10 +640,17 @@ export function AppShell() {
         currentYearRef.current = yearId
         entryZoomRef.current = engine.pendingZoom
         // Focus-continuïteit bij terug (Escape): de memory waar je vandaan komt
-        // krijgt de toetsenbord-focus op de jaar-tijdlijn.
+        // krijgt de toetsenbord-focus op de jaar-tijdlijn. Bij toetsenbord-drill-in
+        // (Enter vanaf de lifeline): de eerste (vroegste) memory krijgt de focus.
         if (focusAfter) {
           scene.focusOn?.(focusAfter)
           kbNavRef.current = true
+        } else if (focusFirstAfter) {
+          const first = [...detail.events].sort((a, b) => a.startAt.localeCompare(b.startAt))[0]
+          if (first) {
+            scene.focusOn?.(first.id)
+            kbNavRef.current = true
+          }
         }
       } catch (e) {
         if (!disposed) {
@@ -702,6 +713,7 @@ export function AppShell() {
       eventId: string,
       dir: 'in' | 'out' = 'in',
       focusAfter?: string,
+      focusFirstAfter?: boolean,
     ): Promise<void> => {
       if (!engine || !backendRef.current || enteringRef.current) return
       enteringRef.current = true
@@ -758,10 +770,18 @@ export function AppShell() {
         currentItemsRef.current = detail.items
         entryZoomRef.current = engine.pendingZoom
         // Focus-continuïteit bij terug (Escape) uit L3: het item waar je vandaan
-        // komt krijgt de toetsenbord-focus in het canvas.
+        // komt krijgt de toetsenbord-focus in het canvas. Bij toetsenbord-drill-in
+        // (Enter vanaf de jaar-view): de eerste foto/video krijgt de focus.
         if (focusAfter) {
           scene.focusOn?.(focusAfter)
           kbNavRef.current = true
+        } else if (focusFirstAfter) {
+          const first =
+            detail.items.find((it) => it.itemType === 'photo' || it.itemType === 'video') ?? detail.items[0]
+          if (first) {
+            scene.focusOn?.(first.id)
+            kbNavRef.current = true
+          }
         }
       } catch (e) {
         if (!disposed) {
@@ -799,8 +819,8 @@ export function AppShell() {
       entryZoomRef.current = engine.pendingZoom
     }
 
-    enterYearRef.current = (id) => void enterYear(id)
-    enterEventRef.current = (id) => void enterEvent(id)
+    enterYearRef.current = (id, kbDrill) => void enterYear(id, 'in', undefined, kbDrill)
+    enterEventRef.current = (id, kbDrill) => void enterEvent(id, 'in', undefined, kbDrill)
     enterFocusRef.current = (id) => enterFocus(id)
 
     // Verticale-pan-lock toepassen op basis van niveau + instelling (alleen de

@@ -116,12 +116,11 @@ export class LifelineScene implements Scene {
       sub.position.set(TILE_W / 2, COVER_H + 40)
       tile.addChild(sub)
 
-      // Toetsenbord-focus-ring: witte rand net buiten de tegel. Standaard onzichtbaar.
-      const pad = 6
+      // Toetsenbord-focus-indicator: de EIGEN rand van de tegel licht wit op (op de
+      // bg-omtrek, net als de jaar-view/canvas hun eigen rand gebruiken). Standaard
+      // onzichtbaar; faadt in op de gefocuste tegel.
       const focusRing = new Graphics()
-      focusRing
-        .roundRect(-pad, -pad, TILE_W + pad * 2, TILE_H + pad * 2, 16)
-        .stroke({ width: 3, color: 0xffffff, alignment: 0 })
+      focusRing.roundRect(0, 0, TILE_W, TILE_H, 12).stroke({ width: 3, color: 0xffffff })
       focusRing.visible = false
       tile.addChild(focusRing)
 
