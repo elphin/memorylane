@@ -24,26 +24,6 @@ const iconBtn: React.CSSProperties = {
   lineHeight: 0,
 }
 
-function chevron(side: 'left' | 'right'): React.CSSProperties {
-  return {
-    position: 'absolute',
-    top: '50%',
-    [side]: 22,
-    transform: 'translateY(-50%)',
-    pointerEvents: 'auto',
-    width: 54,
-    height: 54,
-    borderRadius: '50%',
-    border: 'none',
-    background: 'rgba(18,22,32,0.55)',
-    color: '#fff',
-    fontSize: 30,
-    cursor: 'pointer',
-    display: 'grid',
-    placeItems: 'center',
-  }
-}
-
 const Play = ({ s = 22 }: { s?: number }) => (
   <svg width={s} height={s} viewBox="0 0 24 24" fill="currentColor">
     <path d="M8 5v14l11-7z" />
@@ -75,14 +55,11 @@ export const FocusVideoLayer = forwardRef<
   {
     src: string
     poster: string
-    canStep: boolean
-    onPrev: () => void
-    onNext: () => void
     onFullscreen: () => void
     /** Werkelijke video-verhouding (b/h) na loadedmetadata, of null. */
     onAspect: (aspect: number | null) => void
   }
->(function FocusVideoLayer({ src, poster, canStep, onPrev, onNext, onFullscreen, onAspect }, ref) {
+>(function FocusVideoLayer({ src, poster, onFullscreen, onAspect }, ref) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const [playing, setPlaying] = useState(false)
   const [cur, setCur] = useState(0)
@@ -207,17 +184,6 @@ export const FocusVideoLayer = forwardRef<
           </button>
         </div>
       </div>
-
-      {canStep && (
-        <>
-          <button aria-label="Vorige" onClick={onPrev} style={chevron('left')}>
-            ‹
-          </button>
-          <button aria-label="Volgende" onClick={onNext} style={chevron('right')}>
-            ›
-          </button>
-        </>
-      )}
     </div>
   )
 })

@@ -12,6 +12,9 @@ const FOCUS = 720
 const CARD_W = 640
 const CARD_H = 440
 const PHOTO_BORDER = 16 // witte rand rond de foto (L3)
+const SLIDE = 420 // wereld-offset van de slide-transitie tussen items
+const SLIDE_DUR = 260 // ms
+const easeOutCubic = (t: number): number => 1 - Math.pow(1 - t, 3)
 
 export class FocusScene implements Scene {
   readonly root = new Container()
@@ -33,6 +36,10 @@ export class FocusScene implements Scene {
   // Werkelijke video-verhouding (b/h), pas bekend na loadedmetadata — de overlay
   // wordt daarmee exact op de video gelegd (geen zwarte klikbare randen).
   private videoAspect: number | null = null
+  // Slide+fade tussen items (instelbaar). De uitgaande laag schuift weg + faadt,
+  // de nieuwe schuift in vanaf de andere kant.
+  private animateSteps = true
+  private transition: { outgoing: Container; incoming: Container; delta: number; start: number } | null = null
   // Laatst gefitte (geklemde) zoom; de app-shell gebruikt dit als referentie voor
   // de "ver uitzoomen = terug"-drempel, zodat stappen naar een grotere sibling
   // (lange notitie) niet meteen als uitzoomen wordt gelezen.
@@ -59,14 +66,24 @@ export class FocusScene implements Scene {
   }
 
   private build(): void {
+    this.finishTransition()
     this.display.removeChildren().forEach((c) => c.destroy({ children: true }))
+    this.display.position.set(0, 0)
+    this.display.alpha = 1
+    this.display.visible = true // een vorige video kan 'm verborgen hebben
+    this.buildContent(this.display, this.current)
+    this.fitCamera()
+  }
+
+  /** Bouwt de visuele inhoud van `item` in `container` en zet de scene-brede
+   * verwijzingen (sprite/frame/caption) + afmetingen op dat item. */
+  private buildContent(container: Container, item: Item | undefined): void {
     this.sprite = null
     this.frame = null
     this.caption = null
     this.loaded = false
     this.videoAspect = null
-    this.display.visible = true // een vorige video kan 'm verborgen hebben
-    const item = this.current
+    this.currentKey = ''
     if (!item) return
 
     const isText = item.itemType === 'text' || item.itemType === 'link'
@@ -95,8 +112,8 @@ export class FocusScene implements Scene {
         width: 1,
         color: 0xe0dccb,
       })
-      this.display.addChild(bg)
-      this.display.addChild(text)
+      container.addChild(bg)
+      container.addChild(text)
       this.contentW = CARD_W
       this.contentH = cardH
       this.dispW = CARD_W
@@ -104,13 +121,13 @@ export class FocusScene implements Scene {
     } else {
       // Witte fotorand die zich straks (na load) om de werkelijke foto vouwt.
       const frame = new Graphics()
-      this.display.addChild(frame)
+      container.addChild(frame)
       this.frame = frame
       const sprite = new Sprite(Texture.WHITE)
       sprite.anchor.set(0.5)
       sprite.setSize(FOCUS, FOCUS)
       sprite.tint = 0x1a1f2b
-      this.display.addChild(sprite)
+      container.addChild(sprite)
       this.sprite = sprite
       this.currentKey = `focus-${item.id}`
       this.contentW = FOCUS
@@ -129,11 +146,30 @@ export class FocusScene implements Scene {
       cap.resolution = 2
       cap.anchor.set(0.5, 0)
       cap.position.set(0, this.contentH / 2 + 20)
-      this.display.addChild(cap)
+      container.addChild(cap)
       this.caption = cap
     }
+  }
 
-    this.fitCamera()
+  /** Aan/uit voor de slide+fade-transitie tussen items (instelling). */
+  setAnimateSteps(on: boolean): void {
+    this.animateSteps = on
+  }
+
+  stepping(): boolean {
+    return this.transition !== null
+  }
+
+  /** Rondt een lopende transitie meteen af (uitgaande laag weg, nieuwe op z'n plek). */
+  private finishTransition(): void {
+    const tr = this.transition
+    if (!tr) return
+    this.transition = null
+    if (!tr.outgoing.destroyed) tr.outgoing.destroy({ children: true })
+    if (!tr.incoming.destroyed) {
+      tr.incoming.position.set(0, 0)
+      tr.incoming.alpha = 1
+    }
   }
 
   /** Teken de witte fotorand rond een foto van `w`×`h` (past zich aan de werkelijke
@@ -156,7 +192,25 @@ export class FocusScene implements Scene {
   step(delta: number): void {
     if (this.items.length < 2) return
     this.index = (this.index + delta + this.items.length) % this.items.length
-    this.build()
+    if (!this.animateSteps) {
+      this.build()
+      this.onStep?.(delta, this.current?.id ?? null)
+      return
+    }
+    // Slide+fade: de huidige laag wordt de uitgaande, een nieuwe komt binnen vanaf
+    // de tegenovergestelde kant. (De DOM-video-overlay is tijdens `stepping()` uit,
+    // zodat ook video-posters netjes meeschuiven.)
+    this.finishTransition()
+    const outgoing = this.display
+    outgoing.visible = true
+    const incoming = new Container()
+    this.root.addChild(incoming)
+    this.buildContent(incoming, this.current)
+    incoming.position.set(delta * SLIDE, 0)
+    incoming.alpha = 0
+    this.display = incoming
+    this.transition = { outgoing, incoming, delta, start: performance.now() }
+    this.fitCamera()
     this.onStep?.(delta, this.current?.id ?? null)
   }
 
@@ -185,6 +239,19 @@ export class FocusScene implements Scene {
 
   update(ctx: FrameContext): void {
     const { engine, frame } = ctx
+
+    // Slide+fade-transitie voortzetten.
+    if (this.transition) {
+      const tr = this.transition
+      const t = Math.min(1, (performance.now() - tr.start) / SLIDE_DUR)
+      const e = easeOutCubic(t)
+      tr.outgoing.position.x = -tr.delta * SLIDE * e
+      tr.outgoing.alpha = 1 - e
+      tr.incoming.position.x = tr.delta * SLIDE * (1 - e)
+      tr.incoming.alpha = e
+      if (t >= 1) this.finishTransition()
+    }
+
     const item = this.current
     if (!this.sprite || this.loaded || !item || !item.media) return
     const tex = engine.textures.get(this.currentKey, frame)

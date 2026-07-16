@@ -29,6 +29,10 @@ export interface Scene {
   /** Herfit de camera op het huidige item (alleen L3-focus), bv. na (uit)
    * fullscreen gaan. */
   refitToViewport?(): void
+  /** Loopt er een slide-transitie tussen items (alleen L3-focus)? */
+  stepping?(): boolean
+  /** Zet de slide+fade-animatie tussen items aan/uit (alleen L3-focus). */
+  setAnimateSteps?(on: boolean): void
   /** Ververs de item-data in-place (alleen L3-focus), na een bewerking. */
   refresh?(items: Item[]): void
   /** Toon/verberg de Ctrl-dag-indicator (alleen L1-jaar). */

@@ -93,6 +93,8 @@ interface Settings {
   diaMode: 'kenburns' | 'crossfade'
   /** Seconden per foto in de diavoorstelling. */
   diaSpeed: number
+  /** Schuif-/fade-animatie bij vorige/volgende in de detail-view (L3). */
+  l3StepAnimation: boolean
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -114,6 +116,7 @@ const DEFAULT_SETTINGS: Settings = {
   photoTitleFromCaption: false,
   diaMode: 'kenburns',
   diaSpeed: 7,
+  l3StepAnimation: true,
 }
 const SETTINGS_KEY = 'memorylane-settings'
 
@@ -322,6 +325,7 @@ export function AppShell() {
     setSettings(next)
     saveSettings(next)
     applyPanLockRef.current() // pan-lock meteen toepassen op het huidige niveau
+    if (patch.l3StepAnimation !== undefined) sceneRef.current?.setAnimateSteps?.(next.l3StepAnimation)
     // Jaar-tegel-slideshow leeft in de scene → herbouw de lifeline als die zichtbaar is.
     if (
       (patch.yearTileSlideshow !== undefined ||
@@ -650,6 +654,7 @@ export function AppShell() {
         const it = id ? currentItemsRef.current.find((x) => x.id === id) : undefined
         setHeader({ text: focusTitleFor(it), dir: delta > 0 ? 'in' : 'out' })
       })
+      scene.setAnimateSteps(settingsRef.current.l3StepAnimation)
       sceneRef.current = scene
       revealScene(engine, scene, 'in')
       levelRef.current = 'focus'
@@ -804,8 +809,12 @@ export function AppShell() {
         // L3 video-overlay: mount de DOM-speler alleen als het gefocuste item een
         // video is én er geen transitie loopt (anders staat 'ie fout t.o.v. de
         // inzoomende poster). Positie elke frame imperatief (geen React-render).
+        // ...ook niet tijdens een slide-transitie tussen items (dan schuift de
+        // Pixi-poster; de DOM-speler mount pas ná de slide).
         const focusScene =
-          levelRef.current === 'focus' && !ctx.engine.isTransitioning ? sceneRef.current : null
+          levelRef.current === 'focus' && !ctx.engine.isTransitioning && !sceneRef.current?.stepping?.()
+            ? sceneRef.current
+            : null
         const focusItem = focusScene?.currentItem?.() ?? null
         const vidId = focusItem && focusItem.itemType === 'video' ? focusItem.id : null
         if (vidId !== focusVideoIdRef.current) {
@@ -1029,6 +1038,9 @@ export function AppShell() {
         // L3-focus: klik óp de foto = vorige/volgende (linker-/rechterhelft),
         // klik ernáást (lege ruimte) = uitzoomen naar het canvas.
         if (level === 'focus') {
+          // Niet reageren midden in een slide (het item staat dan nog niet op z'n
+          // plek → verkeerde hit-test).
+          if (scene?.stepping?.()) return
           // step() laat de titel via de onStep-callback meelopen.
           if (hit) scene?.step?.(wx >= 0 ? 1 : -1)
           else goBack()
@@ -1616,9 +1628,6 @@ export function AppShell() {
           ref={videoWrapRef}
           src={videoSrc}
           poster={backendRef.current.thumb(focusVideoId, 1024).url ?? ''}
-          canStep={(currentItemsRef.current?.length ?? 0) > 1}
-          onPrev={() => sceneRef.current?.step?.(-1)}
-          onNext={() => sceneRef.current?.step?.(1)}
           onFullscreen={() => void toggleFullscreen()}
           onAspect={(a) => sceneRef.current?.setVideoAspect?.(a)}
         />
@@ -1975,6 +1984,13 @@ function SettingsPanel({
                 label="Verticaal pannen vergrendelen (overzicht + jaar-tijdlijn)"
               />
               {desc('Houdt de horizontale niveaus verticaal gecentreerd; je scrollt/zoomt alleen zijwaarts.')}
+              <div style={{ height: 1, background: '#2c3650', margin: '16px 0' }} />
+              <Toggle
+                on={settings.l3StepAnimation}
+                set={(v) => onChange({ l3StepAnimation: v })}
+                label="Schuif-animatie bij vorige/volgende (detailweergave)"
+              />
+              {desc('In de detailweergave schuift de vorige foto/video weg en de nieuwe in beeld. Uit = direct wisselen.')}
             </>
           )}
 
