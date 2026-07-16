@@ -429,22 +429,21 @@ export function AppShell() {
     return () => window.removeEventListener('resize', onResize)
   }, [])
 
-  // Toetsenbord-navigatie (lifeline, jaar-view én memory-canvas). Pijltjes
+  // Toetsenbord-navigatie (lifeline, jaar-view, memory-canvas én detail). Pijltjes
   // verplaatsen de focus (de eerste druk toont 'm bij het scherm-midden); Enter
-  // gaat een niveau dieper (lifeline→jaar, jaar→memory, canvas→item-focus). Een
-  // muisklik/-beweging zet 'm terug naar muis-modus (focus verdwijnt).
+  // gaat een niveau dieper (lifeline→jaar, jaar→memory, canvas→item-focus, en op
+  // het detail-niveau → content-beeldvullend). Muis zet terug naar muis-modus.
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (e.ctrlKey || e.metaKey || e.altKey) return
       const el = document.activeElement
       if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) return
       if (dialogOpenRef.current || overlayOpenRef.current) return
+      if (engineRef.current?.isTransitioning) return
       const lvl = levelRef.current
-      if (
-        (lvl !== 'lifeline' && lvl !== 'year' && lvl !== 'event') ||
-        engineRef.current?.isTransitioning
-      )
-        return
+      // De pijltjes-focus-nav geldt alleen op de spatiale niveaus; op het detail-
+      // niveau (L3) handelt de FocusScene de pijltjes zelf af (vorige/volgende).
+      const navLevel = lvl === 'lifeline' || lvl === 'year' || lvl === 'event'
       const scene = sceneRef.current
       const dir =
         e.key === 'ArrowLeft' ? 'left'
@@ -453,12 +452,19 @@ export function AppShell() {
         : e.key === 'ArrowDown' ? 'down'
         : null
       if (dir) {
-        if (!scene?.focusNeighbor) return
+        if (!navLevel || !scene?.focusNeighbor) return
         e.preventDefault()
         kbNavRef.current = true
         if (!scene.focusedId?.()) scene.focusFirst?.()
         else scene.focusNeighbor(dir)
       } else if (e.key === 'Enter') {
+        if (lvl === 'focus') {
+          // Detail-niveau → één niveau dieper = content-beeldvullend (aan als 't uit is).
+          e.preventDefault()
+          if (!contentFillRef.current) toggleContentFillRef.current()
+          return
+        }
+        if (!navLevel) return
         const id = scene?.focusedId?.()
         if (id) {
           e.preventDefault()
@@ -904,6 +910,12 @@ export function AppShell() {
       if (overlayOpenRef.current) return
       if (e.key === 'Escape' || e.key === 'Backspace') {
         e.preventDefault()
+        // Detail-niveau in content-beeldvullend: eerst één stap terug naar de
+        // normale detail-weergave (niet meteen door naar het canvas).
+        if (levelRef.current === 'focus' && contentFillRef.current) {
+          toggleContentFillRef.current()
+          return
+        }
         goBack(true) // toetsenbord-terug → focus-continuïteit op het niveau erboven
       }
     }
