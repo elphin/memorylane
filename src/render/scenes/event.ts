@@ -34,6 +34,8 @@ interface Node {
   mask: Graphics | null // clip-masker (foto)
   ring: Graphics | null // gouden rand als deze foto de event-omslag (featured) is
   yearRing: Graphics | null // blauwe rand als deze foto de vaste jaar-cover is
+  focusRing: Graphics | null // witte rand bij toetsenbord-focus (op elk nodetype)
+  focusAlpha: number // gedempte zichtbaarheid van de focus-ring (0..1)
   // Notitie-kaart (tekst/link): losse onderdelen zodat de box los van de tekst
   // hergroot kan worden (Alt-slepen = box groter, font gelijk; tekst herloopt).
   textBg: Graphics | null
@@ -89,6 +91,9 @@ export class EventScene implements Scene {
   private gridSeed = 1
   // Herpak het grid zodra een foto-verhouding is geladen (grid-modus).
   private regridPending = false
+  // Toetsenbord-navigatie: item.id van het gefocuste item (consistent met hitTest
+  // en enterFocus), of null in muis-modus.
+  private kbFocusId: string | null = null
 
   constructor(
     private engine: RenderEngine,
@@ -138,6 +143,12 @@ export class EventScene implements Scene {
         if (item.itemType === 'video') this.buildPlayBadge(container)
       }
 
+      // Toetsenbord-focus-ring (elk nodetype, bovenop de kaart). Standaard
+      // onzichtbaar; getekend op de kaartmaat via drawFocusRing.
+      const focusRing = new Graphics()
+      focusRing.visible = false
+      container.addChild(focusRing)
+
       // Positie: uit _canvas.json of auto-grid.
       const saved = layout.get(ref)
       const x = saved ? saved.x : (i % cols) * CELL - ((cols - 1) * CELL) / 2
@@ -159,6 +170,8 @@ export class EventScene implements Scene {
         mask,
         ring,
         yearRing,
+        focusRing,
+        focusAlpha: 0,
         textBg,
         textEl,
         textClip,
@@ -192,6 +205,7 @@ export class EventScene implements Scene {
       if (isText) {
         this.sizeTextCard(node, node.width ?? TEXT_W, node.height ?? TEXT_H)
       }
+      this.drawFocusRing(node) // op de (initiële) kaartmaat; foto's hertekenen bij load
     })
 
     this.root.sortableChildren = true
@@ -229,6 +243,7 @@ export class EventScene implements Scene {
     n.mask?.rect(-w / 2, -h / 2, w, h).fill(0xffffff)
     n.sprite?.setSize(w, h)
     this.drawFrameBorder(n)
+    this.drawFocusRing(n) // rand veranderde → focus-ring mee hertekenen
   }
 
   /** Effectieve witte-rand-dikte: dempt mee met de eigen schaal, zodat een
@@ -320,6 +335,106 @@ export class EventScene implements Scene {
     for (const n of this.nodes) {
       if (n.ring) n.ring.visible = this.ringCtrl && n.ref === this.featuredRef
       if (n.yearRing) n.yearRing.visible = this.ringCtrl && this.ringShift && n.item.id === this.yearCoverId
+    }
+  }
+
+  /** (Her)teken de toetsenbord-focus-ring op de huidige kaartmaat (halfW/halfH,
+   * werkt voor foto én notitie), net buiten de rand. Wit en subtiel. */
+  private drawFocusRing(n: Node): void {
+    if (!n.focusRing) return
+    const pad = 4
+    const hw = n.halfW + pad
+    const hh = n.halfH + pad
+    n.focusRing.clear()
+    n.focusRing.roundRect(-hw, -hh, hw * 2, hh * 2, 8).stroke({ width: 3, color: 0xffffff, alignment: 0 })
+  }
+
+  // ---- Toetsenbord-navigatie (2D spatial focus, L2) ----
+
+  /** Focus het item het dichtst bij het scherm-midden (camera-positie). Werkt op
+   * de DOEL-posities (tx/ty), niet het animatie-tussenframe. Geeft item.id terug. */
+  focusFirst(): string | null {
+    if (this.nodes.length === 0) return null
+    const cx = this.engine.camera.x
+    const cy = this.engine.camera.y
+    let best: Node | null = null
+    let bestD = Infinity
+    for (const n of this.nodes) {
+      const d = (n.tx - cx) ** 2 + (n.ty - cy) ** 2
+      if (d < bestD - 1e-6 || (Math.abs(d - bestD) <= 1e-6 && best && n.item.id.localeCompare(best.item.id) < 0)) {
+        bestD = d
+        best = n
+      }
+    }
+    if (!best) return null
+    this.kbFocusId = best.item.id
+    this.scrollIntoView(best)
+    return this.kbFocusId
+  }
+
+  /** Verplaats de focus naar de dichtstbijzijnde buur in een richting (2D). Kegel
+   * van 45° op de DOEL-posities; buiten de kegel valt 'ie terug op het hele
+   * richtings-halfvlak (toets nooit "dood"); score = |primair| + 2·|perp|, met
+   * item.id als deterministische tie-break. Geen kandidaat → focus blijft staan. */
+  focusNeighbor(dir: 'left' | 'right' | 'up' | 'down'): string | null {
+    if (!this.kbFocusId) return this.focusFirst()
+    const cur = this.nodes.find((n) => n.item.id === this.kbFocusId)
+    if (!cur) return this.focusFirst()
+    const horiz = dir === 'left' || dir === 'right'
+    const sign = dir === 'left' || dir === 'up' ? -1 : 1
+    const eps = 1
+    const inDir: { n: Node; prim: number; perp: number }[] = []
+    for (const n of this.nodes) {
+      if (n === cur) continue
+      const dx = n.tx - cur.tx
+      const dy = n.ty - cur.ty
+      const prim = horiz ? dx : dy
+      const perp = horiz ? dy : dx
+      if (prim * sign <= eps) continue // niet in de gevraagde richting
+      inDir.push({ n, prim: Math.abs(prim), perp: Math.abs(perp) })
+    }
+    if (inDir.length === 0) return this.kbFocusId // niets in die richting → blijf staan
+    const cone = inDir.filter((c) => c.prim >= c.perp) // 45°-kegel: recht in de richting
+    const pool = cone.length ? cone : inDir
+    let best: (typeof pool)[number] | null = null
+    let bestScore = Infinity
+    for (const c of pool) {
+      const score = c.prim + 2 * c.perp
+      if (
+        score < bestScore - 1e-6 ||
+        (Math.abs(score - bestScore) <= 1e-6 && best && c.n.item.id.localeCompare(best.n.item.id) < 0)
+      ) {
+        bestScore = score
+        best = c
+      }
+    }
+    if (!best) return this.kbFocusId
+    this.kbFocusId = best.n.item.id
+    this.scrollIntoView(best.n)
+    return this.kbFocusId
+  }
+
+  focusedId(): string | null {
+    return this.kbFocusId
+  }
+
+  clearKbFocus(): void {
+    this.kbFocusId = null
+  }
+
+  /** Pan de camera (2D) naar het gefocuste item als het buiten een comfort-marge
+   * valt; zoom ongemoeid. Meestal past alles al in beeld → geen beweging. Nult
+   * eerst resterende fling-inertie zodat die de animatie niet overschrijft. */
+  private scrollIntoView(n: Node): void {
+    const z = this.engine.camera.zoom
+    const b = this.engine.camera.worldBounds(this.engine.viewport())
+    const mx = (b.maxX - b.minX) * 0.2
+    const my = (b.maxY - b.minY) * 0.2
+    const outX = n.tx < b.minX + mx || n.tx > b.maxX - mx
+    const outY = n.ty < b.minY + my || n.ty > b.maxY - my
+    if (outX || outY) {
+      this.engine.syncElastic()
+      this.engine.animateCamera(n.tx, n.ty, z, 820, (t) => 1 - Math.pow(1 - t, 5))
     }
   }
 
@@ -739,6 +854,7 @@ export class EventScene implements Scene {
       n.textEl.style.wordWrapWidth = w - 32
       n.textEl.position.set(0, -h / 2 + 14)
     }
+    this.drawFocusRing(n) // box-maat veranderde → focus-ring mee hertekenen
   }
 
   /** "Passend": maak de box (op de huidige breedte) precies hoog genoeg voor alle
@@ -909,11 +1025,20 @@ export class EventScene implements Scene {
   }
 
   update(ctx: FrameContext): void {
-    const { engine, frame } = ctx
+    const { engine, frame, dtMS } = ctx
     // Foto('s) laadden hun verhouding → herpak het grid (posities animeren mee).
     if (this.regridPending && this.mode === 'grid') {
       this.layoutGridPositions()
       this.regridPending = false
+    }
+    // Toetsenbord-focus-ring in-/uitfaden: alleen het gefocuste item toont 'm.
+    const kf = Math.min(1, dtMS / 130)
+    for (const n of this.nodes) {
+      if (!n.focusRing) continue
+      const target = n.item.id === this.kbFocusId ? 1 : 0
+      n.focusAlpha += (target - n.focusAlpha) * kf
+      n.focusRing.alpha = n.focusAlpha
+      n.focusRing.visible = n.focusAlpha > 0.01
     }
     for (const n of this.nodes) {
       // Vloeiend naar de doel-layout bewegen (animatie bij een stand-wissel).

@@ -409,16 +409,18 @@ export function AppShell() {
     return () => window.removeEventListener('resize', onResize)
   }, [])
 
-  // Toetsenbord-navigatie (Fase 1: jaar-view). Pijltjes verplaatsen de focus (de
-  // eerste druk toont 'm bij het scherm-midden), Enter opent de gefocuste memory.
-  // Een muisklik zet 'm terug naar muis-modus (focus verdwijnt).
+  // Toetsenbord-navigatie (jaar-view én memory-canvas). Pijltjes verplaatsen de
+  // focus (de eerste druk toont 'm bij het scherm-midden); in de jaar-view opent
+  // Enter de gefocuste memory, in het canvas zoomt Enter in op het gefocuste item.
+  // Een muisklik/-beweging zet 'm terug naar muis-modus (focus verdwijnt).
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (e.ctrlKey || e.metaKey || e.altKey) return
       const el = document.activeElement
       if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) return
       if (dialogOpenRef.current || overlayOpenRef.current) return
-      if (levelRef.current !== 'year' || engineRef.current?.isTransitioning) return
+      const lvl = levelRef.current
+      if ((lvl !== 'year' && lvl !== 'event') || engineRef.current?.isTransitioning) return
       const scene = sceneRef.current
       const dir =
         e.key === 'ArrowLeft' ? 'left'
@@ -436,7 +438,8 @@ export function AppShell() {
         const id = scene?.focusedId?.()
         if (id) {
           e.preventDefault()
-          enterEventRef.current(id)
+          if (lvl === 'year') enterEventRef.current(id)
+          else enterFocusRef.current(id) // memory-canvas: zoom in op het item (L3)
         }
       }
     }
@@ -465,6 +468,7 @@ export function AppShell() {
 
   const enterEventRef = useRef<(id: string) => void>(() => {})
   const enterYearRef = useRef<(id: string) => void>(() => {})
+  const enterFocusRef = useRef<(id: string) => void>(() => {})
   // Afteller: viewport gewijzigd (bv. (uit) fullscreen) → herfit de focus-scene een
   // paar frames lang (Pixi's eigen resize kan een frame later pas settelen).
   const refitFramesRef = useRef(0)
@@ -749,6 +753,7 @@ export function AppShell() {
 
     enterYearRef.current = (id) => void enterYear(id)
     enterEventRef.current = (id) => void enterEvent(id)
+    enterFocusRef.current = (id) => enterFocus(id)
 
     // Verticale-pan-lock toepassen op basis van niveau + instelling (alleen de
     // horizontale niveaus L0/L1).
