@@ -404,6 +404,9 @@ export function AppShell() {
       if (e.key === 'e' || e.key === 'E') {
         e.preventDefault()
         updateSettings({ viewMode: !settingsRef.current.viewMode })
+      } else if (e.key === 't' || e.key === 'T') {
+        e.preventDefault()
+        updateSettings({ showTitle: !settingsRef.current.showTitle }) // titel bovenin aan/uit
       } else if (e.key === 's' || e.key === 'S') {
         e.preventDefault()
         startScreensaverRef.current()
@@ -2373,6 +2376,7 @@ function SettingsPanel({
                     { k: ['Ctrl', 'K'], d: 'Zoeken' },
                     { k: ['S'], d: 'Diavoorstelling starten' },
                     { k: ['E'], d: 'Kijkmodus (bewerkknoppen tonen/verbergen)' },
+                    { k: ['T'], d: 'Titel bovenin tonen/verbergen' },
                     { k: ['Esc'], d: 'Sluiten — dialoog, zoeken of diavoorstelling' },
                     { k: ['F11'], d: 'Volledig scherm — app (chromeless) aan/uit' },
                     { k: ['F'], d: 'Volledig scherm — app (chromeless) aan/uit' },
