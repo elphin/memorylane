@@ -144,6 +144,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::app_version,
             commands::get_vault_path,
+            commands::item_media_path,
             commands::set_vault_path,
             commands::reindex,
             commands::list_years,

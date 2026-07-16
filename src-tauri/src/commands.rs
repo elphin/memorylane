@@ -584,6 +584,13 @@ pub fn get_vault_path(state: State<VaultService>) -> Result<Option<String>, Stri
     Ok(path.as_ref().map(|p| p.to_string_lossy().to_string()))
 }
 
+/// Absoluut pad naar het originele mediabestand van een item (voor `<video>` via
+/// het asset-protocol). Zelfde vault-containment-guard als de thumbnails.
+#[tauri::command]
+pub fn item_media_path(state: State<VaultService>, item_id: String) -> Result<String, String> {
+    Ok(state.resolve_media(&item_id)?.to_string_lossy().to_string())
+}
+
 /// Kiest (of wijzigt) de vault-map: valideert, bewaart in config en indexeert.
 #[tauri::command]
 pub fn set_vault_path(

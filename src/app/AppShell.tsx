@@ -294,6 +294,8 @@ export function AppShell() {
   const [focusVideoId, setFocusVideoId] = useState<string | null>(null)
   const focusVideoIdRef = useRef<string | null>(null)
   const videoWrapRef = useRef<HTMLDivElement>(null)
+  // De asset-URL van de gefocuste video (async opgehaald: pad → convertFileSrc).
+  const [videoSrc, setVideoSrc] = useState('')
   // Ref-spiegel zodat de (één keer opgezette) engine-closures de actuele
   // voorkeuren lezen zonder stale closure.
   const settingsRef = useRef(settings)
@@ -1054,6 +1056,22 @@ export function AppShell() {
     dialogOpenRef.current = !!(modal || editing || eventForm || metaForm)
   }, [modal, editing, eventForm, metaForm])
 
+  // Haal de asset-URL van de gefocuste video op (pad → convertFileSrc). Async,
+  // dus buiten de render; leeg bij geen video of tijdens het laden.
+  useEffect(() => {
+    if (!focusVideoId || !backendRef.current) {
+      setVideoSrc('')
+      return
+    }
+    let alive = true
+    void backendRef.current.mediaUrl(focusVideoId).then((u) => {
+      if (alive) setVideoSrc(u)
+    })
+    return () => {
+      alive = false
+    }
+  }, [focusVideoId])
+
   // Houd de key-closure op de hoogte of een invoerloze overlay open staat. De
   // screensaver hoort hier ook bij: dan slaan de globale Esc/'e'-handlers zichzelf
   // over en navigeert er niets onder de screensaver.
@@ -1571,7 +1589,7 @@ export function AppShell() {
       {focusVideoId && backendRef.current && (
         <FocusVideoLayer
           ref={videoWrapRef}
-          src={backendRef.current.mediaUrl(focusVideoId)}
+          src={videoSrc}
           poster={backendRef.current.thumb(focusVideoId, 1024).url ?? ''}
           canStep={(currentItemsRef.current?.length ?? 0) > 1}
           onPrev={() => sceneRef.current?.step?.(-1)}

@@ -270,8 +270,9 @@ export interface Backend {
     exclude: string[],
   ): Promise<string[]>
   thumb(itemId: string, size: 64 | 128 | 256 | 1024 | 2048): ThumbSource
-  /** URL naar het originele mediabestand (voor <video>-afspelen). Leeg in de mock. */
-  mediaUrl(itemId: string): string
+  /** URL naar het originele mediabestand (voor <video>-afspelen), via het
+   * asset-protocol. Leeg in de mock. */
+  mediaUrl(itemId: string): Promise<string>
 
   // ---- Mobiele inbox (telefoon-brievenbus, fase 4) ----
   /** Niet-geheime koppelstatus (nooit tokens/sleutels). */
@@ -311,12 +312,6 @@ function thumbUrl(itemId: string, size: number): string {
     : `thumb://localhost/${id}?size=${size}`
 }
 
-/** media://-URL voor het ORIGINELE bestand (video afspelen). Windows → http-map. */
-function mediaUrlFor(itemId: string): string {
-  const isWindows = typeof navigator !== 'undefined' && /Windows/i.test(navigator.userAgent)
-  const id = encodeURIComponent(itemId)
-  return isWindows ? `http://media.localhost/${id}` : `media://localhost/${id}`
-}
 
 // ---- Tauri-backend -------------------------------------------------------
 
@@ -522,8 +517,11 @@ class TauriBackend implements Backend {
   thumb(itemId: string, size: number): ThumbSource {
     return { url: thumbUrl(itemId, size) }
   }
-  mediaUrl(itemId: string): string {
-    return mediaUrlFor(itemId)
+  async mediaUrl(itemId: string): Promise<string> {
+    const invoke = await this.api()
+    const path = await invoke<string>('item_media_path', { itemId })
+    const core = await import('@tauri-apps/api/core')
+    return core.convertFileSrc(path)
   }
 
   async inboxStatus(): Promise<InboxStatus> {
@@ -973,7 +971,7 @@ class MockBackend implements Backend {
     }
     return { url }
   }
-  mediaUrl(): string {
+  async mediaUrl(): Promise<string> {
     // Geen echt bestand in browser-dev; de speler-UI (poster/chevrons) is wel te zien.
     return ''
   }
