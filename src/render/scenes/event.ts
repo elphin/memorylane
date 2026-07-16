@@ -34,8 +34,9 @@ interface Node {
   mask: Graphics | null // clip-masker (foto)
   ring: Graphics | null // gouden rand als deze foto de event-omslag (featured) is
   yearRing: Graphics | null // blauwe rand als deze foto de vaste jaar-cover is
-  focusRing: Graphics | null // witte rand bij toetsenbord-focus (op elk nodetype)
-  focusAlpha: number // gedempte zichtbaarheid van de focus-ring (0..1)
+  focusRing: Graphics | null // aparte focus-ring (alleen notities; foto's gebruiken hun frame)
+  focusAlpha: number // gedempte zichtbaarheid van de focus-ring (0..1, notities)
+  borderAlpha: number // gedempte zichtbaarheid van de eigen witte rand (foto's, 0..1)
   // Notitie-kaart (tekst/link): losse onderdelen zodat de box los van de tekst
   // hergroot kan worden (Alt-slepen = box groter, font gelijk; tekst herloopt).
   textBg: Graphics | null
@@ -143,11 +144,15 @@ export class EventScene implements Scene {
         if (item.itemType === 'video') this.buildPlayBadge(container)
       }
 
-      // Toetsenbord-focus-ring (elk nodetype, bovenop de kaart). Standaard
-      // onzichtbaar; getekend op de kaartmaat via drawFocusRing.
-      const focusRing = new Graphics()
-      focusRing.visible = false
-      container.addChild(focusRing)
+      // Toetsenbord-focus-indicator. Foto's gebruiken hun EIGEN witte rand (de
+      // `frame` faadt weg voor niet-gefocuste tegels, net als de jaar-view); een
+      // notitie heeft geen witte fotorand en krijgt daarom een aparte ring.
+      let focusRing: Graphics | null = null
+      if (isText) {
+        focusRing = new Graphics()
+        focusRing.visible = false
+        container.addChild(focusRing)
+      }
 
       // Positie: uit _canvas.json of auto-grid.
       const saved = layout.get(ref)
@@ -172,6 +177,7 @@ export class EventScene implements Scene {
         yearRing,
         focusRing,
         focusAlpha: 0,
+        borderAlpha: 1,
         textBg,
         textEl,
         textClip,
@@ -205,7 +211,6 @@ export class EventScene implements Scene {
       if (isText) {
         this.sizeTextCard(node, node.width ?? TEXT_W, node.height ?? TEXT_H)
       }
-      this.drawFocusRing(node) // op de (initiële) kaartmaat; foto's hertekenen bij load
     })
 
     this.root.sortableChildren = true
@@ -243,7 +248,6 @@ export class EventScene implements Scene {
     n.mask?.rect(-w / 2, -h / 2, w, h).fill(0xffffff)
     n.sprite?.setSize(w, h)
     this.drawFrameBorder(n)
-    this.drawFocusRing(n) // rand veranderde → focus-ring mee hertekenen
   }
 
   /** Effectieve witte-rand-dikte: dempt mee met de eigen schaal, zodat een
@@ -338,8 +342,8 @@ export class EventScene implements Scene {
     }
   }
 
-  /** (Her)teken de toetsenbord-focus-ring op de huidige kaartmaat (halfW/halfH,
-   * werkt voor foto én notitie), net buiten de rand. Wit en subtiel. */
+  /** (Her)teken de notitie-focus-ring op de huidige kaartmaat (halfW/halfH), net
+   * buiten de rand. Wit en subtiel. Foto's gebruiken hun eigen frame (geen ring). */
   private drawFocusRing(n: Node): void {
     if (!n.focusRing) return
     const pad = 4
@@ -1031,14 +1035,23 @@ export class EventScene implements Scene {
       this.layoutGridPositions()
       this.regridPending = false
     }
-    // Toetsenbord-focus-ring in-/uitfaden: alleen het gefocuste item toont 'm.
+    // Toetsenbord-focus-indicator in-/uitfaden. Foto's: hun eigen witte rand blijft
+    // op de gefocuste tegel en faadt weg op de rest (net als de jaar-view). Notities:
+    // een aparte ring op de gefocuste. Zonder toetsenbord-focus zijn alle randen vol.
     const kf = Math.min(1, dtMS / 130)
     for (const n of this.nodes) {
-      if (!n.focusRing) continue
-      const target = n.item.id === this.kbFocusId ? 1 : 0
-      n.focusAlpha += (target - n.focusAlpha) * kf
-      n.focusRing.alpha = n.focusAlpha
-      n.focusRing.visible = n.focusAlpha > 0.01
+      const focused = n.item.id === this.kbFocusId
+      if (n.frame) {
+        const target = this.kbFocusId === null || focused ? 1 : 0
+        n.borderAlpha += (target - n.borderAlpha) * kf
+        n.frame.alpha = n.borderAlpha
+      }
+      if (n.focusRing) {
+        const target = this.kbFocusId !== null && focused ? 1 : 0
+        n.focusAlpha += (target - n.focusAlpha) * kf
+        n.focusRing.alpha = n.focusAlpha
+        n.focusRing.visible = n.focusAlpha > 0.01
+      }
     }
     for (const n of this.nodes) {
       // Vloeiend naar de doel-layout bewegen (animatie bij een stand-wissel).
