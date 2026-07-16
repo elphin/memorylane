@@ -135,8 +135,11 @@ export class FocusScene implements Scene {
       this.dispW = CARD_W
       this.dispH = cardH
     } else {
-      // Witte fotorand die zich straks (na load) om de werkelijke foto vouwt.
+      // Witte fotorand die zich straks (na load) om de werkelijke foto vouwt. In
+      // content-beeldvullend laten we 'm weg: dan vult de foto tot de rand en zouden
+      // alleen de zijranden zichtbaar zijn (tegen de geblurde achtergrond = lelijk).
       const frame = new Graphics()
+      frame.visible = !this.fullscreen
       container.addChild(frame)
       this.frame = frame
       const sprite = new Sprite(Texture.WHITE)
@@ -255,6 +258,7 @@ export class FocusScene implements Scene {
   /** Zet beeldvullende fullscreen-fit aan/uit en herfit meteen. */
   setFullscreen(on: boolean): void {
     this.fullscreen = on
+    if (this.frame) this.frame.visible = !on // geen witte fotorand in beeldvullend
     this.fitCamera()
   }
 
