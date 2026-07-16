@@ -366,11 +366,25 @@ export function AppShell() {
       } else if (e.key === 's' || e.key === 'S') {
         e.preventDefault()
         startScreensaverRef.current()
+      } else if (e.key === 'f' || e.key === 'F') {
+        // Fullscreen aan/uit; op L3 herfit de focus-scene zodat het item vult.
+        e.preventDefault()
+        void toggleFullscreen()
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Viewport-wijziging (venster-resize / fullscreen) → focus-scene herfitten. De
+  // frame-lus voert het uit ná Pixi's eigen resize (vlag i.p.v. direct).
+  useEffect(() => {
+    const onResize = (): void => {
+      refitFramesRef.current = 8
+    }
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
   }, [])
 
   const [draft, setDraft] = useState('')
@@ -382,7 +396,9 @@ export function AppShell() {
 
   const enterEventRef = useRef<(id: string) => void>(() => {})
   const enterYearRef = useRef<(id: string) => void>(() => {})
-  const goBackRef = useRef<() => void>(() => {})
+  // Afteller: viewport gewijzigd (bv. (uit) fullscreen) → herfit de focus-scene een
+  // paar frames lang (Pixi's eigen resize kan een frame later pas settelen).
+  const refitFramesRef = useRef(0)
   // Re-entrancy-slot voor mutaties: `busy`-state is niet betrouwbaar tegen een
   // dubbele klik binnen dezelfde tick (stale closure) — een ref wel.
   const mutatingRef = useRef(false)
@@ -645,7 +661,6 @@ export function AppShell() {
 
     enterYearRef.current = (id) => void enterYear(id)
     enterEventRef.current = (id) => void enterEvent(id)
-    goBackRef.current = () => goBack()
 
     // Verticale-pan-lock toepassen op basis van niveau + instelling (alleen de
     // horizontale niveaus L0/L1).
@@ -779,6 +794,13 @@ export function AppShell() {
       engine.onFrame = (ctx) => {
         sceneRef.current?.update(ctx)
 
+        // Herfit een paar frames na een viewport-wijziging (fullscreen), zodat het
+        // ook klopt als Pixi's resize pas een frame later settelt.
+        if (refitFramesRef.current > 0) {
+          refitFramesRef.current--
+          if (levelRef.current === 'focus') sceneRef.current?.refitToViewport?.()
+        }
+
         // L3 video-overlay: mount de DOM-speler alleen als het gefocuste item een
         // video is én er geen transitie loopt (anders staat 'ie fout t.o.v. de
         // inzoomende poster). Positie elke frame imperatief (geen React-render).
@@ -794,9 +816,7 @@ export function AppShell() {
           focusScene?.setContentHidden?.(true) // Pixi-poster weg → alleen de DOM-video
           const r = focusScene?.screenRect?.()
           const wrap = videoWrapRef.current
-          // Tijdens fullscreen niet zelf herpositioneren (dan vecht de inline-stijl
-          // met de browser-fullscreen-maat).
-          if (r && wrap && !document.fullscreenElement) {
+          if (r && wrap) {
             wrap.style.left = `${r.left}px`
             wrap.style.top = `${r.top}px`
             wrap.style.width = `${r.width}px`
@@ -1599,7 +1619,7 @@ export function AppShell() {
           canStep={(currentItemsRef.current?.length ?? 0) > 1}
           onPrev={() => sceneRef.current?.step?.(-1)}
           onNext={() => sceneRef.current?.step?.(1)}
-          onClose={() => goBackRef.current()}
+          onFullscreen={() => void toggleFullscreen()}
           onAspect={(a) => sceneRef.current?.setVideoAspect?.(a)}
         />
       )}

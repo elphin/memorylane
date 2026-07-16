@@ -275,10 +275,10 @@ export class EventScene implements Scene {
   /** Gecentreerde play-badge (donkere cirkel + witte driehoek) — markeert een
    * video onder de foto's. Bovenop de kaart, schaalt mee met de tegel. */
   private buildPlayBadge(container: Container): Graphics {
-    const R = 26
+    const R = 16
     const g = new Graphics()
     g.circle(0, 0, R).fill({ color: 0x000000, alpha: 0.45 })
-    g.circle(0, 0, R).stroke({ width: 2.5, color: 0xffffff, alpha: 0.92 })
+    g.circle(0, 0, R).stroke({ width: 2, color: 0xffffff, alpha: 0.92 })
     // Driehoek proportioneel aan R (lichte offset naar rechts oogt gecentreerd).
     g.poly([-R * 0.28, -R * 0.4, -R * 0.28, R * 0.4, R * 0.52, 0]).fill({ color: 0xffffff, alpha: 0.96 })
     container.addChild(g)

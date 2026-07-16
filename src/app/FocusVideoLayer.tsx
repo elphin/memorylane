@@ -1,8 +1,8 @@
 // L3-video-overlay: een DOM-<video> exact over de gefocuste video, met een eigen
-// (mooie) bediening i.p.v. de standaard-browserskin. Positie wordt imperatief
-// bijgewerkt vanuit AppShell's frame-lus (via `ref`); pas gemount als de inzoom-
-// animatie klaar is. De overlay-rect volgt de échte video-verhouding (via
-// onAspect), zodat er geen zwarte klikbare randen zijn.
+// (mooie) bediening. Positie wordt imperatief bijgewerkt vanuit AppShell's
+// frame-lus (via `ref`). De rect volgt de échte video-verhouding (via onAspect),
+// zodat er geen zwarte klikbare randen zijn. Bediening: klik/spatie = play/pauze,
+// pijltjes/chevrons = vorige/volgende, `f` = fullscreen (in AppShell).
 
 import { forwardRef, useEffect, useRef, useState } from 'react'
 
@@ -44,13 +44,12 @@ function chevron(side: 'left' | 'right'): React.CSSProperties {
   }
 }
 
-// Kleine monochrome SVG-iconen (premium, consistent).
-const Play = ({ s = 24 }: { s?: number }) => (
+const Play = ({ s = 22 }: { s?: number }) => (
   <svg width={s} height={s} viewBox="0 0 24 24" fill="currentColor">
     <path d="M8 5v14l11-7z" />
   </svg>
 )
-const Pause = ({ s = 24 }: { s?: number }) => (
+const Pause = ({ s = 22 }: { s?: number }) => (
   <svg width={s} height={s} viewBox="0 0 24 24" fill="currentColor">
     <path d="M6 5h4v14H6zM14 5h4v14h-4z" />
   </svg>
@@ -79,12 +78,11 @@ export const FocusVideoLayer = forwardRef<
     canStep: boolean
     onPrev: () => void
     onNext: () => void
-    onClose: () => void
+    onFullscreen: () => void
     /** Werkelijke video-verhouding (b/h) na loadedmetadata, of null. */
     onAspect: (aspect: number | null) => void
   }
->(function FocusVideoLayer({ src, poster, canStep, onPrev, onNext, onClose, onAspect }, ref) {
-  const wrapRef = useRef<HTMLDivElement | null>(null)
+>(function FocusVideoLayer({ src, poster, canStep, onPrev, onNext, onFullscreen, onAspect }, ref) {
   const videoRef = useRef<HTMLVideoElement>(null)
   const [playing, setPlaying] = useState(false)
   const [cur, setCur] = useState(0)
@@ -92,8 +90,28 @@ export const FocusVideoLayer = forwardRef<
   const [muted, setMuted] = useState(false)
   const [hover, setHover] = useState(false)
 
-  // Bij bronwissel: speler-staat resetten (nieuw item start gepauzeerd op 0), en
-  // bij verlaten expliciet stoppen + de bron vrijgeven.
+  function toggle(): void {
+    const v = videoRef.current
+    if (!v) return
+    if (v.paused) void v.play()
+    else v.pause()
+  }
+
+  // Spatiebalk = play/pauze (buiten invoervelden). De hele overlay leeft bij een
+  // gefocuste video, dus een window-listener is genoeg.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key !== ' ' && e.code !== 'Space') return
+      const el = document.activeElement
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) return
+      e.preventDefault()
+      toggle()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
+  // Bij bronwissel: speler-staat resetten; bij verlaten stoppen + bron vrijgeven.
   useEffect(() => {
     setPlaying(false)
     setCur(0)
@@ -108,18 +126,6 @@ export const FocusVideoLayer = forwardRef<
     }
   }, [src])
 
-  const setWrap = (el: HTMLDivElement | null): void => {
-    wrapRef.current = el
-    if (typeof ref === 'function') ref(el)
-    else if (ref) ref.current = el
-  }
-
-  function toggle(): void {
-    const v = videoRef.current
-    if (!v) return
-    if (v.paused) void v.play()
-    else v.pause()
-  }
   function seek(e: React.PointerEvent<HTMLDivElement>): void {
     const v = videoRef.current
     if (!v || !dur) return
@@ -133,22 +139,14 @@ export const FocusVideoLayer = forwardRef<
     v.muted = !v.muted
     setMuted(v.muted)
   }
-  function fullscreen(): void {
-    const w = wrapRef.current
-    if (!w) return
-    if (document.fullscreenElement) void document.exitFullscreen()
-    else void w.requestFullscreen()
-  }
 
   const showBar = hover || !playing
   const pct = dur ? (cur / dur) * 100 : 0
 
   return (
-    // Volledig scherm, transparant voor muis — klikken náást de video landen op het
-    // canvas (achtergrond = terug). De video + knoppen vangen hun eigen klikken.
     <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 40 }}>
       <div
-        ref={setWrap}
+        ref={ref}
         onMouseEnter={() => setHover(true)}
         onMouseLeave={() => setHover(false)}
         style={{ position: 'absolute', pointerEvents: 'auto', visibility: 'hidden', overflow: 'hidden', borderRadius: 8, background: '#000' }}
@@ -173,55 +171,6 @@ export const FocusVideoLayer = forwardRef<
           style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block', background: '#000' }}
         />
 
-        {/* Center play-knop (klein) wanneer gepauzeerd. */}
-        {!playing && (
-          <button
-            onClick={toggle}
-            aria-label="Afspelen"
-            style={{
-              position: 'absolute',
-              left: '50%',
-              top: '50%',
-              transform: 'translate(-50%,-50%)',
-              width: 62,
-              height: 62,
-              borderRadius: '50%',
-              border: 'none',
-              cursor: 'pointer',
-              background: 'rgba(15,18,26,0.5)',
-              color: '#fff',
-              display: 'grid',
-              placeItems: 'center',
-              paddingLeft: 4,
-            }}
-          >
-            <Play s={26} />
-          </button>
-        )}
-
-        {/* Sluitknop rechtsboven. */}
-        <button
-          onClick={onClose}
-          aria-label="Sluiten"
-          style={{
-            position: 'absolute',
-            top: 8,
-            right: 8,
-            width: 32,
-            height: 32,
-            borderRadius: '50%',
-            border: 'none',
-            background: 'rgba(15,18,26,0.5)',
-            color: '#fff',
-            fontSize: 18,
-            cursor: 'pointer',
-            opacity: showBar ? 1 : 0,
-            transition: 'opacity .2s',
-          }}
-        >
-          ×
-        </button>
-
         {/* Bedieningsbalk (fade-in op hover / bij pauze). */}
         <div
           style={{
@@ -239,7 +188,7 @@ export const FocusVideoLayer = forwardRef<
           }}
         >
           <button onClick={toggle} style={iconBtn} aria-label={playing ? 'Pauze' : 'Afspelen'}>
-            {playing ? <Pause s={22} /> : <Play s={22} />}
+            {playing ? <Pause /> : <Play />}
           </button>
           <div
             onPointerDown={seek}
@@ -253,7 +202,7 @@ export const FocusVideoLayer = forwardRef<
           <button onClick={toggleMute} style={iconBtn} aria-label="Geluid">
             {muted ? <VolOff /> : <VolOn />}
           </button>
-          <button onClick={fullscreen} style={iconBtn} aria-label="Volledig scherm">
+          <button onClick={onFullscreen} style={iconBtn} aria-label="Volledig scherm (f)">
             <Full />
           </button>
         </div>

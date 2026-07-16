@@ -160,6 +160,12 @@ export class FocusScene implements Scene {
     this.onStep?.(delta, this.current?.id ?? null)
   }
 
+  /** Herfit de camera op het huidige item (na een viewport-wijziging, bv. bij
+   * (uit) fullscreen gaan), zodat het item het scherm blijft vullen. */
+  refitToViewport(): void {
+    this.fitCamera()
+  }
+
   /** Ververs de item-data (na een bewerking) en herbouw het huidige item. */
   refresh(items: Item[]): void {
     if (items.length === 0) return
@@ -172,9 +178,7 @@ export class FocusScene implements Scene {
     // Niet navigeren terwijl de gebruiker in een invoerveld typt (bewerk-overlay):
     // dan zijn de pijltjes voor de tekstcursor, niet voor vorige/volgende item.
     const el = document.activeElement
-    // Ook een gefocuste <video> overslaan: dan zijn de pijltjes voor spoelen (de
-    // chevrons/klik doen de sibling-navigatie), niet voor vorige/volgende item.
-    if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'VIDEO')) return
+    if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) return
     if (e.key === 'ArrowLeft') this.step(-1)
     else if (e.key === 'ArrowRight') this.step(1)
   }

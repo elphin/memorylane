@@ -26,6 +26,9 @@ export interface Scene {
   hitTest?(worldX: number, worldY: number): string | null
   /** Ga naar de vorige/volgende sibling (alleen L3-focus). */
   step?(delta: number): void
+  /** Herfit de camera op het huidige item (alleen L3-focus), bv. na (uit)
+   * fullscreen gaan. */
+  refitToViewport?(): void
   /** Ververs de item-data in-place (alleen L3-focus), na een bewerking. */
   refresh?(items: Item[]): void
   /** Toon/verberg de Ctrl-dag-indicator (alleen L1-jaar). */
