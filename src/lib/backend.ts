@@ -152,11 +152,20 @@ export interface CanvasLayoutInput {
   height?: number
 }
 
+export interface MaterializationReport {
+  yearsCreated: number
+  eventsCreated: number
+  loosePhotoFolders: { folder: string; count: number }[]
+  errors: { folder: string; reason: string }[]
+}
+
 export interface IndexSummary {
   yearCount: number
   eventCount: number
   itemCount: number
   errorCount: number
+  /** Wat de materialisatie-pass deed (leeg bij een index zonder materialiseren). */
+  materialization: MaterializationReport
 }
 
 export interface SearchResult {
@@ -660,10 +669,22 @@ class MockBackend implements Backend {
     return 'L:/Jim/MemoryLane (mock)'
   }
   async pickAndSetVault(): Promise<IndexSummary | null> {
-    return { yearCount: this.years.length, eventCount: 12, itemCount: 200, errorCount: 0 }
+    return {
+      yearCount: this.years.length,
+      eventCount: 12,
+      itemCount: 200,
+      errorCount: 0,
+      materialization: { yearsCreated: 0, eventsCreated: 0, loosePhotoFolders: [], errors: [] },
+    }
   }
   async reindex(): Promise<IndexSummary> {
-    return { yearCount: this.years.length, eventCount: 12, itemCount: 200, errorCount: 0 }
+    return {
+      yearCount: this.years.length,
+      eventCount: 12,
+      itemCount: 200,
+      errorCount: 0,
+      materialization: { yearsCreated: 0, eventsCreated: 0, loosePhotoFolders: [], errors: [] },
+    }
   }
   async listYears(): Promise<YearSummary[]> {
     // pinnedCover dynamisch: kan tijdens de sessie via setYearCover wijzigen.

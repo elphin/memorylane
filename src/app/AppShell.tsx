@@ -4,7 +4,15 @@
 // DOM wordt alleen gebruikt voor overlays (loading, first-run, leeg).
 
 import { useEffect, useRef, useState } from 'react'
-import type { Backend, EventInfo, ExifEntry, Item, SearchResult, YearSummary } from '../lib/backend'
+import type {
+  Backend,
+  EventInfo,
+  ExifEntry,
+  Item,
+  MaterializationReport,
+  SearchResult,
+  YearSummary,
+} from '../lib/backend'
 import { createBackend } from '../lib/backend'
 import { RenderEngine } from '../render/core/engine'
 import { EventScene } from '../render/scenes/event'
@@ -276,6 +284,8 @@ export function AppShell() {
   const [message, setMessage] = useState('')
   const [uiLevel, setUiLevel] = useState<'lifeline' | 'year' | 'event' | 'focus'>('lifeline')
   const [modal, setModal] = useState<null | 'note'>(null)
+  // Overzicht na een index-actie die metadata materialiseerde (of problemen vond).
+  const [matReport, setMatReport] = useState<MaterializationReport | null>(null)
   const [editing, setEditing] = useState<null | { id: string; kind: 'text' | 'photo'; value: string }>(null)
   const [eventForm, setEventForm] = useState<null | EventForm>(null)
   const [metaForm, setMetaForm] = useState<null | MetaForm>(null)
@@ -1509,6 +1519,17 @@ export function AppShell() {
     }
   }
 
+  // Toon het materialisatie-overzicht alleen als er echt iets gebeurde: bestanden
+  // aangemaakt of problemen. Losse foto's zijn puur informatief (staan wél in het
+  // overzicht als 't verschijnt), maar triggeren 'm niet — anders komt-ie elke
+  // reindex terug op een archief met permanente losse foto's.
+  const maybeShowReport = (m: MaterializationReport | undefined): void => {
+    if (!m) return
+    if (m.yearsCreated + m.eventsCreated > 0 || m.errors.length > 0) {
+      setMatReport(m)
+    }
+  }
+
   const pickVault = async (): Promise<void> => {
     const backend = backendRef.current
     if (!backend) return
@@ -1520,6 +1541,7 @@ export function AppShell() {
         return
       }
       await rebuildLifeline()
+      maybeShowReport(summary.materialization)
     } catch (e) {
       setMessage(String(e))
       setPhase('error')
@@ -1533,8 +1555,9 @@ export function AppShell() {
     setSettingsOpen(false)
     setPhase('loading')
     try {
-      await backend.reindex()
+      const summary = await backend.reindex()
       await rebuildLifeline()
+      maybeShowReport(summary.materialization)
     } catch (e) {
       setMessage(String(e))
       setPhase('error')
@@ -2026,6 +2049,7 @@ export function AppShell() {
           </button>
         )}
       {toast && <div style={toastStyle}>{toast}</div>}
+      {matReport && <MaterializationOverlay report={matReport} onClose={() => setMatReport(null)} />}
       {phase === 'ready' && !modal && !editing && !eventForm && !metaForm && !searchOpen && !settingsOpen && !settings.viewMode && !fullscreen && (
         <Fab
           uiLevel={uiLevel}
@@ -3223,6 +3247,106 @@ function BackButton({ onClick }: { onClick: () => void }) {
       </svg>
     </button>
   )
+}
+
+/** Overzicht na een index-actie die je mappenstructuur eenmalig doorliep en
+ * ontbrekende `_year.md`/`_event.md` aanmaakte (of problemen tegenkwam). */
+function MaterializationOverlay({
+  report,
+  onClose,
+}: {
+  report: MaterializationReport
+  onClose: () => void
+}) {
+  const created = report.yearsCreated + report.eventsCreated
+  return (
+    <div style={overlayBackdrop} onClick={onClose}>
+      <div style={overlayCard} onClick={(e) => e.stopPropagation()}>
+        <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 10 }}>Je vault is doorlopen</div>
+        <div style={{ fontSize: 14, color: '#cfd6e4', lineHeight: 1.6 }}>
+          {created > 0 ? (
+            <>
+              De app heeft je mappenstructuur doorlopen en de ontbrekende metadata-bestanden
+              aangemaakt, zodat elke map "van MemoryLane" is:
+              <ul style={{ margin: '8px 0 0', paddingLeft: 20 }}>
+                {report.yearsCreated > 0 && (
+                  <li>
+                    {report.yearsCreated}× <code>_year.md</code> (jaar)
+                  </li>
+                )}
+                {report.eventsCreated > 0 && (
+                  <li>
+                    {report.eventsCreated}× <code>_event.md</code> (memory)
+                  </li>
+                )}
+              </ul>
+            </>
+          ) : (
+            <>De app heeft je mappenstructuur doorlopen. Er waren geen nieuwe bestanden nodig.</>
+          )}
+        </div>
+
+        {report.loosePhotoFolders.length > 0 && (
+          <div style={{ marginTop: 14, fontSize: 13.5, color: '#cfd6e4', lineHeight: 1.6 }}>
+            <b>Losse foto's gevonden</b> (foto's direct in een jaarmap, nog niet in een memory).
+            Ze zijn zichtbaar als een "Losse foto's"-bundel; maak er een memory van om ze te ordenen:
+            <ul style={{ margin: '6px 0 0', paddingLeft: 20 }}>
+              {report.loosePhotoFolders.slice(0, 12).map((f) => (
+                <li key={f.folder}>
+                  <code>{f.folder}</code> — {f.count} foto{f.count === 1 ? '' : "'s"}
+                </li>
+              ))}
+              {report.loosePhotoFolders.length > 12 && (
+                <li>…en nog {report.loosePhotoFolders.length - 12} map(pen)</li>
+              )}
+            </ul>
+          </div>
+        )}
+
+        {report.errors.length > 0 && (
+          <div style={{ marginTop: 14, fontSize: 13.5, color: '#f3b0b0', lineHeight: 1.6 }}>
+            <b>Kon deze mappen niet bijwerken</b> (bijvoorbeeld alleen-lezen):
+            <ul style={{ margin: '6px 0 0', paddingLeft: 20 }}>
+              {report.errors.slice(0, 12).map((e, i) => (
+                <li key={i}>
+                  <code>{e.folder || '(vault-root)'}</code> — {e.reason}
+                </li>
+              ))}
+              {report.errors.length > 12 && <li>…en nog {report.errors.length - 12}</li>}
+            </ul>
+          </div>
+        )}
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 18 }}>
+          <button onClick={onClose} style={{ ...fabBtn, background: '#3b82f6' }}>
+            Begrepen
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+const overlayBackdrop: React.CSSProperties = {
+  position: 'absolute',
+  inset: 0,
+  background: 'rgba(0,0,0,0.6)',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  zIndex: 1200,
+}
+
+const overlayCard: React.CSSProperties = {
+  width: 560,
+  maxWidth: '92%',
+  maxHeight: '84vh',
+  overflowY: 'auto',
+  background: '#161c28',
+  border: '1px solid #2c3650',
+  borderRadius: 12,
+  padding: '20px 22px',
+  boxShadow: '0 20px 60px rgba(0,0,0,0.6)',
 }
 
 /** Titel bovenin die bij een niveau-wissel zoomt + crossfadet, in dezelfde richting
