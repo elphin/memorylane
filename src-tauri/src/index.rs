@@ -288,9 +288,11 @@ fn split_ids(joined: Option<String>) -> Vec<String> {
 }
 
 pub fn list_years(conn: &Connection) -> rusqlite::Result<Vec<YearSummary>> {
+    // event_count = aantal door de gebruiker aangemaakte memories. De synthetische
+    // "Losse foto's"-bundel (synthetic = 1) telt NIET mee: dat is geen echte memory.
     let mut stmt = conn.prepare(
         "SELECT y.id, y.year, y.title, y.start_at, y.end_at,
-             (SELECT count(*) FROM events e WHERE e.year_id = y.id),
+             (SELECT count(*) FROM events e WHERE e.year_id = y.id AND e.synthetic = 0),
              (SELECT count(*) FROM items i JOIN events e ON i.event_id = e.id WHERE e.year_id = y.id),
              COALESCE(
                (SELECT i.id FROM items i JOIN events e ON i.event_id = e.id
@@ -1006,11 +1008,33 @@ mod tests {
             synthetic: true,
         });
 
+        // Voeg één ECHTE memory toe naast de synthetische bundel.
+        m.events.push(Event {
+            id: "real".into(),
+            kind: EventKind::Event,
+            title: Some("Verjaardag".into()),
+            description: None,
+            start_at: "2012-06-01".into(),
+            end_at: None,
+            location: None,
+            featured_photo: None,
+            tags: vec![],
+            size: None,
+            under_construction: None,
+            year_id: "y".into(),
+            folder_path: "2012/2012-06-01 verjaardag".into(),
+            synthetic: false,
+        });
+
         let mut conn = open_in_memory().unwrap();
         load(&mut conn, &m).unwrap();
 
         assert!(get_year(&conn, "y").unwrap().unwrap().events[0].synthetic);
         assert!(get_event(&conn, "loose").unwrap().unwrap().event.synthetic);
+
+        // list_years telt de synthetische bundel NIET mee: alleen de echte memory.
+        let years = list_years(&conn).unwrap();
+        assert_eq!(years[0].event_count, 1, "synthetische bundel telt niet als memory");
     }
 
     #[test]

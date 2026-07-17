@@ -110,8 +110,11 @@ export class LifelineScene implements Scene {
       label.position.set(TILE_W / 2, COVER_H + 12)
       tile.addChild(label)
 
+      // Aantal door de gebruiker aangemaakte memories (events), niet het aantal
+      // foto's. De synthetische "Losse foto's"-bundel telt niet mee (backend).
+      const n = year.eventCount
       const sub = new Text({
-        text: `${year.itemCount} herinneringen`,
+        text: `${n} ${n === 1 ? 'herinnering' : 'herinneringen'}`,
         style: { fill: 0x8a97b0, fontSize: 13, fontFamily: 'Segoe UI, sans-serif' },
       })
       sub.resolution = 2
