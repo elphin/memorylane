@@ -2513,8 +2513,12 @@ function SettingsPanel({
                   title: 'Navigeren (zoombare tijdlijn)',
                   items: [
                     { k: ['Klik'], d: 'Op een tegel/kaart/foto → één niveau dieper' },
-                    { k: ['Klik'], d: 'Op lege ruimte ernaast → één niveau terug (uitzoomen)' },
+                    { k: ['‹'], d: 'Terugknop linksboven → één niveau terug (werkt altijd)' },
+                    { k: ['Esc'], d: 'Eén niveau terug (werkt altijd)' },
+                    { k: ['Rechts-klik'], d: 'Eén niveau terug (uit te zetten in Weergave)' },
+                    { k: ['Klik'], d: 'Standaard: op lege ruimte ernaast → terug (uit te zetten in Weergave)' },
                     { k: ['Scroll', 'Pinch'], d: 'In-/uitzoomen naar de cursor' },
+                    { k: ['Uitzoomen'], d: 'Standaard: ver genoeg → één niveau terug (uit te zetten in Weergave)' },
                     { k: ['Slepen'], d: 'Pannen' },
                     { k: ['←', '→'], d: 'In een detailfoto: vorige / volgende foto' },
                     { k: ['Slepen'], d: 'In een jaar voorbij de rand → vorig/volgend jaar' },

@@ -24,10 +24,17 @@ of pagina's nodig — het is één doorlopende beweging.
 
 ### Met de muis
 - **Scrollen** = soepel in-/uitzoomen (naar je cursor toe). Ver inzoomen brengt je
-  een niveau dieper, ver uitzoomen een niveau terug.
+  een niveau dieper, ver uitzoomen (standaard) een niveau terug.
 - **Klikken** op een jaar / memory / foto = een niveau dieper.
-- **Klikken op lege ruimte** = een niveau terug.
+- **Terugknop** (het ‹-rondje linksboven) = een niveau terug. Deze werkt altijd.
+- **Rechtermuisknop** = een niveau terug — waar je muis ook staat.
+- **Klikken op lege ruimte** = (standaard) een niveau terug.
 - **Slepen** = de tijdlijn verschuiven.
+
+> **Te makkelijk per ongeluk terug?** In **Instellingen → Weergave → "Terug
+> navigeren"** kun je "klik op lege ruimte", "ver uitzoomen" en "rechtermuisknop"
+> apart uitschakelen. De **terugknop** linksboven en **Escape** werken dan nog
+> steeds — je zit dus nooit vast.
 
 ### Met het toetsenbord
 - **Pijltjes** = de focus (de witte rand) verplaatsen tussen de items.
