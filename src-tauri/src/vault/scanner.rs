@@ -689,7 +689,7 @@ fn is_media_file(name: &str) -> bool {
 
 /// Stabiel id uit een prefix + pad (FNV-1a 64-bit hex). Deterministisch over
 /// scans heen zodat synthetische items en fallback-ids niet muteren.
-fn stable_id(prefix: &str, path: &str) -> String {
+pub(crate) fn stable_id(prefix: &str, path: &str) -> String {
     const OFFSET: u64 = 0xcbf29ce484222325;
     const PRIME: u64 = 0x100000001b3;
     let mut hash = OFFSET;

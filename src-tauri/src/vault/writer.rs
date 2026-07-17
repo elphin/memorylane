@@ -236,23 +236,46 @@ pub fn update_event(
     // Bepaal of de event-map naar een ander jaar moet verhuizen.
     let effective_folder = relocate_year_if_needed(vault_root, folder_path, start_at)?;
     let path = vault_root.join(&effective_folder).join("_event.md");
-    let original = std::fs::read_to_string(&path)?;
-    let normalized = original.replace("\r\n", "\n");
-    let lines: Vec<&str> = normalized.split('\n').collect();
-    let open = lines.iter().position(|l| l.trim() == "---");
-    let close = open.and_then(|o| {
-        lines
+    // Robuust bij een ontbrekende `_event.md` (bijv. een foto-map die nooit een
+    // eigen event-bestand kreeg): NIET crashen. Bestaat 'ie niet én is het een losse
+    // jaarmap (geen subfolder) → niet persisteerbaar, netjes overslaan. Anders
+    // materialiseren we minimale event-frontmatter. Zelfde aanpak als edit_event_md.
+    let original = std::fs::read_to_string(&path).ok();
+    if original.is_none() && !effective_folder.contains('/') {
+        return Ok(effective_folder);
+    }
+    let fenced = original.as_ref().and_then(|c| {
+        let n = c.replace("\r\n", "\n");
+        let lines: Vec<String> = n.split('\n').map(|s| s.to_string()).collect();
+        let open = lines.iter().position(|l| l.trim() == "---")?;
+        let close = lines
             .iter()
             .enumerate()
-            .skip(o + 1)
+            .skip(open + 1)
             .find(|(_, l)| l.trim() == "---")
-            .map(|(i, _)| i)
+            .map(|(i, _)| i)?;
+        Some((lines, open, close))
     });
-    let (Some(open), Some(close)) = (open, close) else {
-        write_atomic(&path, &normalized)?;
-        return Ok(effective_folder);
+    let (mut fm, body): (Vec<String>, String) = if let Some((lines, open, close)) = fenced {
+        (
+            lines[open + 1..close].iter().map(|s| s.to_string()).collect(),
+            lines[close + 1..].join("\n").trim().to_string(),
+        )
+    } else {
+        // Ontbreekt of geen fences: minimale event-frontmatter met de bestaande tekst
+        // als body.
+        (
+            vec!["type: event".to_string()],
+            original.as_deref().unwrap_or("").trim().to_string(),
+        )
     };
-    let mut fm: Vec<String> = lines[open + 1..close].iter().map(|s| s.to_string()).collect();
+    // Leg een expliciete `id` vast als die ontbreekt: de STABIELE id die de scanner
+    // anders uit het ORIGINELE pad zou afleiden. Zo verschuift de id niet als deze
+    // edit de map naar een ander jaar verhuist (anders faalt de vervolg-setEventSize
+    // met de oude id). Voor een event dat al een id heeft, blijft die staan.
+    if !fm.iter().any(|l| l.trim_start().starts_with("id:")) {
+        set_fm_field(&mut fm, "id", Some(&crate::vault::scanner::stable_id("event", folder_path)));
+    }
     set_fm_field(&mut fm, "title", Some(title));
     set_fm_field(&mut fm, "startAt", Some(start_at));
     // Lege einddatum telt als "geen einddatum" → verwijderen.
@@ -260,7 +283,6 @@ pub fn update_event(
     set_fm_field(&mut fm, "endAt", end);
     set_fm_field(&mut fm, "updatedAt", Some(&now_iso()));
 
-    let body = lines[close + 1..].join("\n").trim().to_string();
     let mut out = String::from("---\n");
     out.push_str(&fm.join("\n"));
     out.push_str("\n---\n");
@@ -1351,6 +1373,67 @@ mod tests {
         let result = update_event(root, &folder, "Reis", "2025-01-01", None).unwrap();
         assert_eq!(result, folder, "bij een botsend doel blijft het event op zijn plek");
         assert!(root.join(&folder).join("_event.md").exists());
+    }
+
+    #[test]
+    fn update_event_materializes_missing_event_md_in_subfolder() {
+        // Regressie (ENOENT "os error 2"): een memory-map ZONDER _event.md (bijv. een
+        // pure foto-map uit een bestaand archief) mag niet crashen bij een titel-/
+        // datum-edit; we materialiseren dan een _event.md i.p.v. te lezen-en-falen.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let folder = "2024/2024-08-01 strand";
+        std::fs::create_dir_all(root.join(folder)).unwrap();
+        std::fs::write(root.join(folder).join("foto.jpg"), b"x").unwrap(); // geen _event.md
+
+        let result = update_event(root, folder, "Strand", "2024-08-01", None).unwrap();
+        assert_eq!(result, folder);
+        let md = root.join(folder).join("_event.md");
+        assert!(md.exists(), "_event.md is gematerialiseerd i.p.v. crash");
+        let parsed = crate::vault::frontmatter::parse(&std::fs::read_to_string(&md).unwrap());
+        assert_eq!(parsed.get_str("title").unwrap(), "Strand");
+        assert_eq!(parsed.get_str("startAt").unwrap(), "2024-08-01");
+        // De stabiele id (uit het pad) is vastgelegd → blijft matchen na een scan.
+        assert_eq!(
+            parsed.get_str("id").unwrap(),
+            crate::vault::scanner::stable_id("event", folder)
+        );
+    }
+
+    #[test]
+    fn update_event_cross_year_on_missing_event_md_keeps_stable_id() {
+        // Regressie-edge: datum-edit over een jaargrens op een memory ZONDER _event.md
+        // verhuist de map. De id moet gelijk blijven aan wat de scanner uit het ORIGINELE
+        // pad afleidde, zodat een vervolg-setEventSize(oude id) de event nog vindt.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let orig = "2024/2024-12-30 oud-en-nieuw";
+        std::fs::create_dir_all(root.join(orig)).unwrap();
+        std::fs::write(root.join(orig).join("foto.jpg"), b"x").unwrap(); // geen _event.md
+        let orig_id = crate::vault::scanner::stable_id("event", orig);
+
+        // Datum naar 2025 → map verhuist naar 2025/…
+        let moved = update_event(root, orig, "Oud en nieuw", "2025-01-01", None).unwrap();
+        assert!(moved.starts_with("2025/"), "verhuisd naar 2025, was: {moved}");
+        let parsed = crate::vault::frontmatter::parse(
+            &std::fs::read_to_string(root.join(&moved).join("_event.md")).unwrap(),
+        );
+        assert_eq!(parsed.get_str("id").unwrap(), orig_id, "id blijft de originele stabiele id");
+    }
+
+    #[test]
+    fn update_event_on_loose_year_folder_is_noop() {
+        // Een losse-media "bundel" op jaarniveau (geen subfolder, geen _event.md) kan
+        // geen event-bestand persisteren → netjes overslaan i.p.v. crashen.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("2024")).unwrap();
+        let result = update_event(root, "2024", "Losse", "2024-01-01", None).unwrap();
+        assert_eq!(result, "2024");
+        assert!(
+            !root.join("2024").join("_event.md").exists(),
+            "geen _event.md in een losse jaarmap"
+        );
     }
 
     #[test]
