@@ -964,6 +964,20 @@ export function AppShell() {
       // Een open DOM-overlay (instellingen/zoeken) vangt Esc/Backspace zelf af —
       // niet navigeren onder de overlay.
       if (overlayOpenRef.current) return
+      // Lifeline-zoom-shortcuts: Ctrl+0 = alles passend, Ctrl+1 = standaard
+      // kaartgrootte (beide geanimeerd). Alleen op de lifeline, niet met een open
+      // dialog (nieuw jaar/memory) waaronder de camera anders zou bewegen.
+      if (
+        e.ctrlKey &&
+        (e.key === '0' || e.key === '1') &&
+        levelRef.current === 'lifeline' &&
+        !dialogOpenRef.current
+      ) {
+        e.preventDefault()
+        if (e.key === '0') sceneRef.current?.zoomToFit?.()
+        else sceneRef.current?.zoomToDefault?.()
+        return
+      }
       if (e.key === 'Escape' || e.key === 'Backspace') {
         e.preventDefault()
         // Detail-niveau in content-beeldvullend: eerst één stap terug naar de
@@ -2567,6 +2581,8 @@ function SettingsPanel({
                     { k: ['Klik'], d: 'Standaard: op lege ruimte ernaast → terug (uit te zetten in Weergave)' },
                     { k: ['Scroll', 'Pinch'], d: 'In-/uitzoomen naar de cursor' },
                     { k: ['Uitzoomen'], d: 'Standaard: ver genoeg → één niveau terug (uit te zetten in Weergave)' },
+                    { k: ['Ctrl', '0'], d: 'Op het overzicht: alle jaren passend in beeld' },
+                    { k: ['Ctrl', '1'], d: 'Op het overzicht: standaard kaartgrootte' },
                     { k: ['Slepen'], d: 'Pannen' },
                     { k: ['←', '→'], d: 'In een detailfoto: vorige / volgende foto' },
                     { k: ['Slepen'], d: 'In een jaar voorbij de rand → vorig/volgend jaar' },

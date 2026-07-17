@@ -91,6 +91,10 @@ export interface Scene {
   contentBounds?(): { minX: number; minY: number; maxX: number; maxY: number } | null
   /** Zoom/pan de camera zo dat alle inhoud precies past (alleen L2). */
   fitToView?(): void
+  /** Animeer naar "alles passend" (alleen L0-lifeline, Ctrl+0). */
+  zoomToFit?(): void
+  /** Animeer naar de standaard kaartgrootte (alleen L0-lifeline, Ctrl+1). */
+  zoomToDefault?(): void
   /** Leg de huidige opstelling vast als de eigen layout (alleen L2). */
   saveAsCustom?(): void
   /** Laatst gefitte zoom (alleen L3): referentie voor de terug-uitzoom-drempel,

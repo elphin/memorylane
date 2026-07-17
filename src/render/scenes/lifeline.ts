@@ -54,6 +54,9 @@ export class LifelineScene implements Scene {
   // Toetsenbord-navigatie: year.id van het gefocuste jaar (consistent met hitTest
   // en enterYear), of null in muis-modus.
   private kbFocusId: string | null = null
+  // True terwijl een zoom-shortcut-animatie loopt (Ctrl+0/Ctrl+1): dan staat de
+  // elastische pan-grens uit, en bij het settelen syncen we de elastiek.
+  private animating = false
 
   constructor(
     private engine: RenderEngine,
@@ -171,14 +174,44 @@ export class LifelineScene implements Scene {
     this.fitCamera()
   }
 
-  /** Zet de camera zo dat alle jaren in beeld passen. */
-  fitCamera(): void {
+  /** Fit-parameters: gecentreerde x + de zoom waarbij alle jaren passen. */
+  private computeFit(): { x: number; zoom: number } {
     const vp = this.engine.viewport()
     const count = Math.max(1, this.tiles.length)
     const totalW = count * TILE_W + (count - 1) * GAP
     const zoom = Math.min(vp.width / (totalW + GAP * 2), vp.height / (TILE_H * 1.6))
     // Midden van het raster: eerste tegel start op x=0, laatste eindigt op totalW.
-    this.engine.jumpCamera(totalW / 2, 0, Math.max(this.engine.camera.minZoom, zoom))
+    return { x: totalW / 2, zoom: Math.max(this.engine.camera.minZoom, zoom) }
+  }
+
+  /** Zet de camera zo dat alle jaren in beeld passen (direct, geen animatie). */
+  fitCamera(): void {
+    const f = this.computeFit()
+    this.engine.jumpCamera(f.x, 0, f.zoom)
+  }
+
+  /** Ctrl+0: animeer naar "alles passend". */
+  zoomToFit(): void {
+    const f = this.computeFit()
+    this.engine.syncElastic()
+    this.animating = true
+    this.engine.animateCamera(f.x, 0, f.zoom, 560, (p) => 1 - Math.pow(1 - p, 4))
+  }
+
+  /** Ctrl+1: animeer naar de standaard kaartgrootte (zoom 1 = tegels op hun
+   * ontwerp-pixelgrootte), rond de huidige kijkpositie, geklemd binnen de
+   * pan-grens die bij die zoom hoort. */
+  zoomToDefault(): void {
+    const vp = this.engine.viewport()
+    const z = Math.min(1, this.engine.camera.maxZoom)
+    const count = Math.max(1, this.tiles.length)
+    const totalW = count * TILE_W + (count - 1) * GAP
+    const cx = totalW / 2
+    const restMax = Math.max(0, totalW / 2 - (vp.width / 2 - EDGE_MARGIN) / z)
+    const targetX = Math.max(cx - restMax, Math.min(cx + restMax, this.engine.camera.x))
+    this.engine.syncElastic()
+    this.animating = true
+    this.engine.animateCamera(targetX, 0, z, 560, (p) => 1 - Math.pow(1 - p, 4))
   }
 
   onHover(worldX: number | null, worldY: number): void {
@@ -263,8 +296,21 @@ export class LifelineScene implements Scene {
     const count = Math.max(1, this.tiles.length)
     const totalW = count * TILE_W + (count - 1) * GAP
     const cx = totalW / 2
-    const restMax = Math.max(0, totalW / 2 - (vp.width / 2 - EDGE_MARGIN) / engine.camera.zoom)
-    engine.camera.boundsX = { min: cx - restMax, max: cx + restMax }
+    // Tijdens een zoom-shortcut-animatie (Ctrl+0/Ctrl+1) de elastische grens even
+    // loslaten: die animatie verandert de zoom, wat de grens laat krimpen en anders
+    // tegen de animatie in zou veren. Bij het settelen de rauwe pan-positie op de
+    // eind-camera pinnen, dán de grens weer aanzetten. (scroll-into-view zet
+    // `animating` NIET en houdt dus zijn bestaande gedrag.)
+    if (this.animating && engine.isAnimatingCamera) {
+      engine.camera.boundsX = null
+    } else {
+      if (this.animating) {
+        this.animating = false
+        engine.syncElastic()
+      }
+      const restMax = Math.max(0, totalW / 2 - (vp.width / 2 - EDGE_MARGIN) / engine.camera.zoom)
+      engine.camera.boundsX = { min: cx - restMax, max: cx + restMax }
+    }
 
     for (const tile of this.tiles) {
       // Vloeiende hover-schaal (lerp naar doel).
