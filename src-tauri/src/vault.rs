@@ -4,9 +4,11 @@
 
 pub mod canvas;
 pub mod frontmatter;
+pub mod materialize;
 pub mod scanner;
 pub mod writer;
 
+pub use materialize::{materialize_missing, MaterializationReport};
 pub use scanner::scan;
 
 #[cfg(test)]

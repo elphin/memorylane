@@ -648,34 +648,34 @@ fn log_unterminated(parsed: &Option<Parsed>, path: &Path, root: &Path, model: &m
 }
 
 /// Gesorteerde directory-inhoud (deterministische scanvolgorde).
-fn sorted_dir(path: &Path) -> std::io::Result<Vec<fs::DirEntry>> {
+pub(crate) fn sorted_dir(path: &Path) -> std::io::Result<Vec<fs::DirEntry>> {
     let mut entries: Vec<fs::DirEntry> = fs::read_dir(path)?.collect::<Result<_, _>>()?;
     entries.sort_by_key(|e| e.file_name());
     Ok(entries)
 }
 
-fn rel_path(root: &Path, path: &Path) -> String {
+pub(crate) fn rel_path(root: &Path, path: &Path) -> String {
     path.strip_prefix(root)
         .unwrap_or(path)
         .to_string_lossy()
         .replace('\\', "/")
 }
 
-fn is_year_folder(name: &str) -> bool {
+pub(crate) fn is_year_folder(name: &str) -> bool {
     name.len() == 4 && name.chars().all(|c| c.is_ascii_digit())
 }
 
-fn is_ignored_dir(name: &str) -> bool {
+pub(crate) fn is_ignored_dir(name: &str) -> bool {
     name.starts_with('.') || name.eq_ignore_ascii_case(".memorylane")
 }
 
 /// `_`-prefix bestanden zijn specials (`_event.md`, `_year.md`, `_canvas.json`,
 /// `_featured.*`) en worden nooit als item geïndexeerd.
-fn is_special(name: &str) -> bool {
+pub(crate) fn is_special(name: &str) -> bool {
     name.starts_with('_')
 }
 
-fn is_media_file(name: &str) -> bool {
+pub(crate) fn is_media_file(name: &str) -> bool {
     let ext = match name.rsplit_once('.') {
         Some((_, e)) => e.to_ascii_lowercase(),
         None => return false,
