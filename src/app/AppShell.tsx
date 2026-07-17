@@ -570,6 +570,8 @@ export function AppShell() {
     // óók als de gebruiker Ctrl losliet tussen pointerdown en pointerup (dan is
     // `ctrlDown` al false en zou de tap anders alsnog navigeren + dubbel openen).
     let rangeJustEnded = false
+    // Dubbelklik-detectie op de lifeline (lege ruimte) → passend ↔ standaard.
+    let lastL0Tap = { t: 0, x: 0, y: 0 }
 
     const setupLifeline = (focusAfter?: string): void => {
       if (!engine || !backendRef.current) return
@@ -1358,9 +1360,22 @@ export function AppShell() {
           else if (level === 'event') enterFocus(hit)
           return
         }
-        // Klik naast een item = een niveau uitzoomen (lifeline is de top → niets).
-        // Instelbaar: bij uitgeschakelde "klik lege ruimte = terug" doet dit niets.
-        if (level !== 'lifeline' && settingsRef.current.backOnEmptyClick) goBack()
+        // Lifeline lege ruimte: één klik doet niets (top-niveau), maar een DUBBELklik
+        // wisselt tussen "alles passend" en de standaard kaartgrootte.
+        if (level === 'lifeline') {
+          const now = performance.now()
+          const near = Math.hypot(wx - lastL0Tap.x, wy - lastL0Tap.y) * (engine?.camera.zoom ?? 1) < 40
+          if (now - lastL0Tap.t < 350 && near) {
+            lastL0Tap.t = 0
+            sceneRef.current?.zoomToggle?.()
+          } else {
+            lastL0Tap = { t: now, x: wx, y: wy }
+          }
+          return
+        }
+        // Klik naast een item = een niveau uitzoomen. Instelbaar: bij uitgeschakelde
+        // "klik lege ruimte = terug" doet dit niets.
+        if (settingsRef.current.backOnEmptyClick) goBack()
       }
 
       try {
@@ -1987,6 +2002,25 @@ export function AppShell() {
             ⤢ Alles passend
           </button>
         )}
+      {phase === 'ready' &&
+        uiLevel === 'lifeline' &&
+        !modal &&
+        !editing &&
+        !eventForm &&
+        !metaForm &&
+        !searchOpen &&
+        !settingsOpen &&
+        !fullscreen &&
+        !screensaverIds &&
+        !settings.viewMode && (
+          <button
+            onClick={() => sceneRef.current?.zoomToggle?.()}
+            style={fitBtn}
+            title="Wissel tussen alles passend en standaard kaartgrootte (of dubbelklik op het overzicht · Ctrl+0/Ctrl+1)"
+          >
+            ⤢ Zoom
+          </button>
+        )}
       {toast && <div style={toastStyle}>{toast}</div>}
       {phase === 'ready' && !modal && !editing && !eventForm && !metaForm && !searchOpen && !settingsOpen && !settings.viewMode && !fullscreen && (
         <Fab
@@ -2587,6 +2621,7 @@ function SettingsPanel({
                     { k: ['Uitzoomen'], d: 'Standaard: ver genoeg → één niveau terug (uit te zetten in Weergave)' },
                     { k: ['Ctrl', '0'], d: 'Op het overzicht: alle jaren passend in beeld' },
                     { k: ['Ctrl', '1'], d: 'Op het overzicht: standaard kaartgrootte' },
+                    { k: ['Dubbelklik'], d: 'Op het overzicht (lege ruimte): wissel passend ↔ standaard (ook de ⤢-knop)' },
                     { k: ['Slepen'], d: 'Pannen' },
                     { k: ['←', '→'], d: 'In een detailfoto: vorige / volgende foto' },
                     { k: ['Slepen'], d: 'In een jaar voorbij de rand → vorig/volgend jaar' },

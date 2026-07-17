@@ -214,6 +214,14 @@ export class LifelineScene implements Scene {
     this.engine.animateCamera(targetX, 0, z, 560, (p) => 1 - Math.pow(1 - p, 4))
   }
 
+  /** Dubbelklik/knop: wissel tussen "alles passend" en de standaard kaartgrootte.
+   * Sta je (bijna) op de fit → ga naar standaard; anders → terug naar fit. */
+  zoomToggle(): void {
+    const f = this.computeFit()
+    if (this.engine.camera.zoom <= f.zoom * 1.08) this.zoomToDefault()
+    else this.zoomToFit()
+  }
+
   onHover(worldX: number | null, worldY: number): void {
     this.hoveredId = worldX === null ? null : this.hitTest(worldX, worldY)
   }

@@ -95,6 +95,8 @@ export interface Scene {
   zoomToFit?(): void
   /** Animeer naar de standaard kaartgrootte (alleen L0-lifeline, Ctrl+1). */
   zoomToDefault?(): void
+  /** Wissel tussen passend en standaard kaartgrootte (L0-lifeline; dubbelklik/knop). */
+  zoomToggle?(): void
   /** Leg de huidige opstelling vast als de eigen layout (alleen L2). */
   saveAsCustom?(): void
   /** Laatst gefitte zoom (alleen L3): referentie voor de terug-uitzoom-drempel,
