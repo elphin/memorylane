@@ -2239,7 +2239,7 @@ function SettingsPanel({
   >('weergave')
   // Versie runtime uit de app-bundle halen (klopt zo automatisch met de installer);
   // in browser-dev bestaat de Tauri-API niet → val terug op de laatst-bekende versie.
-  const [appVersion, setAppVersion] = useState('2.1.1')
+  const [appVersion, setAppVersion] = useState('2.1.2')
   useEffect(() => {
     let alive = true
     void import('@tauri-apps/api/app')
