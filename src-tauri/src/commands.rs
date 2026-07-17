@@ -43,14 +43,24 @@ impl VaultService {
             log::warn!("opgeslagen vault-pad bestaat niet meer: {}", path.display());
             return;
         }
-        if let Err(e) = self.reindex_path(&path) {
+        // Stille opstart-index: NIET materialiseren (niet ongevraagd in de vault
+        // schrijven bij elke start). Dat gebeurt alleen bij een expliciete actie.
+        if let Err(e) = self.reindex_path(&path, false) {
             log::warn!("herindexeren bij opstart mislukt: {e}");
         }
     }
 
-    fn reindex_path(&self, path: &Path) -> Result<IndexSummary, String> {
+    /// (Her)indexeert een vault-pad. Met `materialize` worden ontbrekende
+    /// `_year.md`/`_event.md` eerst aangemaakt (bij vault-kiezen / de reindex-knop);
+    /// bij de stille opstart-index staat dat uit (dan niet ongevraagd schrijven).
+    fn reindex_path(&self, path: &Path, materialize: bool) -> Result<IndexSummary, String> {
+        let report = if materialize {
+            vault::materialize_missing(path)
+        } else {
+            vault::MaterializationReport::default()
+        };
         let model = vault::scan(path);
-        let summary = IndexSummary::from_model(&model);
+        let summary = IndexSummary::from_model(&model, report);
         {
             let mut conn = self.conn.lock().map_err(lock_err)?;
             index::load(&mut conn, &model).map_err(|e| e.to_string())?;
@@ -525,15 +535,18 @@ pub struct IndexSummary {
     pub event_count: usize,
     pub item_count: usize,
     pub error_count: usize,
+    /// Wat de materialisatie-pass deed (leeg bij een index zonder materialiseren).
+    pub materialization: vault::MaterializationReport,
 }
 
 impl IndexSummary {
-    fn from_model(m: &VaultModel) -> Self {
+    fn from_model(m: &VaultModel, materialization: vault::MaterializationReport) -> Self {
         IndexSummary {
             year_count: m.years.len(),
             event_count: m.events.len(),
             item_count: m.items.len(),
             error_count: m.errors.len(),
+            materialization,
         }
     }
 }
@@ -608,7 +621,8 @@ pub fn set_vault_path(
             vault_path: Some(path),
         },
     )?;
-    state.reindex_path(&dir)
+    // Vault kiezen = expliciete actie → ontbrekende metadata materialiseren.
+    state.reindex_path(&dir, true)
 }
 
 /// Herindexeert het huidige vault-pad (full rebuild).
@@ -619,7 +633,8 @@ pub fn reindex(state: State<VaultService>) -> Result<IndexSummary, String> {
         guard.clone()
     };
     match path {
-        Some(p) => state.reindex_path(&p),
+        // De reindex-knop = expliciete actie → ontbrekende metadata materialiseren.
+        Some(p) => state.reindex_path(&p, true),
         None => Err("geen vault ingesteld".to_string()),
     }
 }
@@ -892,7 +907,7 @@ mod tests {
             .unwrap();
 
         let service = VaultService::new().unwrap();
-        service.reindex_path(root).unwrap();
+        service.reindex_path(root, false).unwrap();
         service
     }
 
@@ -912,6 +927,40 @@ mod tests {
         service.set_year_cover("y24", None).unwrap();
         let years = service.with_conn(index::list_years).unwrap();
         assert_eq!(years.iter().find(|y| y.id == "y24").unwrap().pinned_cover, None);
+    }
+
+    #[test]
+    fn reindex_with_materialize_creates_missing_metadata() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        // Een "geïmporteerde" structuur ZONDER metadata-bestanden.
+        std::fs::create_dir_all(root.join("2024/2024-05-01 reis")).unwrap();
+        RgbImage::from_fn(40, 30, |x, _| image::Rgb([(x % 256) as u8, 1, 1]))
+            .save(root.join("2024/2024-05-01 reis/foto.jpg"))
+            .unwrap();
+
+        let service = VaultService::new().unwrap();
+
+        // Zonder materialiseren (stille opstart-stijl): niets aangemaakt.
+        let s0 = service.reindex_path(root, false).unwrap();
+        assert_eq!(s0.materialization.events_created, 0);
+        assert!(!root.join("2024/2024-05-01 reis/_event.md").exists());
+
+        // Mét materialiseren (vault kiezen / reindex-knop): bestanden aangemaakt.
+        let s1 = service.reindex_path(root, true).unwrap();
+        assert_eq!(s1.materialization.years_created, 1);
+        assert_eq!(s1.materialization.events_created, 1);
+        assert!(s1.materialization.errors.is_empty());
+        assert!(root.join("2024/_year.md").exists());
+        assert!(root.join("2024/2024-05-01 reis/_event.md").exists());
+        let years = service.with_conn(index::list_years).unwrap();
+        assert_eq!(years.len(), 1);
+        assert_eq!(years[0].event_count, 1, "de gematerialiseerde memory wordt geïndexeerd");
+
+        // Idempotent: nog eens materialiseren maakt niets nieuws.
+        let s2 = service.reindex_path(root, true).unwrap();
+        assert_eq!(s2.materialization.years_created, 0);
+        assert_eq!(s2.materialization.events_created, 0);
     }
 
     #[test]
@@ -937,7 +986,7 @@ mod tests {
             .unwrap();
 
         let service = VaultService::new().unwrap();
-        service.reindex_path(root).unwrap();
+        service.reindex_path(root, false).unwrap();
         let years = service.with_conn(index::list_years).unwrap();
         let year_id = years[0].id.clone();
         assert_eq!(years[0].event_count, 1);
@@ -1013,7 +1062,7 @@ mod tests {
             .unwrap();
 
         let service = VaultService::new().unwrap();
-        service.reindex_path(&root).unwrap();
+        service.reindex_path(&root, false).unwrap();
         let cache = tmp.path().join("cache");
         let result = service.resolve_thumb(&cache, "evil", Tier::Small);
         assert!(result.is_err(), "path-traversal moet geweigerd worden");
