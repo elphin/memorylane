@@ -587,12 +587,15 @@ export class YearScene implements Scene {
    * schermgrootte) vullen de lanes rond de gecentreerde as. */
   private fitCamera(): void {
     const vp = this.engine.viewport()
-    let zoom = Math.max(this.engine.camera.minZoom, Math.min(vp.width / (AXIS_W + 160), 1))
+    // Iets 'krapper' passen: ruimere marge links/rechts van de as (jan/dec staan
+    // niet tegen de rand) — 120 scherm-px per kant.
+    let zoom = Math.max(this.engine.camera.minZoom, Math.min(vp.width / (AXIS_W + 240), 1))
     // Initiële view altijd 'passend': de kaarten hebben een horizontale scherm-
     // offset (offX) + breedte die NIET met de zoom meeschaalt, dus de buitenste
     // kaarten (jan/dec) kunnen bij de axis-fit half buiten beeld vallen. Verlaag
-    // de zoom zonodig tot de breedste kaart-extent binnen de viewport past.
-    const sideMargin = 20 // scherm-px speling per kant
+    // de zoom zonodig tot de breedste kaart-extent + comfortmarge binnen de
+    // viewport past.
+    const sideMargin = 60 // scherm-px speling per kant (was 20 → randkaarten kregen te weinig lucht)
     for (const n of this.cardNodes) {
       const off = this.curvedLeaders ? Math.abs(n.offX) : 0
       const halfExtent = n.cardW / 2 + off // scherm-px (schaalt niet met zoom)
