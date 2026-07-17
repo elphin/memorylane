@@ -667,10 +667,14 @@ export function AppShell() {
         })
         sceneRef.current = scene
         // De scene-constructor heeft de camera al naar het nieuwe jaar gezet
-        // (jumpCamera). Peg de elastische rauwe positie daarop, zodat een
-        // overgebleven overscroll (van een jaar-slide-commit) de camera niet
-        // laat terugveren tíjdens de slide — anders sleept dat de nieuwe tijdlijn
-        // zichtbaar de verkeerde kant op i.p.v. schoon van opzij in te schuiven.
+        // (jumpCamera). Wis de elastische grens SYNCHROON + peg de rauwe positie op
+        // de nieuwe camera. Anders draait de eerste tick `tickInertia` nog met de
+        // STALE lifeline-`boundsX` (die pas later in de jaar-`update()` op de juiste
+        // waarde gaat) terwijl rawX al op de nieuwe (verre) camera staat → de
+        // bounce-tak vuurt, roept `onChange()` aan, en dat breekt de net gestarte
+        // reveal/exit hard af (geen zoom-in, camera verspringt, buurjaar gluurt in
+        // beeld). Zelfde fix als in setupLifeline. Geldt ook voor de jaar-slide.
+        engine.camera.boundsX = null
         engine.syncElastic()
         if (ctrlDown) scene.setDayPicker(true)
         // Gecentreerde reveal (geen tap-coördinaten → schermmidden): spiegelt de
