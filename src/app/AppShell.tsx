@@ -1447,8 +1447,8 @@ export function AppShell() {
   // screensaver hoort hier ook bij: dan slaan de globale Esc/'e'-handlers zichzelf
   // over en navigeert er niets onder de screensaver.
   useEffect(() => {
-    overlayOpenRef.current = settingsOpen || searchOpen || screensaverIds !== null
-  }, [settingsOpen, searchOpen, screensaverIds])
+    overlayOpenRef.current = settingsOpen || searchOpen || screensaverIds !== null || matReport !== null
+  }, [settingsOpen, searchOpen, screensaverIds, matReport])
 
   // Korte toast (bijv. "geen foto's gevonden") die vanzelf verdwijnt.
   useEffect(() => {
@@ -3258,6 +3258,17 @@ function MaterializationOverlay({
   report: MaterializationReport
   onClose: () => void
 }) {
+  // Escape sluit het overzicht (de globale nav-handler is uit zolang dit open staat).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        onClose()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
   const created = report.yearsCreated + report.eventsCreated
   return (
     <div style={overlayBackdrop} onClick={onClose}>
