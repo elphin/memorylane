@@ -1163,7 +1163,11 @@ export function AppShell() {
           settingsRef.current.backOnZoomOut &&
           backThreshold &&
           !enteringRef.current &&
-          !ctx.engine.isTransitioning
+          !ctx.engine.isTransitioning &&
+          // Niet tijdens een programmatische camera-animatie (bijv. beeldvullend
+          // in-/uitzoomen op L3): dan staat baseZoom al op het doel terwijl de
+          // camera nog onderweg is — dat mag geen "terug" triggeren.
+          !ctx.engine.isAnimatingCamera
         ) {
           ctx.engine.endZoom() // stop de soepele zoom → niet doorschieten in de transitie
           goBack()

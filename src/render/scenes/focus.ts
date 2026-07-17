@@ -14,7 +14,10 @@ const CARD_H = 440
 const PHOTO_BORDER = 16 // witte rand rond de foto (L3)
 const SLIDE = 420 // wereld-offset van de slide-transitie tussen items
 const SLIDE_DUR = 260 // ms
+const FS_DUR = 340 // ms — beeldvullend in/uit animeren (zoom + rand/blur-fade)
 const easeOutCubic = (t: number): number => 1 - Math.pow(1 - t, 3)
+const easeInOutCubic = (t: number): number =>
+  t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2
 
 export class FocusScene implements Scene {
   readonly root = new Container()
@@ -46,6 +49,9 @@ export class FocusScene implements Scene {
   private transition: { outgoing: Container; incoming: Container; delta: number; start: number } | null = null
   // Fullscreen: beeldvullend fitten (geen marges, langste zijde raakt de rand).
   private fullscreen = false
+  // Lopende beeldvullend-in/uit-animatie: zoomt de camera + faadt de fotorand uit
+  // en de geblurde achtergrond in (of omgekeerd). null = geen animatie.
+  private fsAnim: { start: number; toFull: boolean } | null = null
   // Laatst gefitte (geklemde) zoom; de app-shell gebruikt dit als referentie voor
   // de "ver uitzoomen = terug"-drempel, zodat stappen naar een grotere sibling
   // (lange notitie) niet meteen als uitzoomen wordt gelezen.
@@ -65,10 +71,14 @@ export class FocusScene implements Scene {
     // met de scherpe voorgrond; de blur-filter met ruime padding zodat de vervaging
     // niet hard afkapt aan de sprite-rand.
     this.bgBlur.anchor.set(0.5)
-    this.bgBlur.tint = 0x707070
+    this.bgBlur.tint = 0x6a6a6a
     this.bgBlur.visible = false
-    const blur = new BlurFilter({ strength: 40, quality: 4 })
-    blur.padding = 60
+    // Zachtere, ruimere blur (minder "edgy"): sterker + meer passes voor een gladde
+    // gaussiaan, en flink padding zodat de vervaging niet hard afkapt aan de
+    // sprite-rand. Samen met de ruime overschaal (zie sizeBlurBg) blijft elke harde
+    // rand buiten beeld.
+    const blur = new BlurFilter({ strength: 64, quality: 7 })
+    blur.padding = 160
     this.bgBlur.filters = [blur]
     this.root.addChild(this.bgBlur)
     this.root.addChild(this.display)
@@ -201,46 +211,56 @@ export class FocusScene implements Scene {
       .fill(0xf5f5f0)
   }
 
-  private fitCamera(): void {
+  /** De doel-zoom voor een gegeven modus (beeldvullend of normaal). */
+  private baseZoomFor(fullscreen: boolean): number {
     const vp = this.engine.viewport()
-    if (this.fullscreen) {
+    if (fullscreen) {
       // Beeldvullend: fit op de WERKELIJKE inhoud (foto/videokader), geen marges,
       // geen zoom-plafond — de langste zijde raakt de schermrand.
       const { w, h } = this.fitSize()
-      this.baseZoom = Math.max(this.engine.camera.minZoom, Math.min(vp.width / w, vp.height / h))
-    } else {
-      const zoom = Math.min(vp.width / (this.contentW + 160), vp.height / (this.contentH + 200))
-      this.baseZoom = Math.max(this.engine.camera.minZoom, Math.min(zoom, 2))
+      return Math.max(this.engine.camera.minZoom, Math.min(vp.width / w, vp.height / h))
     }
-    this.engine.jumpCamera(0, 0, this.baseZoom)
-    this.updateBlurBg()
+    const zoom = Math.min(vp.width / (this.contentW + 160), vp.height / (this.contentH + 200))
+    return Math.max(this.engine.camera.minZoom, Math.min(zoom, 2))
   }
 
-  /** (Her)plaats de geblurde achtergrond-vulling. Alleen in content-beeldvullend en
-   * voor foto/video met een geladen textuur: schaal een uitvergrote, vervaagde
-   * kopie zó dat 'ie de hele viewport (op baseZoom) dekt, ruim overschaald zodat de
-   * zachte blur-rand buiten beeld valt. Tekst-items (geen sprite) tonen geen bg; een
-   * nog-niet-geladen foto laat de vorige bg staan (geen wit-flikker per item-stap). */
-  private updateBlurBg(): void {
-    const bg = this.bgBlur
-    if (!this.fullscreen || this.sprite === null) {
-      bg.visible = false
-      return
-    }
-    // Nog geen echte textuur (foto laadt) → vorige bg ongemoeid laten.
+  private fitCamera(): void {
+    this.baseZoom = this.baseZoomFor(this.fullscreen)
+    this.engine.jumpCamera(0, 0, this.baseZoom)
+    this.refreshBlurBg()
+  }
+
+  /** Kan er een geblurde achtergrond getoond worden (foto/video met echte textuur)? */
+  private canShowBlur(): boolean {
+    return this.sprite !== null && this.loaded && this.sprite.texture !== Texture.WHITE
+  }
+
+  /** Schaal de geblurde kopie zó dat 'ie de hele viewport dekt bij zoom `z` (default
+   * de huidige camera-zoom), ruim overschaald zodat de zachte blur-rand ver buiten
+   * beeld valt. Bij de in/uit-animatie geven we bewust de KLEINSTE zoom (grootste
+   * wereld) mee, zodat één schaal de hele animatie dekt (geen per-frame herschaal). */
+  private sizeBlurBg(zoom?: number): void {
+    if (!this.canShowBlur() || this.sprite === null) return
     const tex = this.sprite.texture
-    if (!this.loaded || tex === Texture.WHITE) return
-    bg.texture = tex
+    this.bgBlur.texture = tex
     const vp = this.engine.viewport()
-    const z = this.baseZoom || 1
+    const z = (zoom ?? this.engine.camera.zoom) || 1
     const worldW = vp.width / z
     const worldH = vp.height / z
-    const OVER = 1.4 // overschaal-marge: zachte blur-rand blijft buiten beeld
+    const OVER = 2.0 // overschaal-marge: zachte blur-rand blijft ruim buiten beeld
     const cover = Math.max((worldW * OVER) / tex.width, (worldH * OVER) / tex.height)
-    bg.width = tex.width * cover
-    bg.height = tex.height * cover
-    bg.position.set(0, 0)
-    bg.visible = true
+    this.bgBlur.width = tex.width * cover
+    this.bgBlur.height = tex.height * cover
+    this.bgBlur.position.set(0, 0)
+  }
+
+  /** Zet de blur-achtergrond in de RUST-stand (geen animatie): zichtbaar+vol in
+   * beeldvullend, anders verborgen. Tekst-items tonen geen bg. */
+  private refreshBlurBg(): void {
+    const show = this.fullscreen && this.canShowBlur()
+    this.bgBlur.visible = show
+    this.bgBlur.alpha = 1
+    if (show) this.sizeBlurBg()
   }
 
   /** Werkelijk weergegeven inhoudsmaat (foto = tw×th; video = kader op ware
@@ -255,15 +275,32 @@ export class FocusScene implements Scene {
     return { w: this.dispW, h: this.dispH }
   }
 
-  /** Zet beeldvullende fullscreen-fit aan/uit en herfit meteen. */
+  /** Zet beeldvullende fullscreen-fit aan/uit — geanimeerd: de camera zoomt naar de
+   * nieuwe fit terwijl de witte fotorand uit-/infaadt en de geblurde achtergrond
+   * in-/uitfaadt. De frame-lus (update) drijft de fades; de camera-tween loopt via
+   * de engine. */
   setFullscreen(on: boolean): void {
     this.fullscreen = on
-    if (this.frame) this.frame.visible = !on // geen witte fotorand in beeldvullend
-    this.fitCamera()
+    const target = this.baseZoomFor(on)
+    this.baseZoom = target
+    // Blur-achtergrond alvast klaarzetten: één keer schalen voor de KLEINSTE zoom
+    // (grootste wereld) die de animatie aandoet, zodat 'ie de hele overgang dekt
+    // zonder per frame de (dure) blur te herberekenen. Alpha/zichtbaarheid regelt de
+    // animatie-lus. Alleen zinvol met een echte foto/video-textuur.
+    if (this.canShowBlur()) {
+      this.bgBlur.visible = true
+      this.sizeBlurBg(Math.min(this.engine.camera.zoom, target))
+    }
+    if (this.frame) this.frame.visible = true // tijdens de fade zichtbaar houden
+    this.fsAnim = { start: performance.now(), toFull: on }
+    this.engine.animateCamera(0, 0, target, FS_DUR, easeInOutCubic)
   }
 
   step(delta: number): void {
     if (this.items.length < 2) return
+    // Een lopende beeldvullend-animatie afbreken: stappen doet zelf een verse fit
+    // (jumpCamera) + rust-stand, dus de fade-lus moet niet nog nasnappen.
+    this.fsAnim = null
     this.index = (this.index + delta + this.items.length) % this.items.length
     if (!this.animateSteps) {
       this.build()
@@ -287,9 +324,12 @@ export class FocusScene implements Scene {
     this.onStep?.(delta, this.current?.id ?? null)
   }
 
-  /** Herfit de camera op het huidige item (na een viewport-wijziging, bv. bij
-   * (uit) fullscreen gaan), zodat het item het scherm blijft vullen. */
+  /** Herfit de camera op het huidige item (na een viewport-wijziging, bv. bij app-
+   * fullscreen of venster-resize), zodat het item het scherm blijft vullen. Niet
+   * tijdens een lopende beeldvullend-animatie: die verzorgt zijn eigen fit en zou
+   * anders hard gesnapt worden. */
   refitToViewport(): void {
+    if (this.fsAnim) return
     this.fitCamera()
   }
 
@@ -325,6 +365,43 @@ export class FocusScene implements Scene {
       if (t >= 1) this.finishTransition()
     }
 
+    // Beeldvullend in/uit: de camera-zoom loopt als tween via de engine; hier faden
+    // we de witte fotorand uit en de geblurde achtergrond in (of omgekeerd) met
+    // dezelfde easing. De blur is al één keer geschaald (zie setFullscreen) en
+    // schaalt in wereldruimte mee met de camera → geen per-frame herberekening.
+    if (this.fsAnim) {
+      const t = Math.min(1, (performance.now() - this.fsAnim.start) / FS_DUR)
+      if (t < 1 && !this.engine.isAnimatingCamera) {
+        // De camera-tween is vroegtijdig weg (gebruiker zoomt/pant, of een step/
+        // resize deed een harde fit): stop de fade in de rust-stand ZONDER de camera
+        // terug te snappen — anders zou het de handmatige zoom overschrijven.
+        this.fsAnim = null
+        if (this.frame) {
+          this.frame.alpha = 1
+          this.frame.visible = !this.fullscreen
+        }
+        this.refreshBlurBg()
+      } else {
+        const eased = easeInOutCubic(t)
+        const full = this.fsAnim.toFull ? eased : 1 - eased // 0 = normaal, 1 = beeldvullend
+        if (this.frame) this.frame.alpha = 1 - full
+        this.bgBlur.visible = this.canShowBlur()
+        this.bgBlur.alpha = full
+        if (t >= 1) {
+          this.fsAnim = null
+          // Rust-stand vastzetten + eventueel nagekomen textuur-maat corrigeren
+          // (foto die net tíjdens de animatie inlaadde) met een exacte snap.
+          this.baseZoom = this.baseZoomFor(this.fullscreen)
+          this.engine.jumpCamera(0, 0, this.baseZoom)
+          if (this.frame) {
+            this.frame.alpha = 1
+            this.frame.visible = !this.fullscreen
+          }
+          this.refreshBlurBg()
+        }
+      }
+    }
+
     const item = this.current
     if (!this.sprite || this.loaded || !item || !item.media) return
     const tex = engine.textures.get(this.currentKey, frame)
@@ -342,7 +419,10 @@ export class FocusScene implements Scene {
       this.drawPhotoFrame(tw, th)
       if (this.caption) this.caption.position.set(0, th / 2 + PHOTO_BORDER + 18)
       this.loaded = true
-      if (this.fullscreen) this.fitCamera() // nu de echte foto-maat bekend is → vullen
+      // Nu de echte foto-maat bekend is → beeldvullend opnieuw fitten. Niet tijdens
+      // een lopende beeldvullend-animatie (die snapt aan het eind zelf de juiste
+      // maat); anders zou jumpCamera de tween hard onderbreken.
+      if (this.fullscreen && !this.fsAnim) this.fitCamera()
     } else {
       // L3 = het detailniveau: laad de scherpe 2048-bron (niet de 1024-thumbnail).
       const src = this.backend.thumb(item.id, 2048)
@@ -374,7 +454,9 @@ export class FocusScene implements Scene {
    * video valt (geen zwarte randen). Null = terug naar de thumbnail-maat. */
   setVideoAspect(aspect: number | null): void {
     this.videoAspect = aspect && Number.isFinite(aspect) && aspect > 0 ? aspect : null
-    if (this.fullscreen) this.fitCamera() // beeldvullend op de ware verhouding
+    // Beeldvullend op de ware verhouding — maar niet snappen tijdens de in/uit-
+    // animatie (die corrigeert de maat zelf aan het eind).
+    if (this.fullscreen && !this.fsAnim) this.fitCamera()
   }
 
   /** Verberg/toon de Pixi-inhoud (poster+kader) — aan tijdens DOM-video-afspelen,
