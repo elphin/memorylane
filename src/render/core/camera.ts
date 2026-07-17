@@ -17,6 +17,12 @@ export class Camera {
   zoom = 1
   minZoom = 0.01
   maxZoom = 40
+  // Dynamische extra ondergrens voor het uitzoomen (los van minZoom, dat scenes
+  // lezen voor hun fit-zoom). Gezet door de app wanneer "ver uitzoomen = terug"
+  // uit staat: dan stopt het uitzoomen op deze waarde i.p.v. een niveau terug te
+  // gaan. null = geen extra grens. Bewust NIET minZoom, zodat scene-fit-
+  // berekeningen (die minZoom als ondergrens lezen) ongemoeid blijven.
+  zoomFloor: number | null = null
   // Vergrendel verticaal pannen (voor de horizontale L0/L1-niveaus): `y` blijft
   // op de fit-waarde; pan/zoom laten 'm ongemoeid.
   lockY = false
@@ -45,7 +51,8 @@ export class Camera {
   /** Zoom met `factor` rond schermpunt (sx,sy); dat wereldpunt blijft vast. */
   zoomAt(sx: number, sy: number, factor: number, vp: Viewport): void {
     const before = this.screenToWorld(sx, sy, vp)
-    this.zoom = clamp(this.zoom * factor, this.minZoom, this.maxZoom)
+    const lo = this.zoomFloor != null ? Math.max(this.minZoom, this.zoomFloor) : this.minZoom
+    this.zoom = clamp(this.zoom * factor, lo, this.maxZoom)
     const after = this.screenToWorld(sx, sy, vp)
     this.x += before.x - after.x
     if (!this.lockY) this.y += before.y - after.y

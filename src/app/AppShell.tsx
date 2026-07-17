@@ -1061,8 +1061,29 @@ export function AppShell() {
         // dicht bij de fit (uitzoomen onder het overzicht = terug). Op andere
         // niveaus blijft de ruimere 0.45-drempel.
         const backMult = levelRef.current === 'year' ? 0.7 : 0.45
-        const backThreshold = ctx.engine.camera.zoom < refZoom * backMult
-        if (backThreshold && !enteringRef.current && !ctx.engine.isTransitioning) {
+        // Defensief: alleen een geldige, positieve floor gebruiken. Zou refZoom
+        // ooit 0/NaN zijn, dan geen floor (voorkomt een NaN-clamp = wit scherm).
+        const floor = refZoom > 0 ? refZoom * backMult : 0
+        // "Ver uitzoomen = terug" is instelbaar. Staat het uit, dan gaan we niet
+        // terug, maar klemmen we het uitzoomen op de drempel via camera.zoomFloor
+        // (dat álle zoom-paden respecteren) zodat je niet ver buiten beeld
+        // verdwaalt. Alleen op sub-niveaus en niet tijdens een transitie (dan zou
+        // de floor de entry-zoom kunnen hinderen). Op de lifeline (top) is er geen
+        // terug, dus geen floor.
+        const clampOut =
+          !settingsRef.current.backOnZoomOut &&
+          floor > 0 &&
+          levelRef.current !== 'lifeline' &&
+          !enteringRef.current &&
+          !ctx.engine.isTransitioning
+        ctx.engine.camera.zoomFloor = clampOut ? floor : null
+        const backThreshold = ctx.engine.camera.zoom < floor
+        if (
+          settingsRef.current.backOnZoomOut &&
+          backThreshold &&
+          !enteringRef.current &&
+          !ctx.engine.isTransitioning
+        ) {
           ctx.engine.endZoom() // stop de soepele zoom → niet doorschieten in de transitie
           goBack()
         }
@@ -1239,7 +1260,7 @@ export function AppShell() {
           if (scene?.stepping?.()) return
           // step() laat de titel via de onStep-callback meelopen.
           if (hit) scene?.step?.(wx >= 0 ? 1 : -1)
-          else goBack()
+          else if (settingsRef.current.backOnEmptyClick) goBack()
           return
         }
 
@@ -1251,7 +1272,8 @@ export function AppShell() {
           return
         }
         // Klik naast een item = een niveau uitzoomen (lifeline is de top → niets).
-        if (level !== 'lifeline') goBack()
+        // Instelbaar: bij uitgeschakelde "klik lege ruimte = terug" doet dit niets.
+        if (level !== 'lifeline' && settingsRef.current.backOnEmptyClick) goBack()
       }
 
       try {

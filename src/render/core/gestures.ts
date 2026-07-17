@@ -111,7 +111,10 @@ export class GestureController {
     // loopt, anders de huidige zoom) en soepel ernaartoe easen in `tickZoom` —
     // i.p.v. per notch een harde sprong. Cursor blijft het anker.
     const base = this.zoomTarget || this.camera.zoom
-    this.zoomTarget = Math.min(this.camera.maxZoom, Math.max(this.camera.minZoom, base * factor))
+    // Extra uitzoom-ondergrens (zoomFloor) respecteren, zodat het doel niet onder
+    // de vloer zakt en tickZoom er netjes op stopt i.p.v. eronder te blijven mikken.
+    const lo = Math.max(this.camera.minZoom, this.camera.zoomFloor ?? this.camera.minZoom)
+    this.zoomTarget = Math.min(this.camera.maxZoom, Math.max(lo, base * factor))
     this.zoomAnchor = p
     // Onderbreek een lopende camera-animatie/reveal; de zoom neemt het over.
     this.onChange()
