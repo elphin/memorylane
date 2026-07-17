@@ -553,122 +553,97 @@ pub fn update_item_meta(
 
 /// Zet (of verwijdert bij `None`/leeg) de uitgelichte foto (`featuredPhoto`) van
 /// een event op regel-niveau; overige frontmatter-velden + body blijven behouden.
+/// Werkt de frontmatter van `<folder>/_event.md` bij via `apply` (+ `updatedAt`).
+/// Non-destructief: raakt alleen de betreffende regel(s), body blijft intact.
+///
+/// Ontbreekt het `_event.md` (bijv. een geïmporteerde/gescande memory zonder
+/// sidecar), dan MATERIALISEREN we er één met minimale frontmatter — bewust ZONDER
+/// `id` (de scanner leidt hetzelfde `stable_id` uit de mapnaam af, dus de memory
+/// raakt niet los) en zonder titel/datum (die leidt de scanner ook uit de map af).
+/// Voor losse foto's direct in een JAARmap (folder_path zonder submap) is er geen
+/// eigen `_event.md`-plek — dat zou de jaarmap tot event maken — dus dan doen we
+/// niets (i.p.v. de vorige ENOENT-crash).
+fn edit_event_md(
+    vault_root: &Path,
+    folder_path: &str,
+    apply: impl FnOnce(&mut Vec<String>),
+) -> std::io::Result<()> {
+    let path = vault_root.join(folder_path).join("_event.md");
+    let original = std::fs::read_to_string(&path).ok();
+    if original.is_none() && !folder_path.contains('/') {
+        return Ok(()); // losse-media bundel in een jaarmap → niet persisteerbaar
+    }
+    let fenced = original.as_ref().and_then(|c| {
+        let n = c.replace("\r\n", "\n");
+        let lines: Vec<String> = n.split('\n').map(|s| s.to_string()).collect();
+        let open = lines.iter().position(|l| l.trim() == "---")?;
+        let close = lines
+            .iter()
+            .enumerate()
+            .skip(open + 1)
+            .find(|(_, l)| l.trim() == "---")
+            .map(|(i, _)| i)?;
+        Some((lines, open, close))
+    });
+    let (mut fm, body): (Vec<String>, String) = if let Some((lines, open, close)) = fenced {
+        (
+            lines[open + 1..close].iter().map(|s| s.to_string()).collect(),
+            lines[close + 1..].join("\n").trim().to_string(),
+        )
+    } else {
+        // Ontbreekt of geen fences: minimale event-frontmatter ZONDER id.
+        (
+            vec!["type: event".to_string()],
+            original.as_deref().unwrap_or("").trim().to_string(),
+        )
+    };
+    apply(&mut fm);
+    set_fm_field(&mut fm, "updatedAt", Some(&now_iso()));
+
+    let mut out = String::from("---\n");
+    out.push_str(&fm.join("\n"));
+    out.push_str("\n---\n");
+    if !body.is_empty() {
+        out.push('\n');
+        out.push_str(&body);
+        out.push('\n');
+    }
+    write_atomic(&path, &out)
+}
+
+/// Zet (of wist bij `None`) de uitgelichte foto in `<folder>/_event.md`.
 pub fn set_event_featured(
     vault_root: &Path,
     folder_path: &str,
     featured: Option<&str>,
 ) -> std::io::Result<()> {
-    let path = vault_root.join(folder_path).join("_event.md");
-    let original = std::fs::read_to_string(&path)?;
-    let normalized = original.replace("\r\n", "\n");
-    let lines: Vec<&str> = normalized.split('\n').collect();
-    let open = lines.iter().position(|l| l.trim() == "---");
-    let close = open.and_then(|o| {
-        lines
-            .iter()
-            .enumerate()
-            .skip(o + 1)
-            .find(|(_, l)| l.trim() == "---")
-            .map(|(i, _)| i)
-    });
-    let (Some(open), Some(close)) = (open, close) else {
-        return write_atomic(&path, &normalized);
-    };
-    let mut fm: Vec<String> = lines[open + 1..close].iter().map(|s| s.to_string()).collect();
-    set_fm_field(&mut fm, "featuredPhoto", featured.filter(|f| !f.is_empty()));
-    set_fm_field(&mut fm, "updatedAt", Some(&now_iso()));
-
-    let body = lines[close + 1..].join("\n").trim().to_string();
-    let mut out = String::from("---\n");
-    out.push_str(&fm.join("\n"));
-    out.push_str("\n---\n");
-    if !body.is_empty() {
-        out.push('\n');
-        out.push_str(&body);
-        out.push('\n');
-    }
-    write_atomic(&path, &out)
+    edit_event_md(vault_root, folder_path, |fm| {
+        set_fm_field(fm, "featuredPhoto", featured.filter(|f| !f.is_empty()));
+    })
 }
 
 /// Zet (of wist bij `None`) het `size`-veld (belang, 1–100) in `<folder>/_event.md`.
-/// Non-destructief: vervangt alleen de betreffende regel(s), laat de rest intact.
 pub fn set_event_size(
     vault_root: &Path,
     folder_path: &str,
     size: Option<i64>,
 ) -> std::io::Result<()> {
-    let path = vault_root.join(folder_path).join("_event.md");
-    let original = std::fs::read_to_string(&path)?;
-    let normalized = original.replace("\r\n", "\n");
-    let lines: Vec<&str> = normalized.split('\n').collect();
-    let open = lines.iter().position(|l| l.trim() == "---");
-    let close = open.and_then(|o| {
-        lines
-            .iter()
-            .enumerate()
-            .skip(o + 1)
-            .find(|(_, l)| l.trim() == "---")
-            .map(|(i, _)| i)
-    });
-    let (Some(open), Some(close)) = (open, close) else {
-        return write_atomic(&path, &normalized);
-    };
-    let mut fm: Vec<String> = lines[open + 1..close].iter().map(|s| s.to_string()).collect();
-    let value = size.map(|s| s.clamp(1, 100).to_string());
-    set_fm_field(&mut fm, "size", value.as_deref());
-    set_fm_field(&mut fm, "updatedAt", Some(&now_iso()));
-
-    let body = lines[close + 1..].join("\n").trim().to_string();
-    let mut out = String::from("---\n");
-    out.push_str(&fm.join("\n"));
-    out.push_str("\n---\n");
-    if !body.is_empty() {
-        out.push('\n');
-        out.push_str(&body);
-        out.push('\n');
-    }
-    write_atomic(&path, &out)
+    edit_event_md(vault_root, folder_path, |fm| {
+        let value = size.map(|s| s.clamp(1, 100).to_string());
+        set_fm_field(fm, "size", value.as_deref());
+    })
 }
 
 /// Zet (`true`) of wist (`false`) de `underConstruction`-vlag in `<folder>/_event.md`.
 /// Uit = veld verwijderen (afwezig = false), zodat de vault schoon blijft.
-/// Non-destructief: raakt alleen de betreffende frontmatter-regel(s).
 pub fn set_event_under_construction(
     vault_root: &Path,
     folder_path: &str,
     on: bool,
 ) -> std::io::Result<()> {
-    let path = vault_root.join(folder_path).join("_event.md");
-    let original = std::fs::read_to_string(&path)?;
-    let normalized = original.replace("\r\n", "\n");
-    let lines: Vec<&str> = normalized.split('\n').collect();
-    let open = lines.iter().position(|l| l.trim() == "---");
-    let close = open.and_then(|o| {
-        lines
-            .iter()
-            .enumerate()
-            .skip(o + 1)
-            .find(|(_, l)| l.trim() == "---")
-            .map(|(i, _)| i)
-    });
-    let (Some(open), Some(close)) = (open, close) else {
-        return write_atomic(&path, &normalized);
-    };
-    let mut fm: Vec<String> = lines[open + 1..close].iter().map(|s| s.to_string()).collect();
-    let value = if on { Some("true") } else { None };
-    set_fm_field(&mut fm, "underConstruction", value);
-    set_fm_field(&mut fm, "updatedAt", Some(&now_iso()));
-
-    let body = lines[close + 1..].join("\n").trim().to_string();
-    let mut out = String::from("---\n");
-    out.push_str(&fm.join("\n"));
-    out.push_str("\n---\n");
-    if !body.is_empty() {
-        out.push('\n');
-        out.push_str(&body);
-        out.push('\n');
-    }
-    write_atomic(&path, &out)
+    edit_event_md(vault_root, folder_path, |fm| {
+        set_fm_field(fm, "underConstruction", if on { Some("true") } else { None });
+    })
 }
 
 /// Zet (of wist bij `None`) de vaste jaar-cover in `<folder>/_year.md`. Bestaat er
@@ -1414,6 +1389,46 @@ mod tests {
         set_event_featured(root, &folder, None).unwrap();
         let c2 = std::fs::read_to_string(root.join(&folder).join("_event.md")).unwrap();
         assert!(crate::vault::frontmatter::parse(&c2).get_str("featuredPhoto").is_none());
+    }
+
+    #[test]
+    fn set_event_featured_materializes_missing_event_md() {
+        // Een gescande/geïmporteerde memory-submap met foto's maar ZONDER _event.md
+        // (bijv. een bestaand foto-archief). De eerste curatie-actie moet de
+        // _event.md aanmaken i.p.v. crashen (de ENOENT-bug), ZONDER `id` zodat de
+        // scanner hetzelfde stable_id uit de mapnaam blijft afleiden.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let folder = "2024/ijsland";
+        std::fs::create_dir_all(root.join(folder)).unwrap();
+        std::fs::write(root.join(folder).join("foto.jpg"), b"x").unwrap();
+        assert!(!root.join(folder).join("_event.md").exists());
+
+        set_event_featured(root, folder, Some("foto_ab12cd34")).unwrap();
+
+        let c = std::fs::read_to_string(root.join(folder).join("_event.md")).unwrap();
+        let p = crate::vault::frontmatter::parse(&c);
+        assert_eq!(p.get_str("featuredPhoto").unwrap(), "foto_ab12cd34");
+        assert_eq!(p.get_str("type").unwrap(), "event");
+        assert!(
+            p.get_str("id").is_none(),
+            "geen id → scanner leidt hetzelfde id uit de mapnaam af"
+        );
+    }
+
+    #[test]
+    fn set_event_curation_is_noop_for_loose_year_folder() {
+        // Losse foto's direct in een JAARmap (folder_path zonder submap): daar mag
+        // geen _event.md komen — dat zou de jaarmap tot event maken. Geen crash, en
+        // geen loos bestand.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("2024")).unwrap();
+
+        set_event_featured(root, "2024", Some("foto_ab12")).unwrap();
+        set_event_size(root, "2024", Some(80)).unwrap();
+
+        assert!(!root.join("2024/_event.md").exists());
     }
 
     #[test]
