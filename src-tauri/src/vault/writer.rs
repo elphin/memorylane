@@ -341,8 +341,44 @@ fn write_atomic(path: &Path, content: &str) -> std::io::Result<()> {
     }
     let tmp = path.with_extension(format!("tmp.{}", std::process::id()));
     std::fs::write(&tmp, content)?;
-    std::fs::rename(&tmp, path)?;
+    // Faalt de rename (bijv. doel net read-only), ruim de temp op i.p.v. rommel
+    // achter te laten in de vault.
+    if let Err(e) = std::fs::rename(&tmp, path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
     Ok(())
+}
+
+/// Maakt een minimale `_event.md` aan als die ONTBREEKT (idempotent; bestaat 'ie al
+/// → niets doen). Bewust ZONDER `id` (de scanner leidt hetzelfde stable_id uit het
+/// pad af) en zonder title/startAt (die leidt de scanner uit de mapnaam af) — exact
+/// consistent met de materialisatie in `edit_event_md`. Geeft true als aangemaakt.
+pub fn ensure_event_md(vault_root: &Path, folder_path: &str) -> std::io::Result<bool> {
+    let path = vault_root.join(folder_path).join("_event.md");
+    if path.exists() {
+        return Ok(false);
+    }
+    let content = format!("---\ntype: event\nupdatedAt: {}\n---\n", yaml_str(&now_iso()));
+    write_atomic(&path, &content)?;
+    Ok(true)
+}
+
+/// Maakt een minimale `_year.md` aan als die ONTBREEKT (idempotent). ZONDER `id`
+/// (jaar-id blijft folder-derived en stabiel) — zelfde format als de materialisatie
+/// in `set_year_cover`. Geeft true als aangemaakt.
+pub fn ensure_year_md(vault_root: &Path, folder_name: &str) -> std::io::Result<bool> {
+    let path = vault_root.join(folder_name).join("_year.md");
+    if path.exists() {
+        return Ok(false);
+    }
+    let content = format!(
+        "---\ntype: year\ntitle: {}\nstartAt: {}-01-01\n---\n",
+        yaml_str(folder_name),
+        folder_name,
+    );
+    write_atomic(&path, &content)?;
+    Ok(true)
 }
 
 /// Maakt een tekst-item in een eventmap. Geeft (id, slug) terug.
@@ -1434,6 +1470,41 @@ mod tests {
             !root.join("2024").join("_event.md").exists(),
             "geen _event.md in een losse jaarmap"
         );
+    }
+
+    #[test]
+    fn ensure_event_md_creates_when_missing_and_is_idempotent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let folder = "2024/2024-08-01 strand";
+        std::fs::create_dir_all(root.join(folder)).unwrap();
+
+        // Ontbreekt → aangemaakt (zonder id), tweede keer → no-op.
+        assert!(ensure_event_md(root, folder).unwrap(), "eerste keer aangemaakt");
+        let md = root.join(folder).join("_event.md");
+        let content = std::fs::read_to_string(&md).unwrap();
+        let parsed = crate::vault::frontmatter::parse(&content);
+        assert_eq!(parsed.get_str("type").unwrap(), "event");
+        assert!(parsed.get_str("id").is_none(), "geen id (scanner leidt 'm af)");
+
+        assert!(!ensure_event_md(root, folder).unwrap(), "tweede keer no-op");
+        assert_eq!(std::fs::read_to_string(&md).unwrap(), content, "bestaand bestand ongemoeid");
+    }
+
+    #[test]
+    fn ensure_year_md_creates_when_missing_without_id() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("2024")).unwrap();
+
+        assert!(ensure_year_md(root, "2024").unwrap());
+        let parsed =
+            crate::vault::frontmatter::parse(&std::fs::read_to_string(root.join("2024/_year.md")).unwrap());
+        assert_eq!(parsed.get_str("type").unwrap(), "year");
+        assert_eq!(parsed.get_str("startAt").unwrap(), "2024-01-01");
+        assert!(parsed.get_str("id").is_none(), "jaar-id blijft folder-derived");
+
+        assert!(!ensure_year_md(root, "2024").unwrap(), "tweede keer no-op");
     }
 
     #[test]
