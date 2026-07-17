@@ -93,6 +93,14 @@ interface Settings {
   diaSpeed: number
   /** Schuif-/fade-animatie bij vorige/volgende in de detail-view (L3). */
   l3StepAnimation: boolean
+  /** Klik op lege ruimte (naast een item) gaat één niveau terug. Uit = de klik
+   * doet niets; Escape/terugknop/rechtsklik blijven werken. */
+  backOnEmptyClick: boolean
+  /** Ver uitzoomen gaat één niveau terug. Uit = uitzoomen stopt op het overzicht
+   * (geen terug), zonder te verdwalen. */
+  backOnZoomOut: boolean
+  /** Rechtermuisknop gaat één niveau terug. */
+  backOnRightClick: boolean
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -114,6 +122,9 @@ const DEFAULT_SETTINGS: Settings = {
   diaMode: 'kenburns',
   diaSpeed: 7,
   l3StepAnimation: true,
+  backOnEmptyClick: true,
+  backOnZoomOut: true,
+  backOnRightClick: true,
 }
 const SETTINGS_KEY = 'memorylane-settings'
 
@@ -2188,6 +2199,39 @@ function SettingsPanel({
                 label="Schuif-animatie bij vorige/volgende (detailweergave)"
               />
               {desc('In de detailweergave schuift de vorige foto/video weg en de nieuwe in beeld. Uit = direct wisselen.')}
+
+              <div style={{ height: 1, background: '#2c3650', margin: '16px 0' }} />
+              {subhead('Terug navigeren')}
+              {desc(
+                <>
+                  Hiermee bepaal je hoe je een niveau teruggaat. <b>Escape</b> en de <b>terugknop</b>{' '}
+                  linksboven werken altijd, ongeacht deze instellingen.
+                </>,
+              )}
+              <div style={{ marginTop: 10 }}>
+                <Toggle
+                  on={settings.backOnEmptyClick}
+                  set={(v) => onChange({ backOnEmptyClick: v })}
+                  label="Klik op lege ruimte gaat terug"
+                />
+                {desc('Een klik naast een foto/item zoomt een niveau uit. Uit? Dan doet zo’n klik niets — handig als je graag rondklikt.')}
+              </div>
+              <div style={{ marginTop: 12 }}>
+                <Toggle
+                  on={settings.backOnZoomOut}
+                  set={(v) => onChange({ backOnZoomOut: v })}
+                  label="Ver uitzoomen gaat terug"
+                />
+                {desc('Ver genoeg uitzoomen springt een niveau terug. Uit? Dan stopt het uitzoomen netjes op het overzicht.')}
+              </div>
+              <div style={{ marginTop: 12 }}>
+                <Toggle
+                  on={settings.backOnRightClick}
+                  set={(v) => onChange({ backOnRightClick: v })}
+                  label="Rechtermuisknop gaat terug"
+                />
+                {desc('Klik met de rechtermuisknop om een niveau terug te gaan — waar je muis ook staat.')}
+              </div>
             </>
           )}
 
