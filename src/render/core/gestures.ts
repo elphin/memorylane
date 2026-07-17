@@ -68,6 +68,8 @@ export class GestureController {
     private beginDrag?: (worldX: number, worldY: number, mods: DragMods) => DragHandle | null,
     /** Muispositie bij hoveren (sx=null bij verlaten). */
     private onHover?: (sx: number | null, sy: number) => void,
+    /** Rechtermuisknop (contextmenu) — bijv. een niveau terug. */
+    private onSecondary?: () => void,
   ) {
     canvas.addEventListener('wheel', this.onWheel, { passive: false })
     canvas.addEventListener('pointerdown', this.onPointerDown)
@@ -75,6 +77,7 @@ export class GestureController {
     canvas.addEventListener('pointerup', this.onPointerUp)
     canvas.addEventListener('pointercancel', this.onPointerCancel)
     canvas.addEventListener('pointerleave', this.onPointerLeave)
+    canvas.addEventListener('contextmenu', this.onContextMenu)
     // Voorkom browser-gebaren (page-zoom) op het canvas.
     canvas.style.touchAction = 'none'
   }
@@ -86,6 +89,14 @@ export class GestureController {
     this.canvas.removeEventListener('pointerup', this.onPointerUp)
     this.canvas.removeEventListener('pointercancel', this.onPointerCancel)
     this.canvas.removeEventListener('pointerleave', this.onPointerLeave)
+    this.canvas.removeEventListener('contextmenu', this.onContextMenu)
+  }
+
+  // Rechtermuisklik: onderdruk het (browser/WebView) contextmenu op het canvas en
+  // meld het als "secundaire" actie (de app doet bijv. een niveau terug).
+  private onContextMenu = (e: MouseEvent): void => {
+    e.preventDefault()
+    this.onSecondary?.()
   }
 
   private onPointerLeave = (): void => {
@@ -146,6 +157,11 @@ export class GestureController {
   }
 
   private onPointerDown = (e: PointerEvent): void => {
+    // Alleen de primaire (linker) muisknop pant/tikt. Rechter/midden-muisknop
+    // negeren: rechtsklik loopt uitsluitend via het contextmenu-pad (geen dubbele
+    // actie). Touch/pen (pointerType !== 'mouse') geven bij het eerste contact
+    // button 0 en blijven dus gewoon werken.
+    if (e.pointerType === 'mouse' && e.button !== 0) return
     // setPointerCapture kan gooien bij synthetische events; niet fataal.
     try {
       this.canvas.setPointerCapture(e.pointerId)

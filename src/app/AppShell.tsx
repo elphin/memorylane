@@ -544,6 +544,9 @@ export function AppShell() {
   const enterSeqRef = useRef(0)
   const enteringRef = useRef(false)
   const applyPanLockRef = useRef<() => void>(() => {})
+  // Muis-terug (terugknop linksboven + rechtermuisknop). No-op default zodat een
+  // klik vóór de mount-effect 'm zet niet crasht.
+  const goBackRef = useRef<() => void>(() => {})
   // Zodat instellingen (jaar-tegel-slideshow) de lifeline live kunnen herbouwen.
   const setupLifelineRef = useRef<() => void>(() => {})
 
@@ -870,6 +873,18 @@ export function AppShell() {
       }
     }
 
+    // Muis-terug (terugknop + rechtermuisknop): zelfde tweetraps als Escape op het
+    // detail-niveau in content-beeldvullend (eerst content-fill uit, dán een niveau
+    // terug), maar in muis-modus (goBack(false), geen focus-continuïteit).
+    const mouseBack = (): void => {
+      if (levelRef.current === 'focus' && contentFillRef.current) {
+        toggleContentFillRef.current()
+        return
+      }
+      goBack(false)
+    }
+    goBackRef.current = mouseBack
+
     // Ctrl+klik op een foto (L2): togglet de uitgelichte foto (jaar-omslag).
     // Optimistisch: markering + info meteen bij, schrijf async weg.
     const toggleFeatured = (ref: string): void => {
@@ -1112,6 +1127,14 @@ export function AppShell() {
         // Pointer-cursor zodra je boven een klikbaar object hangt (kaart/tegel/item).
         const hit = wx === null ? null : (scene?.hitTest?.(wx, wy) ?? null)
         engineRef.current?.setCursor(hit ? 'pointer' : '')
+      }
+      // Rechtermuisknop = een niveau terug (instelbaar). Zelfde muis-terug als de
+      // terugknop; het contextmenu zelf wordt in de gesture-laag onderdrukt. Een
+      // open overlay/dialog vangt de klik al af (dekt het canvas), maar we guarden
+      // hier ook expliciet — net als de Escape-handler.
+      engine.onSecondary = () => {
+        if (overlayOpenRef.current || dialogOpenRef.current) return
+        if (settingsRef.current.backOnRightClick) mouseBack()
       }
       // Sleep-dispatcher: op de jaar-tijdlijn met Ctrl = een datum-range slepen
       // (begin→eind) i.p.v. de camera pannen; anders delegeren naar de scene

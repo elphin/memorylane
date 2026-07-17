@@ -40,6 +40,9 @@ export class RenderEngine {
   /** Hover-hook: wereldpunt onder de muis (of null bij verlaten). */
   onHover?: (worldX: number | null, worldY: number) => void
 
+  /** Rechtermuisklik-hook (contextmenu) — bijv. een niveau terug. */
+  onSecondary?: () => void
+
   private frame = 0
   private initialized = false
   private destroyed = false
@@ -136,6 +139,9 @@ export class RenderEngine {
         const w = this.camera.screenToWorld(sx, sy, this.viewport())
         this.onHover?.(w.x, w.y)
       },
+      // Thunk (niet de rauwe callback) zodat een ná-init gezette engine.onSecondary
+      // zichtbaar is — net als onTap/onHover hierboven.
+      () => this.onSecondary?.(),
     )
 
     this.app.ticker.add(this.tick, undefined, UPDATE_PRIORITY.HIGH)
