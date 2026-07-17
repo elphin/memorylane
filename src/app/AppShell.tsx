@@ -1809,6 +1809,22 @@ export function AppShell() {
     closeSearch()
   }
 
+  // Terugknop linksboven: altijd zichtbaar op sub-niveaus (niet aan chromeVisible
+  // gekoppeld, net als het tandwiel), maar weg in view-modus (schone weergave) en
+  // in immersieve modi. Rechtsklik/Escape blijven daar de muis/toets-terug.
+  const backVisible =
+    phase === 'ready' &&
+    uiLevel !== 'lifeline' &&
+    !modal &&
+    !editing &&
+    !eventForm &&
+    !metaForm &&
+    !searchOpen &&
+    !settingsOpen &&
+    !fullscreen &&
+    !screensaverIds &&
+    !settings.viewMode
+
   return (
     <div style={{ position: 'fixed', inset: 0 }}>
       <div ref={hostRef} style={{ position: 'absolute', inset: 0 }} />
@@ -1823,8 +1839,13 @@ export function AppShell() {
       {phase === 'ready' && settings.showTitle && !screensaverIds && !fullscreen && (
         <TitleBar text={header.text} dir={header.dir} />
       )}
+      {backVisible && <BackButton onClick={() => goBackRef.current()} />}
       {phase === 'ready' && !modal && !editing && !eventForm && !metaForm && !searchOpen && !settingsOpen && !settings.viewMode && !fullscreen && chromeVisible && settings.showSearchButton && (
-        <button onClick={() => setSearchOpen(true)} style={searchBtn} title="Zoeken (Ctrl+K)">
+        <button
+          onClick={() => setSearchOpen(true)}
+          style={{ ...searchBtn, left: backVisible ? 64 : 16 }}
+          title="Zoeken (Ctrl+K)"
+        >
           Zoeken…
         </button>
       )}
@@ -3065,6 +3086,34 @@ const fitBtn: React.CSSProperties = {
   backdropFilter: 'blur(4px)',
 }
 
+/** Terugknop linksboven: een subtiele cirkel met een chevron-links. In rust een
+ * vage, bijna transparante cirkel met een zwak-witte pijl (niet storend); bij
+ * hover een duidelijke knop met een volwit pijltje. 38×38, gelijk aan het
+ * tandwiel — groot genoeg om ook op touch te tikken. */
+function BackButton({ onClick }: { onClick: () => void }) {
+  const [hover, setHover] = useState(false)
+  return (
+    <button
+      onClick={onClick}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      title="Een niveau terug (Esc)"
+      aria-label="Een niveau terug"
+      style={{ ...backBtn, ...(hover ? backBtnHover : null) }}
+    >
+      <svg width={20} height={20} viewBox="0 0 24 24" fill="none" aria-hidden>
+        <path
+          d="M15 5l-7 7 7 7"
+          stroke={hover ? '#ffffff' : 'rgba(255,255,255,0.45)'}
+          strokeWidth={2.2}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    </button>
+  )
+}
+
 /** Titel bovenin die bij een niveau-wissel zoomt + crossfadet, in dezelfde richting
  * als de scene-transitie: 'in' (dieper) = de nieuwe titel groeit uit het klein en de
  * oude zwelt weg; 'out' (terug) = de nieuwe komt uit het groot en de oude krimpt weg. */
@@ -3167,6 +3216,29 @@ const gearBtn: React.CSSProperties = {
   fontSize: 18,
   lineHeight: '1',
   cursor: 'pointer',
+}
+
+const backBtn: React.CSSProperties = {
+  position: 'absolute',
+  top: 16,
+  left: 16,
+  width: 38,
+  height: 38,
+  borderRadius: 19,
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  // Rust: vage cirkel, nauwelijks aanwezig. Hover licht 'm op (zie backBtnHover).
+  border: '1px solid rgba(255,255,255,0.10)',
+  background: 'rgba(255,255,255,0.06)',
+  padding: 0,
+  cursor: 'pointer',
+  transition: 'background 140ms ease, border-color 140ms ease',
+}
+
+const backBtnHover: React.CSSProperties = {
+  border: '1px solid #2c3650',
+  background: 'rgba(22,28,40,0.85)',
 }
 
 const fabBtn: React.CSSProperties = {
