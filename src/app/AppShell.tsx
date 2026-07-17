@@ -547,6 +547,17 @@ export function AppShell() {
   // Muis-terug (terugknop linksboven + rechtermuisknop). No-op default zodat een
   // klik vóór de mount-effect 'm zet niet crasht.
   const goBackRef = useRef<() => void>(() => {})
+  // Onthouden zoom-/pan-stand van de lifeline (L0): zodat terugkeer naar L0 het
+  // vorige zoomniveau herstelt i.p.v. altijd "alles passend" te fitten. Bevat het
+  // jaar-aantal + viewport zodat we bij een gewijzigde layout terugvallen op fit.
+  const lifelineCamRef = useRef<{
+    x: number
+    y: number
+    zoom: number
+    yearCount: number
+    vpW: number
+    vpH: number
+  } | null>(null)
   // Zodat instellingen (jaar-tegel-slideshow) de lifeline live kunnen herbouwen.
   const setupLifelineRef = useRef<() => void>(() => {})
 
@@ -574,6 +585,20 @@ export function AppShell() {
         speedMs: settingsRef.current.slideshowSpeed * 1000,
       })
       sceneRef.current = scene
+      // Herstel het onthouden L0-zoom-/pan-niveau i.p.v. de constructor-fit — mits
+      // de layout (jaar-aantal) én viewport ongewijzigd zijn (anders klopt de
+      // positie niet en valt 'ie terug op fit). Móet vóór revealScene: die leest
+      // camera.x/y als pivot/doel.
+      const rc = lifelineCamRef.current
+      const vpNow = engine.viewport()
+      if (
+        rc &&
+        rc.yearCount === yearsRef.current.length &&
+        rc.vpW === vpNow.width &&
+        rc.vpH === vpNow.height
+      ) {
+        engine.jumpCamera(rc.x, rc.y, rc.zoom)
+      }
       engine.revealScene(scene.root, 'out')
       // Wis de elastische jaar-scroll-staat SYNCHROON. Anders draait op de
       // eerstvolgende tick `tickInertia` nog met de oude jaar-`boundsX` (die pas
@@ -1006,6 +1031,27 @@ export function AppShell() {
       engine.onFrame = (ctx) => {
         sceneRef.current?.update(ctx)
 
+        // Onthoud de lifeline-camera zodra je er rustig op staat (geen entry, geen
+        // transitie, geen lopende camera-animatie). Dekt elk exit-pad naar een
+        // dieper niveau; bij terugkeer herstelt setupLifeline deze stand.
+        if (
+          levelRef.current === 'lifeline' &&
+          !enteringRef.current &&
+          !ctx.engine.isTransitioning &&
+          !ctx.engine.isAnimatingCamera
+        ) {
+          const cam = ctx.engine.camera
+          const vp = ctx.engine.viewport()
+          lifelineCamRef.current = {
+            x: cam.x,
+            y: cam.y,
+            zoom: cam.zoom,
+            yearCount: yearsRef.current.length,
+            vpW: vp.width,
+            vpH: vp.height,
+          }
+        }
+
         // Herfit een paar frames na een viewport-wijziging (fullscreen), zodat het
         // ook klopt als Pixi's resize pas een frame later settelt.
         if (refitFramesRef.current > 0) {
@@ -1408,6 +1454,8 @@ export function AppShell() {
     const years = await backend.listYears()
     yearsRef.current = years
     setVaultPath(await backend.getVaultPath())
+    // Nieuwe/gewijzigde vault → de onthouden L0-stand slaat nergens meer op.
+    lifelineCamRef.current = null
     if (years.length > 0) {
       sceneRef.current?.destroy()
       sceneRef.current = new LifelineScene(engine, backend, years, {
