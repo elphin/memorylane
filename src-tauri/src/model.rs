@@ -136,6 +136,10 @@ pub struct Event {
     pub year_id: String,
     /// Vault-relatief pad naar de eventmap (forward slashes).
     pub folder_path: String,
+    /// True = synthetische "Losse foto's"-bundel (losse media direct in een jaarmap,
+    /// géén eigen `_event.md`). Curatie (uitlichten/grootte) is er niet mogelijk.
+    #[serde(default)]
+    pub synthetic: bool,
 }
 
 /// Een item: een foto/tekst/video/link/audio (`<slug>.md`) of een synthetisch

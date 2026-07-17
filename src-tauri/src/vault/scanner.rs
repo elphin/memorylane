@@ -184,6 +184,7 @@ fn scan_loose_media_event(
         under_construction: None,
         year_id: year.id.clone(),
         folder_path,
+        synthetic: true,
     });
 }
 
@@ -242,6 +243,7 @@ fn scan_event(root: &Path, event_path: &Path, year: &Year, model: &mut VaultMode
             .map(|s| s.trim().eq_ignore_ascii_case("true")),
         year_id: year.id.clone(),
         folder_path: folder_path.clone(),
+        synthetic: false,
     };
 
     // Canvas.
@@ -777,8 +779,14 @@ mod tests {
         let loose_items: Vec<_> = model.items.iter().filter(|i| i.event_id == loose.id).collect();
         assert_eq!(loose_items.len(), 2, "beide losse foto's als items");
         assert!(loose_items.iter().all(|i| i.synthetic));
-        // De echte event bestaat óók (met zijn eigen submap-foto).
-        assert!(model.events.iter().any(|e| e.folder_path.ends_with("Vakantie")));
+        assert!(loose.synthetic, "de losse-foto's memory is synthetisch");
+        // De echte event bestaat óók (met zijn eigen submap-foto) en is NIET synthetisch.
+        let real = model
+            .events
+            .iter()
+            .find(|e| e.folder_path.ends_with("Vakantie"))
+            .expect("echte event-submap");
+        assert!(!real.synthetic, "een echte event-submap is niet synthetisch");
     }
 
     #[test]

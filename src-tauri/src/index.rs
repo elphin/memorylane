@@ -22,7 +22,7 @@ CREATE TABLE events (
     title TEXT, description TEXT, start_at TEXT NOT NULL, end_at TEXT,
     location_lat REAL, location_lng REAL, location_label TEXT,
     featured_photo TEXT, tags TEXT NOT NULL, folder_path TEXT NOT NULL, size INTEGER,
-    under_construction INTEGER
+    under_construction INTEGER, synthetic INTEGER NOT NULL
 );
 CREATE TABLE items (
     id TEXT PRIMARY KEY, event_id TEXT NOT NULL, item_type TEXT NOT NULL,
@@ -80,8 +80,8 @@ pub fn load(conn: &mut Connection, model: &VaultModel) -> rusqlite::Result<()> {
         tx.execute(
             "INSERT INTO events (id, year_id, kind, title, description, start_at, end_at,
                  location_lat, location_lng, location_label, featured_photo, tags, folder_path, size,
-                 under_construction)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)",
+                 under_construction, synthetic)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
             params![
                 e.id,
                 e.year_id,
@@ -98,6 +98,7 @@ pub fn load(conn: &mut Connection, model: &VaultModel) -> rusqlite::Result<()> {
                 e.folder_path,
                 e.size,
                 e.under_construction,
+                e.synthetic as i64,
             ],
         )?;
     }
@@ -225,6 +226,8 @@ pub struct EventSummary {
     pub size: Option<i64>,
     /// "In aanbouw"-status (badge in de jaar-view). Afwezig/None = false.
     pub under_construction: Option<bool>,
+    /// True = synthetische "Losse foto's"-bundel (curatie niet mogelijk).
+    pub synthetic: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -364,7 +367,7 @@ pub fn get_year(conn: &Connection, year_id: &str) -> rusqlite::Result<Option<Yea
              (SELECT group_concat(id) FROM
                (SELECT id FROM items WHERE event_id = e.id AND item_type = 'photo'
                     ORDER BY (timestamp_ms IS NULL), timestamp_ms LIMIT 24)),
-             e.size, e.under_construction
+             e.size, e.under_construction, e.synthetic
          FROM events e WHERE e.year_id = ?1 ORDER BY e.start_at",
     )?;
     let events = stmt
@@ -381,6 +384,7 @@ pub fn get_year(conn: &Connection, year_id: &str) -> rusqlite::Result<Option<Yea
                 photo_ids: split_ids(r.get::<_, Option<String>>(7)?),
                 size: r.get(8)?,
                 under_construction: r.get(9)?,
+                synthetic: r.get::<_, i64>(10)? != 0,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -393,7 +397,7 @@ pub fn get_event(conn: &Connection, event_id: &str) -> rusqlite::Result<Option<E
         .query_row(
             "SELECT id, year_id, kind, title, description, start_at, end_at,
                  location_lat, location_lng, location_label, featured_photo, tags, folder_path, size,
-                 under_construction
+                 under_construction, synthetic
              FROM events WHERE id = ?1",
             params![event_id],
             row_to_event,
@@ -793,6 +797,7 @@ fn row_to_event(r: &rusqlite::Row) -> rusqlite::Result<Event> {
         size: r.get(13)?,
         under_construction: r.get(14)?,
         folder_path: r.get(12)?,
+        synthetic: r.get::<_, i64>(15)? != 0,
     })
 }
 
@@ -895,6 +900,7 @@ mod tests {
             under_construction: None,
             year_id: "y2024".into(),
             folder_path: "2024/2024-11-23 palermo".into(),
+            synthetic: false,
         });
         m.items.push(Item {
             id: "it1".into(),
@@ -948,8 +954,10 @@ mod tests {
         assert_eq!(yd.events.len(), 1);
         assert_eq!(yd.events[0].item_count, 1);
         assert_eq!(yd.events[0].cover_item_id.as_deref(), Some("it1"));
+        assert!(!yd.events[0].synthetic); // echt event → synthetic false leest correct terug
 
         let ed = get_event(&conn, "ev1").unwrap().unwrap();
+        assert!(!ed.event.synthetic);
         assert_eq!(ed.event.title.as_deref(), Some("Palermo"));
         assert_eq!(ed.event.location.as_ref().unwrap().label.as_deref(), Some("Palermo"));
         assert_eq!(ed.items.len(), 1);
@@ -964,6 +972,45 @@ mod tests {
         let errors = get_index_errors(&conn).unwrap();
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].severity, Severity::Warning);
+    }
+
+    #[test]
+    fn synthetic_flag_round_trips_through_db() {
+        // De synthetische "Losse foto's"-vlag (true) moet door load → get_year én
+        // get_event heen komen (kolom-mapping index 10 / 15).
+        let mut m = VaultModel::default();
+        m.years.push(Year {
+            id: "y".into(),
+            year: 2012,
+            title: "2012".into(),
+            start_at: "2012-01-01".into(),
+            end_at: None,
+            folder_name: "2012".into(),
+            cover: None,
+            size_factor: None,
+        });
+        m.events.push(Event {
+            id: "loose".into(),
+            kind: EventKind::Event,
+            title: Some("Losse foto's".into()),
+            description: None,
+            start_at: "2012-01-01".into(),
+            end_at: None,
+            location: None,
+            featured_photo: None,
+            tags: vec![],
+            size: None,
+            under_construction: None,
+            year_id: "y".into(),
+            folder_path: "2012".into(),
+            synthetic: true,
+        });
+
+        let mut conn = open_in_memory().unwrap();
+        load(&mut conn, &m).unwrap();
+
+        assert!(get_year(&conn, "y").unwrap().unwrap().events[0].synthetic);
+        assert!(get_event(&conn, "loose").unwrap().unwrap().event.synthetic);
     }
 
     #[test]
@@ -1066,6 +1113,7 @@ mod tests {
                 under_construction: None,
                 year_id: yid.into(),
                 folder_path: format!("{year}/e"),
+                synthetic: false,
             });
         }
         m.items.push(photo("it1", "ev1", &[], false, 1)); // geen tags
@@ -1242,6 +1290,7 @@ mod tests {
             under_construction: None,
             year_id: "y2024".into(),
             folder_path: "2024/ev1".into(),
+            synthetic: false,
         });
         // Bewust in niet-chronologische invoer-volgorde + één ongedateerde.
         m.items.push(photo("p_late", "ev1", Some(3000)));
@@ -1281,6 +1330,7 @@ mod tests {
             under_construction: None,
             year_id: "y2024".into(),
             folder_path: "2024/ev2".into(),
+            synthetic: false,
         });
 
         let mut conn = open_in_memory().unwrap();
@@ -1344,6 +1394,7 @@ mod tests {
                 under_construction: None,
                 year_id: "y2024".into(),
                 folder_path: format!("2024/{id}"),
+                synthetic: false,
             }
         }
 

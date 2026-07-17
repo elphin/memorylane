@@ -97,6 +97,7 @@ interface Lane {
 
 interface Node {
   eventId: string
+  synthetic: boolean // synthetische "Losse foto's"-bundel → geen grootte-curatie
   anchorX: number // wereld-x (de datum)
   hasCover: boolean
   isSpan: boolean
@@ -475,6 +476,7 @@ export class YearScene implements Scene {
 
     return {
       eventId: ev.id,
+      synthetic: ev.synthetic ?? false,
       anchorX,
       hasCover,
       isSpan,
@@ -1010,6 +1012,7 @@ export class YearScene implements Scene {
       const n = this.nodes[i]
       if (!n.lane || n.hitHalfW <= 0) continue
       if (Math.abs(worldX - n.hitCx) > n.hitHalfW || Math.abs(worldY - n.hitCy) > n.hitHalfH) continue
+      if (n.synthetic) return null // "Losse foto's"-bundel: grootte niet curetaarbaar
       const cx = n.hitCx
       const cy = n.hitCy
       const startDist = Math.max(20, Math.hypot(worldX - cx, worldY - cy))

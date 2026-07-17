@@ -865,6 +865,12 @@ export function AppShell() {
       const backend = backendRef.current
       const eventId = currentEventRef.current
       if (!backend || !eventId) return
+      // Losse "Losse foto's"-bundel: geen eigen _event.md → uitlichten kan niet
+      // persisteren. Niet stil proberen (verwarrend), maar een korte hint tonen.
+      if (currentEventInfoRef.current?.synthetic) {
+        setToast('Losse foto’s — maak er eerst een memory van om een omslag te kiezen')
+        return
+      }
       const current = currentEventInfoRef.current?.featuredPhoto ?? null
       const next = current === ref ? null : ref
       if (currentEventInfoRef.current) {

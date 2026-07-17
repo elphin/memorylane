@@ -36,6 +36,8 @@ export interface EventSummary {
   size?: number
   /** "In aanbouw"-status (badge in de jaar-view). Afwezig = false. */
   underConstruction?: boolean
+  /** True = synthetische "Losse foto's"-bundel (curatie niet mogelijk). */
+  synthetic?: boolean
 }
 
 export interface Year {
@@ -110,6 +112,8 @@ export interface EventInfo {
   size?: number
   /** "In aanbouw"-status. Afwezig = false. */
   underConstruction?: boolean
+  /** True = synthetische "Losse foto's"-bundel (curatie niet mogelijk). */
+  synthetic?: boolean
 }
 
 export interface EventDetail {
