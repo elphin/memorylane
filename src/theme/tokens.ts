@@ -1,9 +1,10 @@
-// Design-tokens voor de render-laag (fase 1 van het personalisatie-plan).
+// Design-tokens voor de render-laag (personalisatie-plan, fase 1+2).
 // Eén ResolvedTheme beschrijft álle kleuren en fonts die de scenes gebruiken;
-// CLASSIC_DARK bevat exact de waarden die vóór deze refactor hardcoded in de
-// scenes stonden (de huidige look). In fase 2 komt hier een registry met
-// meerdere thema's + een cascade-resolver bij; de scenes lezen dan een per
-// scope geresolvede ResolvedTheme in plaats van deze constante.
+// CLASSIC_DARK bevat exact de waarden die vóór de token-refactor hardcoded in
+// de scenes stonden (de huidige look). De scenes lezen het actieve thema via
+// het live `THEME`-singleton hieronder; een themawissel (setActiveTheme)
+// vervangt de inhoud en herbouwt daarna de actieve scene (AppShell). In fase 3
+// komt hier de cascade-resolver (app → jaar → event) bij.
 //
 // Bewust GEEN tokens (status-markers, betekenis moet in elk thema herkenbaar
 // blijven): de gouden featured-ring (0xffc24b), de blauwe jaar-cover-ring
@@ -69,8 +70,20 @@ export interface ThemeFonts {
   paper: string
 }
 
+/** Achtergrond van het canvas: effen, of (vanaf fase 4) een tiling-textuur.
+ * Zolang de textuurlaag er nog niet is, valt 'texture' terug op de effen
+ * `appBg` — de thema-preview toont die fallback eerlijk. */
+export type ThemeBackground =
+  | { kind: 'solid' }
+  | { kind: 'texture'; textureId: string; tint: number }
+
 export interface ResolvedTheme {
   id: string
+  /** Getoonde naam in de thema-kiezer. */
+  name: string
+  /** Stuurt de DOM-overlay-chrome (panelen/knoppen): donker of licht. */
+  uiMode: 'dark' | 'light'
+  background: ThemeBackground
   colors: ThemeColors
   fonts: ThemeFonts
 }
@@ -78,6 +91,9 @@ export interface ResolvedTheme {
 /** De huidige look, 1-op-1 overgenomen uit de voorheen hardcoded waarden. */
 export const CLASSIC_DARK: ResolvedTheme = {
   id: 'classic-dark',
+  name: 'Klassiek donker',
+  uiMode: 'dark',
+  background: { kind: 'solid' },
   colors: {
     appBg: 0x0a0a0f,
     surface: 0x1a2030,
@@ -116,4 +132,28 @@ export const CLASSIC_DARK: ResolvedTheme = {
     display: 'Georgia, serif',
     paper: 'Georgia, serif',
   },
+}
+
+function cloneTheme(t: ResolvedTheme): ResolvedTheme {
+  return {
+    ...t,
+    background: { ...t.background },
+    colors: {
+      ...t.colors,
+      spanPalette: [...t.colors.spanPalette],
+      placeholderPalette: [...t.colors.placeholderPalette],
+    },
+    fonts: { ...t.fonts },
+  }
+}
+
+/** Het actieve thema als LIVE singleton: de scenes lezen hun tokens hieruit op
+ * het moment dat ze (her)gebouwd worden. `setActiveTheme` vervangt de inhoud
+ * in-place; de aanroeper (AppShell) is verantwoordelijk voor het herbouwen van
+ * de actieve scene + het bijwerken van de Pixi-achtergrondkleur. Let op:
+ * waarden hieruit nooit op module-scope cachen (die verversen dan niet mee). */
+export const THEME: ResolvedTheme = cloneTheme(CLASSIC_DARK)
+
+export function setActiveTheme(t: ResolvedTheme): void {
+  Object.assign(THEME, cloneTheme(t))
 }

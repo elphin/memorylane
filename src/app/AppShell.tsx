@@ -15,6 +15,9 @@ import type {
 } from '../lib/backend'
 import { createBackend } from '../lib/backend'
 import { RenderEngine } from '../render/core/engine'
+import { loadThemeFonts } from '../theme/fonts'
+import { THEMES, themeById } from '../theme/registry'
+import { THEME, setActiveTheme } from '../theme/tokens'
 import { EventScene } from '../render/scenes/event'
 import type { NodePosition } from '../render/scenes/scene'
 import { Screensaver } from './Screensaver'
@@ -62,6 +65,8 @@ interface MetaForm {
 
 /** App-voorkeuren (UI, geen vault-data) — bewaard in localStorage. */
 interface Settings {
+  /** Actief thema (id uit de thema-registry): kleuren/fonts van de tijdlijn. */
+  themeId: string
   /** Weergave waarin een event-canvas standaard opent. */
   defaultLayout: 'custom' | 'grid' | 'scatter'
   /** Rouleren de thumbnails op de jaar-tijdlijn door de foto's (slideshow)? */
@@ -112,6 +117,7 @@ interface Settings {
 }
 
 const DEFAULT_SETTINGS: Settings = {
+  themeId: 'classic-dark',
   defaultLayout: 'custom',
   slideshow: true,
   slideshowSpeed: 5,
@@ -328,6 +334,9 @@ export function AppShell() {
   // gepositioneerd.
   const [focusVideoId, setFocusVideoId] = useState<string | null>(null)
   const focusVideoIdRef = useRef<string | null>(null)
+  // Laatst bekende videoverhouding van de gefocuste video (uit `loadedmetadata`),
+  // zodat een snap-herbouw op L3 (themawissel) de verhouding kan herstellen.
+  const videoAspectRef = useRef<number | null>(null)
   const videoWrapRef = useRef<HTMLDivElement>(null)
   // De asset-URL van de gefocuste video (async opgehaald: pad → convertFileSrc).
   const [videoSrc, setVideoSrc] = useState('')
@@ -352,11 +361,16 @@ export function AppShell() {
   }
 
   const updateSettings = (patch: Partial<Settings>): void => {
+    // Vóór de merge bepalen (daarna is settingsRef al bijgewerkt): een klik op
+    // het al-actieve thema mag de scene niet voor niets herbouwen.
+    const themeChanged = patch.themeId !== undefined && patch.themeId !== settingsRef.current.themeId
     const next = { ...settingsRef.current, ...patch }
     settingsRef.current = next
     setSettings(next)
     saveSettings(next)
     applyPanLockRef.current() // pan-lock meteen toepassen op het huidige niveau
+    // Themawissel: activeren + de actieve scene op zijn plaats herbouwen.
+    if (themeChanged) applyThemeRef.current(next.themeId)
     if (patch.l3StepAnimation !== undefined) sceneRef.current?.setAnimateSteps?.(next.l3StepAnimation)
     // Jaar-tegel-slideshow leeft in de scene → herbouw de lifeline als die zichtbaar is.
     if (
@@ -578,10 +592,18 @@ export function AppShell() {
   } | null>(null)
   // Zodat instellingen (jaar-tegel-slideshow) de lifeline live kunnen herbouwen.
   const setupLifelineRef = useRef<() => void>(() => {})
+  // Themawissel: activeert het thema en herbouwt de actieve scene op zijn plaats
+  // (zelfde niveau + camera, zonder overgangsanimatie — live preview).
+  const applyThemeRef = useRef<(id: string) => void>(() => {})
 
   useEffect(() => {
     let engine: RenderEngine | null = null
     let disposed = false
+    // Font-race (plan §6/§10): is de eager font-load al klaar, en is er een scene
+    // gebouwd vóórdat de fonts binnen waren? Dan hertekenen we eenmalig zodra ze
+    // er zijn (anders blijven Pixi-Text-metrics op de fallback-stack staan).
+    let fontsDone = false
+    let sceneBuiltBeforeFonts = false
     let ctrlDown = false // Ctrl ingedrukt → dag-indicator op de jaar-tijdlijn
     // Zet door de Ctrl-sleep-handle bij `end()`; door de eropvolgende `onTap`
     // geconsumeerd. Zo wordt de tap ná een Ctrl-sleep/klik betrouwbaar onderdrukt,
@@ -591,14 +613,20 @@ export function AppShell() {
     // Dubbelklik-detectie op de lifeline (lege ruimte) → passend ↔ standaard.
     let lastL0Tap = { t: 0, x: 0, y: 0 }
 
-    const setupLifeline = (focusAfter?: string): void => {
+    // `snapCam`: animatieloze herbouw op de huidige plek (themawissel): geen
+    // exit-/reveal-animatie en de camera wordt exact op deze stand teruggezet.
+    const setupLifeline = (focusAfter?: string, snapCam?: { x: number; y: number; zoom: number }): void => {
       if (!engine || !backendRef.current) return
+      if (!fontsDone) sceneBuiltBeforeFonts = true
       // Invalideer een eventuele in-flight enterYear.
       enterSeqRef.current++
       // Oud niveau laat uitzoomen + uitfaden (crossfade), niet hard weg.
       const old = sceneRef.current
       sceneRef.current = null
-      if (old) engine.exitScene(old.root, 'out', () => old.destroy())
+      if (old) {
+        if (snapCam) old.destroy()
+        else engine.exitScene(old.root, 'out', () => old.destroy())
+      }
       const scene = new LifelineScene(engine, backendRef.current, yearsRef.current, {
         enabled: settingsRef.current.yearTileSlideshow,
         mode: settingsRef.current.yearCoverMode,
@@ -611,7 +639,9 @@ export function AppShell() {
       // camera.x/y als pivot/doel.
       const rc = lifelineCamRef.current
       const vpNow = engine.viewport()
-      if (
+      if (snapCam) {
+        engine.jumpCamera(snapCam.x, snapCam.y, snapCam.zoom)
+      } else if (
         rc &&
         rc.yearCount === yearsRef.current.length &&
         rc.vpW === vpNow.width &&
@@ -619,7 +649,7 @@ export function AppShell() {
       ) {
         engine.jumpCamera(rc.x, rc.y, rc.zoom)
       }
-      engine.revealScene(scene.root, 'out')
+      if (!snapCam) engine.revealScene(scene.root, 'out')
       // Wis de elastische jaar-scroll-staat SYNCHROON. Anders draait op de
       // eerstvolgende tick `tickInertia` nog met de oude jaar-`boundsX` (die pas
       // later in `onFrame` op null gaat) én een `rawX` die door de pointerdown van
@@ -648,6 +678,9 @@ export function AppShell() {
       dir: 'in' | 'out' | 'slideNext' | 'slidePrev' = 'in',
       focusAfter?: string,
       focusFirstAfter?: boolean,
+      // Animatieloze herbouw op de huidige plek (themawissel): geen exit/reveal,
+      // camera exact terug op deze stand.
+      snapCam?: { x: number; y: number; zoom: number },
     ): Promise<void> => {
       if (!engine || !backendRef.current || enteringRef.current) return
       enteringRef.current = true
@@ -668,7 +701,8 @@ export function AppShell() {
           // uitzoomen naar de lifeline), niet vanaf de aangeklikte jaar-tegel.
           // Dit hoort bij de gecentreerde reveal hieronder: exit `centered=true`
           // + reveal zonder tap-coördinaten moeten altijd samen wijzigen.
-          if (slide) engine.slideOutScene(old.root, -slideDir, () => old.destroy())
+          if (snapCam) old.destroy()
+          else if (slide) engine.slideOutScene(old.root, -slideDir, () => old.destroy())
           else engine.exitScene(old.root, dir as 'in' | 'out', () => old.destroy(), undefined, true)
         }
         // Buurjaren (voor de overscroll-preview + jaar-overgang): de jarenlijst is
@@ -686,6 +720,9 @@ export function AppShell() {
           neighbors,
         })
         sceneRef.current = scene
+        // Animatieloze herbouw: camera exact terug op de stand van vóór de wissel
+        // (de constructor deed zojuist een fit-jump).
+        if (snapCam) engine.jumpCamera(snapCam.x, snapCam.y, snapCam.zoom)
         // De scene-constructor heeft de camera al naar het nieuwe jaar gezet
         // (jumpCamera). Wis de elastische grens SYNCHROON + peg de rauwe positie op
         // de nieuwe camera. Anders draait de eerste tick `tickInertia` nog met de
@@ -700,14 +737,19 @@ export function AppShell() {
         // Gecentreerde reveal (geen tap-coördinaten → schermmidden): spiegelt de
         // gecentreerde exit hierboven, zodat een jaar in-/uitzoomen altijd vanuit
         // het midden gebeurt i.p.v. vanaf de aangeklikte tegel (zie comment boven).
-        if (slide) engine.slideInScene(scene.root, slideDir)
-        else engine.revealScene(scene.root, dir as 'in' | 'out')
+        if (!snapCam) {
+          if (slide) engine.slideInScene(scene.root, slideDir)
+          else engine.revealScene(scene.root, dir as 'in' | 'out')
+        }
         levelRef.current = 'year'
         setUiLevel('year')
         setHeader({ text: detail.year.title, dir: slide ? 'in' : (dir as 'in' | 'out') })
         applyPanLock()
         currentYearRef.current = yearId
-        entryZoomRef.current = engine.pendingZoom
+        // In het snap-pad (themawissel) is de camera net op de oude stand gezet;
+        // de entry-referentie (uitzoom-terug/zoomFloor) moet de oorspronkelijke
+        // fit-zoom blijven, anders klemt uitzoomen of springt het direct terug.
+        if (!snapCam) entryZoomRef.current = engine.pendingZoom
         // Focus-continuïteit bij terug (Escape): de memory waar je vandaan komt
         // krijgt de toetsenbord-focus op de jaar-tijdlijn. Bij toetsenbord-drill-in
         // (Enter vanaf de lifeline): de eerste (vroegste) memory krijgt de focus.
@@ -783,6 +825,8 @@ export function AppShell() {
       dir: 'in' | 'out' = 'in',
       focusAfter?: string,
       focusFirstAfter?: boolean,
+      // Animatieloze herbouw op de huidige plek (themawissel), zie enterYear.
+      snapCam?: { x: number; y: number; zoom: number },
     ): Promise<void> => {
       if (!engine || !backendRef.current || enteringRef.current) return
       enteringRef.current = true
@@ -795,7 +839,10 @@ export function AppShell() {
         // (jumpCamera) zodat de overlay op de oude camera bevriest.
         const old = sceneRef.current
         sceneRef.current = null
-        if (old) engine.exitScene(old.root, dir, () => old.destroy())
+        if (old) {
+          if (snapCam) old.destroy()
+          else engine.exitScene(old.root, dir, () => old.destroy())
+        }
         const scene = new EventScene(
           engine,
           backend,
@@ -821,7 +868,8 @@ export function AppShell() {
         // Open in de onthouden weergave van dit event (vóór de reveal, zodat de
         // camera-fit meteen klopt); valt terug op de globale standaard.
         initEventView(scene, eventId)
-        revealScene(engine, scene, dir)
+        if (snapCam) engine.jumpCamera(snapCam.x, snapCam.y, snapCam.zoom)
+        else revealScene(engine, scene, dir)
         // Zelfde elastische-staat-reset als bij het uitzoomen naar de lifeline: een
         // naar de rand gescrollde jaar-view (camera buiten `boundsX`) + de pointerdown
         // van een klik op de rand-tegel pegt `rawX` uit de band; zonder deze reset
@@ -837,7 +885,8 @@ export function AppShell() {
         currentEventInfoRef.current = detail.event
         currentYearCoverRef.current = detail.yearCover ?? null
         currentItemsRef.current = detail.items
-        entryZoomRef.current = engine.pendingZoom
+        // Zie enterYear: entry-referentie alleen bij een echte entry bijwerken.
+        if (!snapCam) entryZoomRef.current = engine.pendingZoom
         // Focus-continuïteit bij terug (Escape) uit L3: het item waar je vandaan
         // komt krijgt de toetsenbord-focus in het canvas. Bij toetsenbord-drill-in
         // (Enter vanaf de jaar-view): de eerste foto/video krijgt de focus.
@@ -862,7 +911,11 @@ export function AppShell() {
       }
     }
 
-    const enterFocus = (itemId: string): void => {
+    const enterFocus = (
+      itemId: string,
+      // Animatieloze herbouw op de huidige plek (themawissel), zie enterYear.
+      snapCam?: { x: number; y: number; zoom: number },
+    ): void => {
       if (!engine || !backendRef.current) return
       const items = currentItemsRef.current
       const index = items.findIndex((it) => it.id === itemId)
@@ -871,7 +924,10 @@ export function AppShell() {
       // Oud niveau meebewegen + uitfaden (crossfade), vóór de scene-constructor.
       const old = sceneRef.current
       sceneRef.current = null
-      if (old) engine.exitScene(old.root, 'in', () => old.destroy())
+      if (old) {
+        if (snapCam) old.destroy()
+        else engine.exitScene(old.root, 'in', () => old.destroy())
+      }
       const scene = new FocusScene(engine, backendRef.current, items, index, (delta, id) => {
         // Titel meelaten lopen bij stappen (tik óf pijltjestoets).
         const it = id ? currentItemsRef.current.find((x) => x.id === id) : undefined
@@ -880,17 +936,50 @@ export function AppShell() {
       scene.setAnimateSteps(settingsRef.current.l3StepAnimation)
       if (contentFillRef.current) scene.setFullscreen(true)
       sceneRef.current = scene
-      revealScene(engine, scene, 'in')
+      if (snapCam) engine.jumpCamera(snapCam.x, snapCam.y, snapCam.zoom)
+      else revealScene(engine, scene, 'in')
       levelRef.current = 'focus'
       setUiLevel('focus')
       setHeader({ text: focusTitleFor(items[index]), dir: 'in' })
       applyPanLock()
-      entryZoomRef.current = engine.pendingZoom
+      // Zie enterYear: entry-referentie alleen bij een echte entry bijwerken.
+      if (!snapCam) entryZoomRef.current = engine.pendingZoom
+      // Snap-herbouw terwijl een video speelt: de DOM-videolaag blijft gemount
+      // (zelfde item), dus `loadedmetadata` vuurt niet opnieuw — herstel de
+      // bekende videoverhouding en verberg de Pixi-poster meteen (geen flits).
+      if (snapCam && focusVideoIdRef.current === items[index]?.id && videoAspectRef.current !== null) {
+        scene.setVideoAspect(videoAspectRef.current)
+        scene.setContentHidden(true)
+      }
     }
 
     enterYearRef.current = (id, kbDrill) => void enterYear(id, 'in', undefined, kbDrill)
     enterEventRef.current = (id, kbDrill) => void enterEvent(id, 'in', undefined, kbDrill)
     enterFocusRef.current = (id) => enterFocus(id)
+
+    // Themawissel (instellingen): activeer het thema, zet de Pixi-achtergrondkleur
+    // (die is éénmalig gezet bij app.init en geen onderdeel van een scene) en
+    // herbouw de actieve scene op zijn plaats — zelfde niveau, zelfde camera,
+    // zonder overgangsanimatie (live preview, geen "herlaad"-effect).
+    const applyTheme = (id: string): void => {
+      setActiveTheme(themeById(id))
+      if (!engine) return
+      engine.app.renderer.background.color = THEME.colors.appBg
+      if (phaseRef.current !== 'ready') return
+      const cam = { x: engine.camera.x, y: engine.camera.y, zoom: engine.camera.zoom }
+      const lvl = levelRef.current
+      if (lvl === 'lifeline') {
+        setupLifeline(undefined, cam)
+      } else if (lvl === 'year' && currentYearRef.current) {
+        void enterYear(currentYearRef.current, 'in', undefined, false, cam)
+      } else if (lvl === 'event' && currentEventRef.current) {
+        void enterEvent(currentEventRef.current, 'in', undefined, false, cam)
+      } else if (lvl === 'focus') {
+        const itemId = sceneRef.current?.currentId?.()
+        if (itemId) enterFocus(itemId, cam)
+      }
+    }
+    applyThemeRef.current = applyTheme
 
     // Verticale-pan-lock toepassen op basis van niveau + instelling (alleen de
     // horizontale niveaus L0/L1).
@@ -1056,6 +1145,23 @@ export function AppShell() {
     }
 
     void (async () => {
+      // Thema activeren vóór de engine-init (die leest de achtergrondkleur) en de
+      // gebundelde fonts eager laden vóór de eerste scene-opbouw (juiste
+      // Text-metrics). Een trage/falende font-load mag de start nooit blokkeren:
+      // race met een korte timeout; de systeem-fallback rendert dan eerst.
+      setActiveTheme(themeById(settingsRef.current.themeId))
+      const fontsReady = loadThemeFonts().then(() => {
+        fontsDone = true
+      })
+      // Verloren race (scene gebouwd vóór de fonts, incl. het first-run-pad dat
+      // niet op fonts wacht): herteken de actieve scene eenmalig zodra ze er
+      // zijn. Via setTimeout(0) zodat de state van de eerste build gesetteld is.
+      void fontsReady.then(() => {
+        if (disposed || !sceneBuiltBeforeFonts) return
+        window.setTimeout(() => {
+          if (!disposed && phaseRef.current === 'ready') applyThemeRef.current(settingsRef.current.themeId)
+        }, 0)
+      })
       engine = new RenderEngine()
       await engine.init(hostRef.current!)
       if (disposed) {
@@ -1110,6 +1216,7 @@ export function AppShell() {
         const vidId = focusItem && focusItem.itemType === 'video' ? focusItem.id : null
         if (vidId !== focusVideoIdRef.current) {
           focusVideoIdRef.current = vidId
+          videoAspectRef.current = null // ander/geen item → verhouding onbekend
           setFocusVideoId(vidId)
         }
         if (vidId) {
@@ -1408,6 +1515,7 @@ export function AppShell() {
           setPhase('first-run')
           return
         }
+        await Promise.race([fontsReady, new Promise((r) => setTimeout(r, 1500))])
         await loadYears()
       } catch (e) {
         setMessage(String(e))
@@ -2007,7 +2115,10 @@ export function AppShell() {
           src={videoSrc}
           poster={backendRef.current.thumb(focusVideoId, 1024).url ?? ''}
           onFullscreen={doToggleFullscreen}
-          onAspect={(a) => sceneRef.current?.setVideoAspect?.(a)}
+          onAspect={(a) => {
+            videoAspectRef.current = a
+            sceneRef.current?.setVideoAspect?.(a)
+          }}
         />
       )}
       {showFps && <FpsOverlay engineRef={engineRef} />}
@@ -2360,6 +2471,65 @@ function SettingsPanel({
         <div style={{ overflowY: 'auto', padding: '14px 22px 6px', flex: '1 1 auto' }}>
           {tab === 'weergave' && (
             <>
+              {subhead('Thema')}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>
+                {THEMES.map((t) => (
+                  <button
+                    key={t.id}
+                    onClick={() => onChange({ themeId: t.id })}
+                    title={t.name}
+                    style={{
+                      padding: 0,
+                      borderRadius: 8,
+                      overflow: 'hidden',
+                      cursor: 'pointer',
+                      textAlign: 'left',
+                      background: '#1c2432',
+                      border: settings.themeId === t.id ? '2px solid #4b9bff' : '2px solid #2c3650',
+                    }}
+                  >
+                    <div
+                      style={{
+                        height: 44,
+                        background: hexColor(t.colors.appBg),
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 5,
+                      }}
+                    >
+                      <span
+                        style={{
+                          width: 18,
+                          height: 13,
+                          borderRadius: 2,
+                          background: hexColor(t.colors.surface),
+                          border: `1px solid ${hexColor(t.colors.surfaceStroke)}`,
+                        }}
+                      />
+                      <span style={{ width: 12, height: 12, borderRadius: 6, background: hexColor(t.colors.accent) }} />
+                      <span style={{ width: 18, height: 13, borderRadius: 2, background: hexColor(t.colors.frame) }} />
+                    </div>
+                    <div
+                      style={{
+                        padding: '5px 7px',
+                        fontSize: 13,
+                        color: settings.themeId === t.id ? '#fff' : '#bcc5d6',
+                        fontFamily: t.fonts.title,
+                        whiteSpace: 'nowrap',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                      }}
+                    >
+                      {t.name}
+                    </div>
+                  </button>
+                ))}
+              </div>
+              {desc(
+                'Kleuren en fonts van de tijdlijn — direct toegepast. Papier-/linnen-texturen en de licht/donker-stijl van de panelen volgen in een latere stap.',
+              )}
+              <div style={{ height: 1, background: '#2c3650', margin: '16px 0' }} />
               <Toggle on={settings.showTitle} set={(v) => onChange({ showTitle: v })} label="Titel bovenin tonen" />
               {desc('"Memory Lane" op het overzicht, het jaar in een jaar, de memory-naam in een memory.')}
               {settings.showTitle && (
@@ -3256,6 +3426,11 @@ function BackButton({ onClick }: { onClick: () => void }) {
       </svg>
     </button>
   )
+}
+
+/** Pixi-hex (0xrrggbb) → CSS-hex ('#rrggbb'), voor de thema-previews. */
+function hexColor(c: number): string {
+  return `#${c.toString(16).padStart(6, '0')}`
 }
 
 /** Debug (F9): klein fps-tellertje dat de Pixi-ticker van de actieve engine

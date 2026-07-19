@@ -14,7 +14,7 @@
 
 import { Container, Graphics, Sprite, Text, Texture } from 'pixi.js'
 import type { Backend, EventSummary, YearDetail } from '../../lib/backend'
-import { CLASSIC_DARK as THEME } from '../../theme/tokens'
+import { THEME } from '../../theme/tokens'
 import type { FrameContext, RenderEngine } from '../core/engine'
 import type { DragHandle } from '../core/gestures'
 import type { Scene } from './scene'
@@ -46,7 +46,6 @@ const STICKY_GAP_PX = 4 // lossere gap voor een kaart die z'n lane behoudt (hyst
 // scherp getekend op schermresolutie (de leader-laag wordt met 1/zoom
 // counter-scaled en in scherm-coördinaten getekend).
 const LEADER_WIDTH = 1 // schermdikte (px)
-const LEADER_COLOR = THEME.colors.leader
 const LEADER_ALPHA = 0.85
 // Horizontale offset (scherm-px) van een kaart t.o.v. zijn datummarkering, zodat
 // de leader een mooie S-bezier kan maken (recht omhoog → opzij → recht de tegel in).
@@ -148,7 +147,10 @@ interface Node {
 }
 
 // Meerdaagse-blokjes: de felle basiskleuren uit het thema, geblend tegen de
-// thema-achtergrond (zodat de balkjes "opaak op de as" ogen).
+// thema-achtergrond (zodat de balkjes "opaak op de as" ogen). Het geblende
+// palet wordt per scene-instantie berekend (constructor) zodat een
+// themawissel + scene-herbouw de nieuwe kleuren oppakt — niet op module-scope
+// cachen (dan blijft het oude thema hangen).
 function opaqueSpan(color: number, bg: number): number {
   const mix = (c: number, b: number): number => Math.round(c * 0.45 + b * 0.55)
   const r = mix((color >> 16) & 255, (bg >> 16) & 255)
@@ -156,7 +158,6 @@ function opaqueSpan(color: number, bg: number): number {
   const b = mix(color & 255, bg & 255)
   return (r << 16) | (g << 8) | b
 }
-const SPAN_PALETTE = THEME.colors.spanPalette.map((c) => opaqueSpan(c, THEME.colors.appBg))
 
 /** Stabiele hash (FNV-1a) van een id. */
 function hashId(s: string): number {
@@ -174,10 +175,12 @@ function truncateTitle(s: string, n: number): string {
 }
 
 // Gedempte kleuren voor de placeholder-tegel van een memory zónder foto (per
-// memory deterministisch → ze variëren; donker genoeg voor witte titeltekst).
-const PLACEHOLDER_PALETTE = THEME.colors.placeholderPalette
+// memory deterministisch → ze variëren; contrasterend met de titeltekst-token).
+// Leest het thema op aanroep-moment (scene-bouwtijd), zodat een themawissel
+// via scene-herbouw de nieuwe kleuren oppakt.
 function placeholderColor(id: string): number {
-  return PLACEHOLDER_PALETTE[hashId(id) % PLACEHOLDER_PALETTE.length]!
+  const palette = THEME.colors.placeholderPalette
+  return palette[hashId(id) % palette.length]!
 }
 
 function fitCover(sprite: Sprite, tex: Texture): void {
@@ -282,16 +285,17 @@ export class YearScene implements Scene {
     this.root.addChild(spans)
     const isSpan = (e: EventSummary): boolean =>
       !!e.endAt && dateToX(parseLocalDate(e.endAt)) - dateToX(parseLocalDate(e.startAt)) > 4
+    const spanPalette = THEME.colors.spanPalette.map((c) => opaqueSpan(c, THEME.colors.appBg))
     const spanColor = new Map<string, number>()
     detail.events
       .filter(isSpan)
       .sort((a, b) => parseLocalDate(a.startAt) - parseLocalDate(b.startAt))
-      .forEach((e, k) => spanColor.set(e.id, SPAN_PALETTE[k % SPAN_PALETTE.length]!))
+      .forEach((e, k) => spanColor.set(e.id, spanPalette[k % spanPalette.length]!))
     for (const e of detail.events) {
       if (!isSpan(e)) continue
       const sX = dateToX(parseLocalDate(e.startAt))
       const eX = dateToX(parseLocalDate(e.endAt!))
-      spans.rect(sX, -9, eX - sX, 18).fill(spanColor.get(e.id) ?? SPAN_PALETTE[0]!)
+      spans.rect(sX, -9, eX - sX, 18).fill(spanColor.get(e.id) ?? spanPalette[0]!)
     }
     const anchorXOf = (ev: EventSummary): number => {
       const startX = dateToX(parseLocalDate(ev.startAt))
@@ -580,7 +584,7 @@ export class YearScene implements Scene {
     } else {
       this.leaders.lineTo(x3, y3)
     }
-    this.leaders.stroke({ width: LEADER_WIDTH, color: LEADER_COLOR, alpha: LEADER_ALPHA * appear })
+    this.leaders.stroke({ width: LEADER_WIDTH, color: THEME.colors.leader, alpha: LEADER_ALPHA * appear })
   }
 
   /** Breedte-dominante fit: het hele jaar past in de breedte; kaarten (constante

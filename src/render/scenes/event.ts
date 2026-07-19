@@ -5,7 +5,7 @@
 
 import { Container, Graphics, Sprite, Text, Texture } from 'pixi.js'
 import type { Backend, CanvasLayoutInput, EventDetail, Item } from '../../lib/backend'
-import { CLASSIC_DARK as THEME } from '../../theme/tokens'
+import { THEME } from '../../theme/tokens'
 import type { FrameContext, RenderEngine } from '../core/engine'
 import type { DragHandle } from '../core/gestures'
 import type { NodePosition, Scene } from './scene'

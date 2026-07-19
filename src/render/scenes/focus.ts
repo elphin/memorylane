@@ -5,7 +5,7 @@
 
 import { BlurFilter, Container, Graphics, Sprite, Text, Texture } from 'pixi.js'
 import type { Backend, Item } from '../../lib/backend'
-import { CLASSIC_DARK as THEME } from '../../theme/tokens'
+import { THEME } from '../../theme/tokens'
 import type { FrameContext, RenderEngine } from '../core/engine'
 import type { Scene } from './scene'
 
