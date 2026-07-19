@@ -18,7 +18,8 @@ import { RenderEngine } from '../render/core/engine'
 import { loadThemeFonts } from '../theme/fonts'
 import { THEMES, themeById } from '../theme/registry'
 import { ACCENT_SWATCHES, TITLE_FONTS, resolveTheme, type ThemeChoiceLike } from '../theme/resolve'
-import { THEME, setActiveTheme } from '../theme/tokens'
+import { BACKGROUNDS, BACKGROUND_NONE, loadBackgroundTexture } from '../theme/textures'
+import { THEME, setActiveTheme, type ResolvedTheme } from '../theme/tokens'
 import { UI_DARK, UI_LIGHT, ui, type UiPalette } from '../theme/ui'
 import { EventScene } from '../render/scenes/event'
 import type { NodePosition } from '../render/scenes/scene'
@@ -662,6 +663,8 @@ export function AppShell() {
   const applyThemeRef = useRef<(id: string) => void>(() => {})
   // Alleen de scene-herbouw op de huidige plek (voor de jaar-/event-kiezers).
   const refreshCurrentSceneRef = useRef<() => void>(() => {})
+  // Canvas-achtergrond (kleur + evt. textuurlaag) van het huidige niveau zetten.
+  const setCanvasBackgroundRef = useRef<(t: ResolvedTheme, worldLocked: boolean) => void>(() => {})
 
   useEffect(() => {
     let engine: RenderEngine | null = null
@@ -680,6 +683,28 @@ export function AppShell() {
     // Dubbelklik-detectie op de lifeline (lege ruimte) → passend ↔ standaard.
     let lastL0Tap = { t: 0, x: 0, y: 0 }
 
+    // Achtergrond van het huidige niveau: effen thema-kleur + (indien het
+    // thema een textuur heeft) de tiling-laag. `worldLocked` = camera-
+    // gekoppeld (L2/L3); op L0/L1 staat de textuur stil op het scherm. De
+    // async texture-load is race-vrij via een volgnummer.
+    let bgSeq = 0
+    const setCanvasBackground = (t: ResolvedTheme, worldLocked: boolean): void => {
+      if (!engine) return
+      engine.app.renderer.background.color = t.colors.appBg
+      setSceneUiMode(t.uiMode)
+      const bg = t.background
+      const seq = ++bgSeq
+      if (bg.kind !== 'texture') {
+        engine.setBackground(null, 0, false)
+        return
+      }
+      void loadBackgroundTexture(bg.textureId).then((tex) => {
+        if (disposed || seq !== bgSeq || !engine) return
+        engine.setBackground(tex, bg.tint, worldLocked)
+      })
+    }
+    setCanvasBackgroundRef.current = setCanvasBackground
+
     // `snapCam`: animatieloze herbouw op de huidige plek (themawissel): geen
     // exit-/reveal-animatie en de camera wordt exact op deze stand teruggezet.
     const setupLifeline = (focusAfter?: string, snapCam?: { x: number; y: number; zoom: number }): void => {
@@ -696,8 +721,7 @@ export function AppShell() {
       }
       // Canvas-achtergrond volgt het thema van het huidige niveau: op L0 het
       // app-thema (jaar-thema's kleuren alleen hun eigen tegel).
-      engine.app.renderer.background.color = THEME.colors.appBg
-      setSceneUiMode(THEME.uiMode)
+      setCanvasBackground(THEME, false)
       const scene = new LifelineScene(engine, backendRef.current, yearsRef.current, {
         enabled: settingsRef.current.yearTileSlideshow,
         mode: settingsRef.current.yearCoverMode,
@@ -786,9 +810,7 @@ export function AppShell() {
         // Canvas-achtergrond volgt het geresolvede jaar-thema — zo heeft een
         // Kodachrome-jaar écht zijn eigen sfeer, en klopt de span-blend (die
         // tegen het jaar-appBg rekent) met wat er achter staat.
-        const yearT = resolveTheme(detail.year.theme)
-        engine.app.renderer.background.color = yearT.colors.appBg
-        setSceneUiMode(yearT.uiMode)
+        setCanvasBackground(resolveTheme(detail.year.theme), false)
         const scene = new YearScene(engine, backendRef.current, detail, {
           enabled: settingsRef.current.slideshow,
           speedMs: settingsRef.current.slideshowSpeed * 1000,
@@ -925,9 +947,7 @@ export function AppShell() {
           else engine.exitScene(old.root, dir, () => old.destroy())
         }
         // Canvas-achtergrond volgt het geresolvede event-thema (app → jaar → event).
-        const eventT = resolveTheme(detail.yearTheme, detail.event.theme)
-        engine.app.renderer.background.color = eventT.colors.appBg
-        setSceneUiMode(eventT.uiMode)
+        setCanvasBackground(resolveTheme(detail.yearTheme, detail.event.theme), true)
         const scene = new EventScene(
           engine,
           backend,
@@ -1015,9 +1035,7 @@ export function AppShell() {
         else engine.exitScene(old.root, 'in', () => old.destroy())
       }
       // Canvas-achtergrond volgt het event-thema (zelfde scope als L2).
-      const focusT = resolveTheme(currentThemeChoicesRef.current.year, currentThemeChoicesRef.current.event)
-      engine.app.renderer.background.color = focusT.colors.appBg
-      setSceneUiMode(focusT.uiMode)
+      setCanvasBackground(resolveTheme(currentThemeChoicesRef.current.year, currentThemeChoicesRef.current.event), true)
       const scene = new FocusScene(
         engine,
         backendRef.current,
@@ -1738,8 +1756,7 @@ export function AppShell() {
       sceneRef.current?.destroy()
       // Terug naar L0: achtergrond + titel-uiMode terug naar het app-thema
       // (je kunt hier vanaf een donker gethemad jaar/event komen).
-      engine.app.renderer.background.color = THEME.colors.appBg
-      setSceneUiMode(THEME.uiMode)
+      setCanvasBackgroundRef.current(THEME, false)
       sceneRef.current = new LifelineScene(engine, backend, years, {
         enabled: settingsRef.current.yearTileSlideshow,
         mode: settingsRef.current.yearCoverMode,
@@ -2675,7 +2692,7 @@ function SettingsPanel({
                 ))}
               </div>
               {desc(
-                'Kleuren en fonts van de tijdlijn en de panelen — direct toegepast. Papier-/linnen-texturen volgen in een latere stap.',
+                'Kleuren, fonts en papier-/linnen-texturen van de tijdlijn en de panelen — direct toegepast. Per jaar of memory kiezen kan met de Thema-knop op dat niveau.',
               )}
               <div style={{ height: 1, background: u.border, margin: '16px 0' }} />
               <Toggle on={settings.showTitle} set={(v) => onChange({ showTitle: v })} label="Titel bovenin tonen" />
@@ -3805,6 +3822,24 @@ function ThemePanel({
                   style={{ ...chip(value?.titleFont === f.id), fontFamily: f.stack }}
                 >
                   {f.name}
+                </button>
+              ))}
+            </div>
+            <div style={{ fontSize: 13, color: u.textMuted, margin: '14px 0 6px' }}>Achtergrond</div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button onClick={() => patch({ background: undefined })} style={chip(!value?.background)}>
+                Geërfd
+              </button>
+              <button
+                onClick={() => patch({ background: BACKGROUND_NONE })}
+                style={chip(value?.background === BACKGROUND_NONE)}
+                title="Effen kleur, ook als het thema een textuur heeft"
+              >
+                Effen
+              </button>
+              {BACKGROUNDS.map((b) => (
+                <button key={b.id} onClick={() => patch({ background: b.id })} style={chip(value?.background === b.id)}>
+                  {b.name}
                 </button>
               ))}
             </div>

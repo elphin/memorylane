@@ -70,9 +70,9 @@ export interface ThemeFonts {
   paper: string
 }
 
-/** Achtergrond van het canvas: effen, of (vanaf fase 4) een tiling-textuur.
- * Zolang de textuurlaag er nog niet is, valt 'texture' terug op de effen
- * `appBg` — de thema-preview toont die fallback eerlijk. */
+/** Achtergrond van het canvas: effen, of een tiling-textuur (getint met
+ * `tint`, doorgaans de appBg). De thema-previews in de kiezers tonen bewust
+ * de effen appBg — klein en rustig; de textuur zie je live op het canvas. */
 export type ThemeBackground =
   | { kind: 'solid' }
   | { kind: 'texture'; textureId: string; tint: number }

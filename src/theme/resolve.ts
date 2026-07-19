@@ -1,15 +1,15 @@
 // Cascade-resolver (personalisatie-plan §4.2): app-default → jaar → event.
 // Elk niveau kan een ThemeChoice hebben: eerst wordt (indien aanwezig en
 // bekend) het `id` toegepast — de volledige tokenset van dat thema — en
-// daarna de losse overrides van dát niveau (accent, titleFont; background
-// wordt pas zichtbaar vanaf fase 4 maar reist alvast mee). Onbekende id's of
-// waarden vallen stil terug (tolerantie-principe: oudere/nieuwere vault-data
-// mag nooit crashen).
+// daarna de losse overrides van dát niveau (accent, titleFont, background).
+// Onbekende id's of waarden vallen stil terug (tolerantie-principe:
+// oudere/nieuwere vault-data mag nooit crashen).
 //
 // Geen cache: resolutie gebeurt alleen bij scene-(her)bouw — hooguit enkele
 // tientallen aanroepen per navigatie, elk een paar object-spreads.
 
 import { THEMES, themeById } from './registry'
+import { BACKGROUNDS, BACKGROUND_NONE } from './textures'
 import { THEME, cloneTheme, type ResolvedTheme } from './tokens'
 
 /** Structureel gelijk aan `ThemeChoice` uit de backend (frontmatter-wire);
@@ -48,16 +48,21 @@ export function applyChoice(base: ResolvedTheme, choice?: ThemeChoiceLike | null
   if (choice.id && THEMES.some((x) => x.id === choice.id)) t = themeById(choice.id)
   const accent = parseHex(choice.accent)
   const font = TITLE_FONTS.find((f) => f.id === choice.titleFont)?.stack
-  if (accent === null && !font && t === base && !choice.background) return base
+  // `background`-override: 'none' dwingt effen af; een gecureerde textuur-id
+  // kiest die textuur (getint met de appBg); onbekende waarden stil negeren.
+  const bg = choice.background
+  const bgValid = bg === BACKGROUND_NONE || BACKGROUNDS.some((b) => b.id === bg)
+  if (accent === null && !font && t === base && !bgValid) return base
   const out = cloneTheme(t)
   if (accent !== null) out.colors.accent = accent
   if (font) {
     out.fonts.title = font
     out.fonts.display = font
   }
-  // `background`-override: id wordt bewaard voor de textuurlaag (fase 4);
-  // tot die tijd heeft hij geen zichtbaar effect en valt hij op solid terug.
-  if (choice.background) out.background = { kind: 'texture', textureId: choice.background, tint: out.colors.appBg }
+  if (bgValid) {
+    out.background =
+      bg === BACKGROUND_NONE ? { kind: 'solid' } : { kind: 'texture', textureId: bg!, tint: out.colors.appBg }
+  }
   return out
 }
 

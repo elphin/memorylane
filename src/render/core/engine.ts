@@ -2,7 +2,7 @@
 // Draait ticker-driven buiten React-state. De `world`-container krijgt elke
 // frame de camera-transform; scenes haken in via `onFrame`.
 
-import { Application, Container, Ticker, UPDATE_PRIORITY } from 'pixi.js'
+import { Application, Container, Ticker, TilingSprite, UPDATE_PRIORITY, type Texture } from 'pixi.js'
 import { THEME } from '../../theme/tokens'
 import { Camera, type Viewport } from './camera'
 import { GestureController, type DragHandle, type DragMods } from './gestures'
@@ -27,6 +27,13 @@ export class RenderEngine {
   readonly textures = new TextureManager()
   readonly lod = new LodManager()
   gestures!: GestureController
+  // Thema-achtergrondlaag (fase 4): één TilingSprite ónder de wereld, getint
+  // met de thema-appBg. `worldLocked` koppelt 'm aan de camera (L2/L3: de
+  // textuur schuift/schaalt mee met het canvas); anders staat hij stil op het
+  // scherm (L0/L1). De texture is eigendom van de theme-texturecache (geen
+  // TextureManager/LRU) en wordt hier nooit gedestroyed.
+  private bgTile: TilingSprite | null = null
+  private bgWorldLocked = false
 
   /** Scene-hook, elke frame ná de camera-transform. */
   onFrame?: (ctx: FrameContext) => void
@@ -435,8 +442,38 @@ export class RenderEngine {
     this.world.scale.set(z)
     this.world.position.set(vp.width / 2 - this.camera.x * z, vp.height / 2 - this.camera.y * z)
 
+    // Achtergrond-tile: schermvullend houden; wereld-gekoppeld schaalt en
+    // schuift het patroon met de camera mee (TilingSprite wrapt vanzelf).
+    if (this.bgTile && this.bgTile.visible) {
+      this.bgTile.width = vp.width
+      this.bgTile.height = vp.height
+      if (this.bgWorldLocked) {
+        this.bgTile.tileScale.set(z)
+        this.bgTile.tilePosition.set(vp.width / 2 - this.camera.x * z, vp.height / 2 - this.camera.y * z)
+      } else {
+        this.bgTile.tileScale.set(1)
+        this.bgTile.tilePosition.set(0, 0)
+      }
+    }
+
     this.textures.pump(this.frame)
     this.onFrame?.({ engine: this, frame: this.frame, dtMS: ticker.deltaMS })
+  }
+
+  /** Zet (of verbergt, bij `null`) de thema-achtergrondtextuur. */
+  setBackground(tex: Texture | null, tint: number, worldLocked: boolean): void {
+    if (!tex) {
+      if (this.bgTile) this.bgTile.visible = false
+      return
+    }
+    if (!this.bgTile) {
+      this.bgTile = new TilingSprite({ texture: tex, width: 1, height: 1 })
+      this.app.stage.addChildAt(this.bgTile, 0)
+    }
+    this.bgTile.texture = tex
+    this.bgTile.tint = tint
+    this.bgTile.visible = true
+    this.bgWorldLocked = worldLocked
   }
 
   destroy(): void {

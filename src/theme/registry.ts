@@ -5,8 +5,8 @@
 //
 // Fonts: gebundelde OFL-fonts (Lora, Courier Prime, Caveat — zie
 // src/assets/fonts) met systeem-fallbacks in de stack. Thema's met
-// `background.kind: 'texture'` (warm-linen, kraft) vallen tot fase 4 terug op
-// hun effen appBg-tint.
+// `background.kind: 'texture'` (warm-linen, kraft) krijgen hun tiling-textuur
+// van de engine-achtergrondlaag (zie theme/textures.ts).
 
 import { CLASSIC_DARK, type ResolvedTheme } from './tokens'
 
