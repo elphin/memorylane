@@ -168,6 +168,7 @@ fn scan_loose_media_event(
             people: Vec::new(),
             tags: Vec::new(),
             category: None,
+            frame: None,
             body_text: None,
             slug: None,
             synthetic: true,
@@ -356,6 +357,7 @@ fn scan_event(root: &Path, event_path: &Path, year: &Year, model: &mut VaultMode
             people: Vec::new(),
             tags: Vec::new(),
             category: None,
+            frame: None,
             body_text: None,
             slug: None,
             synthetic: true,
@@ -441,6 +443,12 @@ fn read_item(
     let place = read_location(&parsed, "place");
     let category = parsed.get_str("category");
     let url = parsed.get_str("url");
+    // Frame-stijl (scalar, opaak — de frontend kent de geldige waarden);
+    // leeg/whitespace telt als afwezig.
+    let frame = parsed
+        .get_str("frame")
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
 
     let richness = [
         caption.is_some(),
@@ -474,6 +482,7 @@ fn read_item(
             people,
             tags,
             category,
+            frame,
             body_text,
             slug: Some(slug),
             synthetic: false,
@@ -905,6 +914,42 @@ mod tests {
         );
         let y25 = model.years.iter().find(|y| y.year == 2025).unwrap();
         assert!(y25.theme.is_none(), "geen theme-veld → None (erven)");
+    }
+
+    #[test]
+    fn reads_item_frame_and_empty_is_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("2024/ev")).unwrap();
+        std::fs::write(
+            root.join("2024/_year.md"),
+            "---\ntype: year\ntitle: \"2024\"\nstartAt: 2024-01-01\n---\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("2024/ev/_event.md"),
+            "---\nid: ev1\ntype: event\ntitle: Reis\nstartAt: 2024-07-01\n---\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("2024/ev/met-frame.md"),
+            "---\nid: p1\ntype: photo\nmedia: a.jpg\nframe: rounded\n---\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("2024/ev/leeg-frame.md"),
+            "---\nid: p2\ntype: photo\nmedia: b.jpg\nframe: \"\"\n---\n",
+        )
+        .unwrap();
+        // Los mediabestand zonder eigen `.md` → synthetisch item zonder frame.
+        std::fs::write(root.join("2024/ev/los.jpg"), b"x").unwrap();
+
+        let model = scan(root);
+        let by_id = |id: &str| model.items.iter().find(|i| i.id == id).unwrap();
+        assert_eq!(by_id("p1").frame.as_deref(), Some("rounded"));
+        assert!(by_id("p2").frame.is_none(), "lege string telt als afwezig");
+        let synth = model.items.iter().find(|i| i.synthetic).expect("synthetisch item");
+        assert!(synth.frame.is_none(), "synthetisch item heeft geen frame");
     }
 
     #[test]

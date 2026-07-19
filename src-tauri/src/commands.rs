@@ -278,6 +278,23 @@ impl VaultService {
         Ok(())
     }
 
+    /// Zet (of wist bij `None`/leeg) de frame-stijl van een item (file first,
+    /// rescan). Synthetische items (losse media zonder `.md`) hebben geen
+    /// bewerkbaar bestand en worden geweigerd — zelfde gedrag als `update_item`.
+    pub fn set_item_frame(&self, item_id: &str, frame: Option<&str>) -> Result<(), String> {
+        let vault = self.current_vault()?;
+        let (_event_id, folder, slug, _media) = {
+            let conn = self.conn.lock().map_err(lock_err)?;
+            index::item_files(&conn, item_id)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("item {item_id} niet gevonden"))?
+        };
+        let slug = slug.ok_or_else(|| "dit item heeft geen bewerkbaar bestand".to_string())?;
+        writer::set_item_frame(&vault, &folder, &slug, frame).map_err(|e| e.to_string())?;
+        self.rescan()?;
+        Ok(())
+    }
+
     /// Zet (of wist bij `None`) de uitgelichte foto van een event (file first,
     /// dan herindexeren). `item_ref` = de slug of id van de foto.
     pub fn set_featured(&self, event_id: &str, item_ref: Option<&str>) -> Result<(), String> {
@@ -896,6 +913,16 @@ pub fn update_item_metadata(
     state.update_item_metadata(&item_id, &caption, &date, &place, &people, &tags)
 }
 
+/// Zet (of wist bij `None`/leeg) de frame-stijl van een item (personalisatie).
+#[tauri::command]
+pub fn set_item_frame(
+    state: State<VaultService>,
+    item_id: String,
+    frame: Option<String>,
+) -> Result<(), String> {
+    state.set_item_frame(&item_id, frame.as_deref())
+}
+
 #[tauri::command]
 pub fn import_photos(
     state: State<VaultService>,
@@ -1022,6 +1049,57 @@ mod tests {
         assert!(ed.year_theme.is_none());
         let ym = std::fs::read_to_string(tmp.path().join("2024/_year.md")).unwrap();
         assert!(!ym.contains("theme"), "geen spoor in _year.md: {ym}");
+    }
+
+    #[test]
+    fn item_frame_set_and_clear_via_service() {
+        let tmp = tempfile::tempdir().unwrap();
+        let service = service_with_photo(tmp.path());
+
+        // Zetten: file-first + rescan → zichtbaar op de items van get_event.
+        service.set_item_frame("photo1", Some("polaroid")).unwrap();
+        let ed = service.with_conn(|c| index::get_event(c, "ev1")).unwrap().unwrap();
+        let it = ed.items.iter().find(|i| i.id == "photo1").unwrap();
+        assert_eq!(it.frame.as_deref(), Some("polaroid"));
+        let md =
+            std::fs::read_to_string(tmp.path().join("2024/2024-01-01 test/foto.md")).unwrap();
+        assert!(md.contains("frame: polaroid"), "frame in sidecar: {md}");
+        assert!(md.contains("caption: Test"), "overige velden intact: {md}");
+
+        // Lege string wist net als None.
+        service.set_item_frame("photo1", Some("")).unwrap();
+        let ed = service.with_conn(|c| index::get_event(c, "ev1")).unwrap().unwrap();
+        let it = ed.items.iter().find(|i| i.id == "photo1").unwrap();
+        assert!(it.frame.is_none());
+        let md =
+            std::fs::read_to_string(tmp.path().join("2024/2024-01-01 test/foto.md")).unwrap();
+        assert!(!md.contains("frame"), "geen spoor in sidecar na wissen: {md}");
+    }
+
+    #[test]
+    fn item_frame_refuses_synthetic_item() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("2024/2024-01-01 test")).unwrap();
+        std::fs::write(
+            root.join("2024/2024-01-01 test/_event.md"),
+            "---\nid: ev1\ntype: event\ntitle: Test\nstartAt: 2024-01-01\n---\n",
+        )
+        .unwrap();
+        // Los mediabestand zonder sidecar-`.md` → synthetisch item.
+        std::fs::write(root.join("2024/2024-01-01 test/los.jpg"), b"x").unwrap();
+        let service = VaultService::new().unwrap();
+        service.reindex_path(root, false).unwrap();
+        let id: String = {
+            let conn = service.conn.lock().unwrap();
+            conn.query_row("SELECT id FROM items WHERE synthetic = 1", [], |r| r.get(0))
+                .unwrap()
+        };
+
+        let err = service.set_item_frame(&id, Some("polaroid")).unwrap_err();
+        assert!(err.contains("geen bewerkbaar bestand"), "geweigerd zoals update_item: {err}");
+        // En er is niet stiekem een sidecar aangemaakt.
+        assert!(!root.join("2024/2024-01-01 test/los.md").exists());
     }
 
     #[test]

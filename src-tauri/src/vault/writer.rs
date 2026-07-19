@@ -631,6 +631,51 @@ pub fn update_item_meta(
     write_atomic(&path, &out)
 }
 
+/// Zet (of wist bij `None`/leeg) de frame-stijl van een item in de sidecar-
+/// frontmatter (`frame: polaroid`). Opake string: de geldige waarden kent alleen
+/// de frontend. Non-destructief op regel-niveau via `set_fm_field`: overige
+/// frontmatter-velden + body blijven exact behouden (zelfde aanpak als
+/// [`update_item`]). Zonder frontmatter-fences blijft de inhoud ongemoeid
+/// (onze eigen items hebben altijd fences).
+pub fn set_item_frame(
+    vault_root: &Path,
+    folder_path: &str,
+    slug: &str,
+    frame: Option<&str>,
+) -> std::io::Result<()> {
+    let path = vault_root.join(folder_path).join(format!("{slug}.md"));
+    let original = std::fs::read_to_string(&path)?;
+    let normalized = original.replace("\r\n", "\n");
+    let lines: Vec<&str> = normalized.split('\n').collect();
+    let open = lines.iter().position(|l| l.trim() == "---");
+    let close = open.and_then(|o| {
+        lines
+            .iter()
+            .enumerate()
+            .skip(o + 1)
+            .find(|(_, l)| l.trim() == "---")
+            .map(|(i, _)| i)
+    });
+    let (Some(open), Some(close)) = (open, close) else {
+        return write_atomic(&path, &normalized);
+    };
+    let mut fm: Vec<String> = lines[open + 1..close].iter().map(|s| s.to_string()).collect();
+    // Leeg/whitespace telt als wissen ("geërfd" laat geen spoor achter).
+    set_fm_field(&mut fm, "frame", frame.map(str::trim).filter(|s| !s.is_empty()));
+    set_fm_field(&mut fm, "updatedAt", Some(&now_iso()));
+
+    let body = lines[close + 1..].join("\n").trim().to_string();
+    let mut out = String::from("---\n");
+    out.push_str(&fm.join("\n"));
+    out.push_str("\n---\n");
+    if !body.is_empty() {
+        out.push('\n');
+        out.push_str(&body);
+        out.push('\n');
+    }
+    write_atomic(&path, &out)
+}
+
 /// Zet (of verwijdert bij `None`/leeg) de uitgelichte foto (`featuredPhoto`) van
 /// een event op regel-niveau; overige frontmatter-velden + body blijven behouden.
 /// Werkt de frontmatter van `<folder>/_event.md` bij via `apply` (+ `updatedAt`).
@@ -1941,6 +1986,73 @@ mod tests {
         let theme = ThemeChoice { id: Some("kraft".into()), ..ThemeChoice::default() };
         set_event_theme(root, "2024", Some(&theme)).unwrap();
         assert!(!root.join("2024/_event.md").exists());
+    }
+
+    #[test]
+    fn set_item_frame_roundtrips_via_scanner_and_clears() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("2024/ev")).unwrap();
+        std::fs::write(
+            root.join("2024/_year.md"),
+            "---\ntype: year\ntitle: \"2024\"\nstartAt: 2024-01-01\n---\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("2024/ev/_event.md"),
+            "---\nid: ev1\ntype: event\ntitle: Reis\nstartAt: 2024-07-01\n---\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("2024/ev/foto.md"),
+            "---\nid: p1\ntype: photo\nmedia: foto.jpg\ncaption: Strand\ncategory: reizen\n---\nBodytekst blijft.\n",
+        )
+        .unwrap();
+
+        set_item_frame(root, "2024/ev", "foto", Some("polaroid")).unwrap();
+        let c1 = std::fs::read_to_string(root.join("2024/ev/foto.md")).unwrap();
+        assert!(c1.contains("frame: polaroid"), "frame-regel geschreven: {c1}");
+        // Scanner leest de stijl terug; overige velden + body intact.
+        let model = crate::vault::scan(root);
+        let it = model.items.iter().find(|i| i.id == "p1").unwrap();
+        assert_eq!(it.frame.as_deref(), Some("polaroid"));
+        assert_eq!(it.caption.as_deref(), Some("Strand"));
+        assert_eq!(it.category.as_deref(), Some("reizen"));
+        assert_eq!(it.body_text.as_deref(), Some("Bodytekst blijft."));
+
+        // None → regel weg, rest intact.
+        set_item_frame(root, "2024/ev", "foto", None).unwrap();
+        let c2 = std::fs::read_to_string(root.join("2024/ev/foto.md")).unwrap();
+        assert!(!c2.contains("frame"), "geen spoor van frame na wissen: {c2}");
+        let p2 = crate::vault::frontmatter::parse(&c2);
+        assert_eq!(p2.get_str("caption").unwrap(), "Strand");
+        assert_eq!(p2.get_str("category").unwrap(), "reizen");
+        assert_eq!(p2.get_str("media").unwrap(), "foto.jpg");
+        assert_eq!(p2.body, "Bodytekst blijft.");
+    }
+
+    #[test]
+    fn set_item_frame_empty_clears_like_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("2024/ev")).unwrap();
+        std::fs::write(
+            root.join("2024/ev/foto.md"),
+            "---\nid: p1\ntype: photo\nmedia: foto.jpg\n---\n",
+        )
+        .unwrap();
+
+        set_item_frame(root, "2024/ev", "foto", Some("rounded")).unwrap();
+        assert!(std::fs::read_to_string(root.join("2024/ev/foto.md"))
+            .unwrap()
+            .contains("frame: rounded"));
+
+        // Lege/whitespace-string wist net als None.
+        set_item_frame(root, "2024/ev", "foto", Some("  ")).unwrap();
+        let c = std::fs::read_to_string(root.join("2024/ev/foto.md")).unwrap();
+        assert!(!c.contains("frame"), "leeg = wissen: {c}");
+        let p = crate::vault::frontmatter::parse(&c);
+        assert_eq!(p.get_str("media").unwrap(), "foto.jpg");
     }
 
     #[test]

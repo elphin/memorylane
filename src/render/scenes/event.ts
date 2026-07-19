@@ -5,8 +5,8 @@
 
 import { Container, Graphics, Sprite, Text, Texture } from 'pixi.js'
 import type { Backend, CanvasLayoutInput, EventDetail, Item } from '../../lib/backend'
-import { resolveTheme } from '../../theme/resolve'
-import type { ResolvedTheme } from '../../theme/tokens'
+import { resolveFrameStyle, resolveTheme } from '../../theme/resolve'
+import type { FrameStyle, ResolvedTheme } from '../../theme/tokens'
 import type { FrameContext, RenderEngine } from '../core/engine'
 import type { DragHandle } from '../core/gestures'
 import type { NodePosition, Scene } from './scene'
@@ -39,6 +39,8 @@ interface Node {
   focusRing: Graphics | null // aparte focus-ring (alleen notities; foto's gebruiken hun frame)
   focusAlpha: number // gedempte zichtbaarheid van de focus-ring (0..1, notities)
   borderAlpha: number // gedempte zichtbaarheid van de eigen witte rand (foto's, 0..1)
+  frameStyle: FrameStyle // kader-stijl (item-keuze of thema-default)
+  capEl: Text | null // polaroid-caption in de onderrand (alleen bij die stijl)
   // Notitie-kaart (tekst/link): losse onderdelen zodat de box los van de tekst
   // hergroot kan worden (Alt-slepen = box groter, font gelijk; tekst herloopt).
   textBg: Graphics | null
@@ -124,6 +126,7 @@ export class EventScene implements Scene {
       const isText = item.itemType === 'text' || item.itemType === 'link'
       const half = isText ? Math.max(TEXT_W, TEXT_H) / 2 : PHOTO / 2 + BORDER
 
+      const frameStyle: FrameStyle = isText ? 'plain' : resolveFrameStyle(item.frame, this.T)
       let sprite: Sprite | null = null
       let frame: Graphics | null = null
       let mask: Graphics | null = null
@@ -132,13 +135,14 @@ export class EventScene implements Scene {
       let textBg: Graphics | null = null
       let textEl: Text | null = null
       let textClip: Graphics | null = null
+      let capEl: Text | null = null
       if (isText) {
         const tc = this.buildTextCard(container, item)
         textBg = tc.bg
         textEl = tc.text
         textClip = tc.clip
       } else {
-        const card = this.buildPhotoCard(container)
+        const card = this.buildPhotoCard(container, frameStyle)
         sprite = card.sprite
         frame = card.frame
         mask = card.mask
@@ -148,13 +152,27 @@ export class EventScene implements Scene {
         // ingedrukt is (zie setRingKeys).
         // Video's krijgen een play-badge zodat ze meteen herkenbaar zijn.
         if (item.itemType === 'video') this.buildPlayBadge(container)
+        // Polaroid: het bijschrift in de brede onderrand, in het caption-font
+        // van het thema (donkere inkt op de bijna-witte rand).
+        if (frameStyle === 'polaroid' && item.caption) {
+          const t = item.caption.trim()
+          capEl = new Text({
+            text: t.length > 42 ? `${t.slice(0, 41).trimEnd()}…` : t,
+            style: { fill: this.T.colors.paperInk, fontSize: 15, fontFamily: this.T.fonts.caption },
+          })
+          capEl.resolution = 2
+          capEl.anchor.set(0.5)
+          container.addChild(capEl)
+        }
       }
 
       // Toetsenbord-focus-indicator. Foto's gebruiken hun EIGEN witte rand (de
       // `frame` faadt weg voor niet-gefocuste tegels, net als de jaar-view); een
-      // notitie heeft geen witte fotorand en krijgt daarom een aparte ring.
+      // notitie heeft geen witte fotorand en krijgt daarom een aparte ring —
+      // net als een foto met kader-stijl 'geen' (die heeft óók geen rand om te
+      // faden, anders is toetsenbord-focus daar onzichtbaar).
       let focusRing: Graphics | null = null
-      if (isText) {
+      if (isText || frameStyle === 'none') {
         focusRing = new Graphics()
         focusRing.visible = false
         container.addChild(focusRing)
@@ -184,6 +202,8 @@ export class EventScene implements Scene {
         focusRing,
         focusAlpha: 0,
         borderAlpha: 1,
+        frameStyle,
+        capEl,
         textBg,
         textEl,
         textClip,
@@ -216,6 +236,11 @@ export class EventScene implements Scene {
       // hittest-halfmaten (breedte×hoogte i.p.v. vierkant) + herlopen tekst.
       if (isText) {
         this.sizeTextCard(node, node.width ?? TEXT_W, node.height ?? TEXT_H)
+      } else {
+        // Foto: het kader per stijl tekenen (buildPhotoCard maakt alleen de lagen)
+        // + de focus-ring voor kaderloze foto's.
+        this.drawFrameBorder(node)
+        this.drawFocusRing(node)
       }
     })
 
@@ -224,14 +249,16 @@ export class EventScene implements Scene {
     this.fitCamera(cols, Math.max(1, Math.ceil(detail.items.length / cols)))
   }
 
-  private buildPhotoCard(container: Container): { sprite: Sprite; frame: Graphics; mask: Graphics } {
+  private buildPhotoCard(
+    container: Container,
+    style: FrameStyle,
+  ): { sprite: Sprite; frame: Graphics; mask: Graphics } {
+    // Alleen de lagen opzetten; het kader zelf tekent drawFrameBorder (per
+    // stijl), zodra de node bestaat.
     const frame = new Graphics()
-    frame
-      .roundRect(-PHOTO / 2 - BORDER, -PHOTO / 2 - BORDER, PHOTO + BORDER * 2, PHOTO + BORDER * 2, 4)
-      .fill(this.T.colors.frame)
     container.addChild(frame)
     const mask = new Graphics()
-    mask.rect(-PHOTO / 2, -PHOTO / 2, PHOTO, PHOTO).fill(0xffffff)
+    this.drawPhotoMask(mask, style, PHOTO, PHOTO)
     const sprite = new Sprite(Texture.WHITE)
     sprite.anchor.set(0.5)
     sprite.setSize(PHOTO, PHOTO)
@@ -242,6 +269,13 @@ export class EventScene implements Scene {
     return { sprite, frame, mask }
   }
 
+  /** (Her)teken het foto-masker: afgeronde hoeken bij 'rounded', anders strak. */
+  private drawPhotoMask(mask: Graphics, style: FrameStyle, w: number, h: number): void {
+    mask.clear()
+    if (style === 'rounded') mask.roundRect(-w / 2, -h / 2, w, h, 12).fill(0xffffff)
+    else mask.rect(-w / 2, -h / 2, w, h).fill(0xffffff)
+  }
+
   /** Zet een foto-kaart op afmeting `w`×`h` (foto-inhoud): hertekent de witte
    * rand, het masker en de eventuele rings, en werkt de hittest-halfmaten bij.
    * Voor de natuurlijke-verhouding-modus (niet 1:1). */
@@ -249,11 +283,13 @@ export class EventScene implements Scene {
     n.cardW = w
     n.cardH = h
     n.halfW = w / 2 + BORDER
+    // Bewust zónder de polaroid-band: de hit-/sleep-box blijft de foto zelf
+    // (symmetrisch); de band is puur visueel. De grid-packer telt 'm apart mee.
     n.halfH = h / 2 + BORDER
-    n.mask?.clear()
-    n.mask?.rect(-w / 2, -h / 2, w, h).fill(0xffffff)
+    if (n.mask) this.drawPhotoMask(n.mask, n.frameStyle, w, h)
     n.sprite?.setSize(w, h)
     this.drawFrameBorder(n)
+    this.drawFocusRing(n) // kaderloze foto's: ring volgt de nieuwe maat
   }
 
   /** Effectieve witte-rand-dikte: dempt mee met de eigen schaal, zodat een
@@ -262,16 +298,39 @@ export class EventScene implements Scene {
     return BORDER / Math.sqrt(Math.max(1, scale))
   }
 
-  /** (Her)teken de witte rand + de (goud/blauw) rings op de huidige kaartmaat met
+  /** (Her)teken het kader (per stijl: kader/polaroid/afgerond/geen, met een
+   * subtiele slagschaduw) + de (goud/blauw) rings op de huidige kaartmaat met
    * de gedempte rand-dikte. Wijzigt geen zichtbaarheid (die stuurt refreshRings). */
   private drawFrameBorder(n: Node): void {
     if (!n.frame) return
+    const fs = n.frameStyle
     const eb = this.effBorder(n.scale)
     n.frameBorder = eb
     const w = n.cardW
     const h = n.cardH
     n.frame.clear()
-    n.frame.roundRect(-w / 2 - eb, -h / 2 - eb, w + eb * 2, h + eb * 2, 4).fill(this.T.colors.frame)
+    if (fs !== 'none') {
+      // Polaroid: brede onderrand (de klassieke instant-band) voor de caption.
+      const band = fs === 'polaroid' ? eb * 3.5 : 0
+      const r = fs === 'rounded' ? 16 : fs === 'polaroid' ? 3 : 4
+      // Subtiele slagschaduw als onderdeel van het kader (goedkoop: één extra
+      // licht verschoven donkere fill, geen filter).
+      n.frame
+        .roundRect(-w / 2 - eb + 2, -h / 2 - eb + 5, w + eb * 2, h + eb * 2 + band, r + 2)
+        .fill({ color: 0x000000, alpha: 0.16 })
+      n.frame.roundRect(-w / 2 - eb, -h / 2 - eb, w + eb * 2, h + eb * 2 + band, r).fill(this.T.colors.frame)
+    }
+    // Polaroid-caption gecentreerd in de onderrand (schaalt mee met de band en
+    // wordt op de bandbreedte geklemd zodat 'ie nooit uit de rand steekt).
+    if (n.capEl) {
+      const band = eb * 3.5
+      n.capEl.visible = fs === 'polaroid'
+      n.capEl.position.set(0, h / 2 + (eb + band) / 2)
+      n.capEl.style.fontSize = Math.max(11, Math.min(16, band * 0.5))
+      n.capEl.scale.set(1)
+      const maxW = w + eb * 2 - 10
+      if (n.capEl.width > maxW) n.capEl.scale.set(maxW / n.capEl.width)
+    }
     const k = eb / BORDER // schaalt ring-dikte + -offset mee met de gedempte rand
     if (n.ring) {
       const rw = w / 2 + eb + 3 * k
@@ -501,7 +560,15 @@ export class EventScene implements Scene {
   private layoutGridPositions(): void {
     const ordered = this.orderedForGrid()
     const gap = 28
-    const items = ordered.map((n) => ({ n, w: 2 * n.halfW * n.scale, h: 2 * n.halfH * n.scale }))
+    // Polaroid-band + schaduw-offset vallen buiten halfH (bewust: de hit-box
+    // blijft de foto zelf) — tel ze hier wél mee, anders plakt het grid dicht.
+    const extraH = (n: Node): number =>
+      n.frameStyle === 'polaroid' ? this.effBorder(n.scale) * 3.5 + 5 : 0
+    const items = ordered.map((n) => ({
+      n,
+      w: 2 * n.halfW * n.scale,
+      h: (2 * n.halfH + extraH(n)) * n.scale,
+    }))
     if (items.length === 0) return
     const avgW = items.reduce((s, it) => s + it.w, 0) / items.length
     const cols = Math.max(1, Math.round(Math.sqrt(items.length)))
@@ -1060,6 +1127,7 @@ export class EventScene implements Scene {
         const target = this.kbFocusId === null || focused ? 1 : 0
         n.borderAlpha += (target - n.borderAlpha) * kf
         n.frame.alpha = n.borderAlpha
+        if (n.capEl) n.capEl.alpha = n.borderAlpha
       }
       if (n.focusRing) {
         const target = this.kbFocusId !== null && focused ? 1 : 0

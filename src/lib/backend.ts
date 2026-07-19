@@ -98,6 +98,9 @@ export interface Item {
   slug?: string
   /** Tijdstip (ms) voor chronologische sortering (grid-layout). */
   timestampMs?: number
+  /** Frame-stijl van een foto/video ('plain'/'polaroid'/'rounded'/'none').
+   * Afwezig = erven van het thema. */
+  frame?: string
 }
 
 export interface CanvasItem {
@@ -297,6 +300,8 @@ export interface Backend {
     people: string[],
     tags: string[],
   ): Promise<void>
+  /** Zet (of wist bij `null`/leeg) de frame-stijl van een item. */
+  setItemFrame(itemId: string, frame: string | null): Promise<void>
   search(query: string): Promise<SearchResult[]>
   /** Foto-item-ids voor de screensaver. `scopeKind`: 'all' | 'year' | 'event'
    * (met bijbehorend `scopeId`); `include` = minstens één van die tags, `exclude`
@@ -557,6 +562,11 @@ class TauriBackend implements Backend {
     await invoke('update_item_metadata', { itemId, caption, date, place, people, tags })
   }
 
+  async setItemFrame(itemId: string, frame: string | null): Promise<void> {
+    const invoke = await this.api()
+    await invoke('set_item_frame', { itemId, frame })
+  }
+
   async search(query: string): Promise<SearchResult[]> {
     const invoke = await this.api()
     return await invoke<SearchResult[]>('search', { query })
@@ -633,6 +643,7 @@ class MockBackend implements Backend {
   private deleted = new Set<string>()
   private edits = new Map<string, { caption: string | null; body: string | null }>()
   private meta = new Map<string, ItemMetadata>()
+  private frames = new Map<string, string>() // itemId → frame-stijl
   private featured = new Map<string, string>() // eventId → item-ref
   private yearCovers = new Map<string, string>() // yearId → item-id (vaste jaar-cover)
   private yearFactors = new Map<string, number>() // yearId → globale event-kaartschaal
@@ -844,10 +855,12 @@ class MockBackend implements Backend {
     const items = [...base, ...(this.adds.get(eventId) ?? [])]
       .filter((it) => !this.deleted.has(it.id))
       .map((it) => {
+        const frame = this.frames.get(it.id)
+        const withFrame = frame ? { ...it, frame } : it
         const e = this.edits.get(it.id)
-        if (!e) return it
+        if (!e) return withFrame
         return {
-          ...it,
+          ...withFrame,
           caption: e.caption !== null ? e.caption || undefined : it.caption,
           bodyText: e.body !== null ? e.body : it.bodyText,
         }
@@ -1019,6 +1032,12 @@ class MockBackend implements Backend {
     // Caption ook in de gedeelde edits zodat de L3-caption/kaart ververst.
     const prev = this.edits.get(itemId) ?? { caption: null, body: null }
     this.edits.set(itemId, { caption, body: prev.body })
+  }
+  /** Spiegelt Rust: lege/whitespace-string wist net als null. */
+  async setItemFrame(itemId: string, frame: string | null): Promise<void> {
+    const clean = frame?.trim()
+    if (clean) this.frames.set(itemId, clean)
+    else this.frames.delete(itemId)
   }
   async search(query: string): Promise<SearchResult[]> {
     const q = query.toLowerCase().trim()

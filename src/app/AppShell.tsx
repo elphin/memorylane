@@ -17,7 +17,7 @@ import { createBackend } from '../lib/backend'
 import { RenderEngine } from '../render/core/engine'
 import { loadThemeFonts } from '../theme/fonts'
 import { THEMES, themeById } from '../theme/registry'
-import { ACCENT_SWATCHES, TITLE_FONTS, resolveTheme, type ThemeChoiceLike } from '../theme/resolve'
+import { ACCENT_SWATCHES, FRAME_STYLES, TITLE_FONTS, resolveTheme, type ThemeChoiceLike } from '../theme/resolve'
 import { BACKGROUNDS, BACKGROUND_NONE, loadBackgroundTexture } from '../theme/textures'
 import { THEME, setActiveTheme, type ResolvedTheme } from '../theme/tokens'
 import { UI_DARK, UI_LIGHT, ui, type UiPalette } from '../theme/ui'
@@ -64,6 +64,10 @@ interface MetaForm {
   people: string
   tags: string
   exif: ExifEntry[]
+  /** Kader-stijl van dit item ('' = geërfd van het thema). */
+  frame: string
+  /** Oorspronkelijke waarde bij openen (alleen schrijven bij wijziging). */
+  frame0: string
 }
 
 /** App-voorkeuren (UI, geen vault-data) — bewaard in localStorage. */
@@ -2087,6 +2091,9 @@ export function AppShell() {
     void backend
       .getItemMetadata(id)
       .then((m) => {
+        // Kader-stijl komt uit het item zelf (niet uit de sidecar-metadata);
+        // '' = geërfd van het thema.
+        const frame = currentItemsRef.current.find((it) => it.id === id)?.frame ?? ''
         setMetaForm({
           id,
           caption: m.caption,
@@ -2095,6 +2102,8 @@ export function AppShell() {
           people: m.people.join(', '),
           tags: m.tags.join(', '),
           exif: m.exif,
+          frame,
+          frame0: frame,
         })
       })
       .catch((e) => {
@@ -2132,6 +2141,8 @@ export function AppShell() {
     setBusy(true)
     try {
       await backend.updateItemMetadata(f.id, f.caption, f.date, f.place, toList(f.people), toList(f.tags))
+      // Kader alleen schrijven bij een echte wijziging (scheelt een rescan).
+      if (f.frame !== f.frame0) await backend.setItemFrame(f.id, f.frame || null)
       await refreshFocus()
       setMetaForm(null)
     } catch (e) {
@@ -2470,6 +2481,28 @@ function MetaPanel({
             style={{ ...field(u), marginTop: 4 }}
           />
         </label>
+        <div style={{ ...metaLabel(u), marginTop: 12 }}>
+          Kader
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 4 }}>
+            {[{ id: '', name: 'Geërfd (thema)' }, ...FRAME_STYLES].map((f) => (
+              <button
+                key={f.id || 'inherit'}
+                onClick={() => onChange({ frame: f.id })}
+                style={{
+                  padding: '6px 12px',
+                  borderRadius: 8,
+                  cursor: 'pointer',
+                  background: u.cardAlt,
+                  color: u.text,
+                  fontSize: 13,
+                  border: form.frame === f.id ? `2px solid ${u.primary}` : `2px solid ${u.border}`,
+                }}
+              >
+                {f.name}
+              </button>
+            ))}
+          </div>
+        </div>
         {form.exif.length > 0 && (
           <div style={{ marginTop: 16, borderTop: `1px solid ${u.border}`, paddingTop: 12 }}>
             <div style={{ fontSize: 12, color: u.textFaint, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5 }}>

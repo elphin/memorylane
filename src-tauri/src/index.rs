@@ -29,7 +29,7 @@ CREATE TABLE items (
     id TEXT PRIMARY KEY, event_id TEXT NOT NULL, item_type TEXT NOT NULL,
     media TEXT, url TEXT, caption TEXT, happened_at TEXT, timestamp_ms INTEGER,
     place_lat REAL, place_lng REAL, place_label TEXT,
-    people TEXT NOT NULL, tags TEXT NOT NULL, category TEXT, body_text TEXT,
+    people TEXT NOT NULL, tags TEXT NOT NULL, category TEXT, frame TEXT, body_text TEXT,
     slug TEXT, synthetic INTEGER NOT NULL
 );
 CREATE TABLE canvas_items (
@@ -119,8 +119,8 @@ pub fn load(conn: &mut Connection, model: &VaultModel) -> rusqlite::Result<()> {
         let mut item_stmt = tx.prepare(
             "INSERT INTO items (id, event_id, item_type, media, url, caption, happened_at,
                  timestamp_ms, place_lat, place_lng, place_label, people, tags, category,
-                 body_text, slug, synthetic)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
+                 body_text, slug, synthetic, frame)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)",
         )?;
         let mut fts_stmt = tx.prepare(
             "INSERT INTO items_fts (item_id, caption, body_text, tags, people, place)
@@ -146,6 +146,7 @@ pub fn load(conn: &mut Connection, model: &VaultModel) -> rusqlite::Result<()> {
                 it.body_text,
                 it.slug,
                 it.synthetic as i64,
+                it.frame,
             ])?;
             // Indexeer zodra er íets doorzoekbaars is — ook een foto met alleen
             // tags/people/place (anders is die onvindbaar). Tags/people als spatie-
@@ -435,7 +436,8 @@ pub fn get_event(conn: &Connection, event_id: &str) -> rusqlite::Result<Option<E
 
     let mut items_stmt = conn.prepare(
         "SELECT id, event_id, item_type, media, url, caption, happened_at, timestamp_ms,
-             place_lat, place_lng, place_label, people, tags, category, body_text, slug, synthetic
+             place_lat, place_lng, place_label, people, tags, category, body_text, slug, synthetic,
+             frame
          FROM items WHERE event_id = ?1 ORDER BY timestamp_ms, slug",
     )?;
     let items = items_stmt
@@ -858,6 +860,7 @@ fn row_to_item(r: &rusqlite::Row) -> rusqlite::Result<Item> {
         people: parse_json_vec(&people),
         tags: parse_json_vec(&tags),
         category: r.get(13)?,
+        frame: r.get(17)?,
         body_text: r.get(14)?,
         slug: r.get(15)?,
         synthetic: synthetic != 0,
@@ -966,6 +969,7 @@ mod tests {
             people: vec![],
             tags: vec![],
             category: Some("vakantie".into()),
+            frame: Some("polaroid".into()),
             body_text: None,
             slug: Some("strand".into()),
             synthetic: false,
@@ -1013,6 +1017,7 @@ mod tests {
         assert_eq!(ed.event.location.as_ref().unwrap().label.as_deref(), Some("Palermo"));
         assert_eq!(ed.items.len(), 1);
         assert_eq!(ed.items[0].category.as_deref(), Some("vakantie"));
+        assert_eq!(ed.items[0].frame.as_deref(), Some("polaroid"), "frame round-tript via de index");
         assert_eq!(ed.canvas.len(), 1);
         assert_eq!(ed.canvas[0].width, Some(200.0));
 
@@ -1169,6 +1174,7 @@ mod tests {
             people: vec![],
             tags: vec![],
             category: None,
+            frame: None,
             body_text: None,
             slug: Some("geen-datum".into()),
             synthetic: false,
@@ -1200,6 +1206,7 @@ mod tests {
             people: vec![],
             tags: tags.iter().map(|t| (*t).into()).collect(),
             category: None,
+            frame: None,
             body_text: None,
             slug: Some(id.into()),
             synthetic,
@@ -1334,6 +1341,7 @@ mod tests {
             people: vec!["Oma".into()],
             tags: vec!["kerstmis".into()],
             category: None,
+            frame: None,
             body_text: None,
             slug: Some("ph".into()),
             synthetic: false,
@@ -1377,6 +1385,7 @@ mod tests {
                 people: vec![],
                 tags: vec![],
                 category: None,
+                frame: None,
                 body_text: None,
                 slug: Some(id.into()),
                 synthetic: false,
@@ -1431,6 +1440,7 @@ mod tests {
             people: vec![],
             tags: vec![],
             category: None,
+            frame: None,
             body_text: None,
             slug: Some("t1".into()),
             synthetic: false,
@@ -1495,6 +1505,7 @@ mod tests {
                 people: vec![],
                 tags: vec![],
                 category: None,
+                frame: None,
                 body_text: None,
                 slug: Some(slug.into()),
                 synthetic: false,
@@ -1554,6 +1565,7 @@ mod tests {
             people: vec![],
             tags: vec![],
             category: None,
+            frame: None,
             body_text: None,
             slug: Some("notitie".into()),
             synthetic: false,

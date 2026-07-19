@@ -192,6 +192,11 @@ pub struct Item {
     pub tags: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub category: Option<String>,
+    /// Frame-stijl van een foto/video (personalisatie). Opake string: de geldige
+    /// waarden ('plain'/'polaroid'/…) kent alleen de frontend; Rust valideert niet.
+    /// None = erven van het thema.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame: Option<String>,
     /// Markdown-body (voor full-text search).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub body_text: Option<String>,

@@ -10,7 +10,7 @@
 
 import { THEMES, themeById } from './registry'
 import { BACKGROUNDS, BACKGROUND_NONE } from './textures'
-import { THEME, cloneTheme, type ResolvedTheme } from './tokens'
+import { THEME, cloneTheme, type FrameStyle, type ResolvedTheme } from './tokens'
 
 /** Structureel gelijk aan `ThemeChoice` uit de backend (frontmatter-wire);
  * hier los gedefinieerd zodat de theme-laag niet aan de backend hangt. */
@@ -72,4 +72,18 @@ export function resolveTheme(...choices: (ThemeChoiceLike | undefined | null)[])
   let t: ResolvedTheme = THEME
   for (const c of choices) t = applyChoice(t, c)
   return t
+}
+
+/** Gecureerde kader-stijlen voor de per-item-kiezer (fase 5). */
+export const FRAME_STYLES: { id: FrameStyle; name: string }[] = [
+  { id: 'plain', name: 'Kader' },
+  { id: 'polaroid', name: 'Polaroid' },
+  { id: 'rounded', name: 'Afgerond' },
+  { id: 'none', name: 'Geen' },
+]
+
+/** Kader-stijl van een item: geldige item-keuze wint, anders de thema-default.
+ * Onbekende waarden (oudere/nieuwere data) vallen stil terug op het thema. */
+export function resolveFrameStyle(itemFrame: string | undefined | null, t: ResolvedTheme): FrameStyle {
+  return FRAME_STYLES.some((f) => f.id === itemFrame) ? (itemFrame as FrameStyle) : t.frameStyle
 }

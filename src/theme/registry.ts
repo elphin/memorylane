@@ -21,6 +21,7 @@ const CLASSIC_LIGHT: ResolvedTheme = {
   name: 'Klassiek licht',
   uiMode: 'light',
   background: { kind: 'solid' },
+  frameStyle: 'plain',
   colors: {
     appBg: 0xf2efe8,
     surface: 0xffffff,
@@ -67,6 +68,7 @@ const WARM_LINEN: ResolvedTheme = {
   name: 'Warm linnen',
   uiMode: 'light',
   background: { kind: 'texture', textureId: 'linen', tint: 0xefe7d6 },
+  frameStyle: 'plain',
   colors: {
     appBg: 0xefe7d6,
     surface: 0xf8f2e5,
@@ -113,6 +115,7 @@ const KRAFT: ResolvedTheme = {
   name: 'Kraft',
   uiMode: 'light',
   background: { kind: 'texture', textureId: 'kraft', tint: 0xb7906a },
+  frameStyle: 'polaroid',
   colors: {
     appBg: 0xb7906a,
     surface: 0xc49d75,
@@ -159,6 +162,7 @@ const KODACHROME: ResolvedTheme = {
   name: 'Kodachrome',
   uiMode: 'dark',
   background: { kind: 'solid' },
+  frameStyle: 'plain',
   colors: {
     appBg: 0x1d1712,
     surface: 0x33281c,
@@ -205,6 +209,7 @@ const OCEAN: ResolvedTheme = {
   name: 'Oceaan',
   uiMode: 'dark',
   background: { kind: 'solid' },
+  frameStyle: 'plain',
   colors: {
     appBg: 0x0a1420,
     surface: 0x142a3d,
@@ -251,6 +256,7 @@ const DUSTY_ROSE: ResolvedTheme = {
   name: 'Dusty rose',
   uiMode: 'light',
   background: { kind: 'solid' },
+  frameStyle: 'rounded',
   colors: {
     appBg: 0xf3e9e6,
     surface: 0xfbf4f1,
@@ -297,6 +303,7 @@ const NOIR: ResolvedTheme = {
   name: 'Noir',
   uiMode: 'dark',
   background: { kind: 'solid' },
+  frameStyle: 'none',
   colors: {
     appBg: 0x0d0d0d,
     surface: 0x1c1c1c,

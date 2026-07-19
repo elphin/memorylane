@@ -77,6 +77,10 @@ export type ThemeBackground =
   | { kind: 'solid' }
   | { kind: 'texture'; textureId: string; tint: number }
 
+/** Kader-stijl om foto's (L2/L3): het thema levert de default; per item te
+ * overriden (fase 5). */
+export type FrameStyle = 'plain' | 'polaroid' | 'rounded' | 'none'
+
 export interface ResolvedTheme {
   id: string
   /** Getoonde naam in de thema-kiezer. */
@@ -84,6 +88,8 @@ export interface ResolvedTheme {
   /** Stuurt de DOM-overlay-chrome (panelen/knoppen): donker of licht. */
   uiMode: 'dark' | 'light'
   background: ThemeBackground
+  /** Default foto-kader van dit thema. */
+  frameStyle: FrameStyle
   colors: ThemeColors
   fonts: ThemeFonts
 }
@@ -94,6 +100,7 @@ export const CLASSIC_DARK: ResolvedTheme = {
   name: 'Klassiek donker',
   uiMode: 'dark',
   background: { kind: 'solid' },
+  frameStyle: 'plain',
   colors: {
     appBg: 0x0a0a0f,
     surface: 0x1a2030,

@@ -5,8 +5,8 @@
 
 import { BlurFilter, Container, Graphics, Sprite, Text, Texture } from 'pixi.js'
 import type { Backend, Item } from '../../lib/backend'
-import { resolveTheme } from '../../theme/resolve'
-import type { ResolvedTheme } from '../../theme/tokens'
+import { resolveFrameStyle, resolveTheme } from '../../theme/resolve'
+import type { FrameStyle, ResolvedTheme } from '../../theme/tokens'
 import type { FrameContext, RenderEngine } from '../core/engine'
 import type { Scene } from './scene'
 
@@ -48,6 +48,10 @@ export class FocusScene implements Scene {
   // Werkelijke video-verhouding (b/h), pas bekend na loadedmetadata — de overlay
   // wordt daarmee exact op de video gelegd (geen zwarte klikbare randen).
   private videoAspect: number | null = null
+  // Kader-stijl van het huidige item (item-keuze of thema-default) + het
+  // masker voor afgeronde foto-hoeken ('rounded'; uit in beeldvullend).
+  private frameStyleCur: FrameStyle = 'plain'
+  private photoMask: Graphics | null = null
   // Slide+fade tussen items (instelbaar). De uitgaande laag schuift weg + faadt,
   // de nieuwe schuift in vanaf de andere kant.
   private animateSteps = true
@@ -116,6 +120,8 @@ export class FocusScene implements Scene {
     this.caption = null
     this.loaded = false
     this.videoAspect = null
+    this.photoMask = null
+    this.frameStyleCur = 'plain'
     this.currentKey = ''
     if (!item) return
 
@@ -152,11 +158,13 @@ export class FocusScene implements Scene {
       this.dispW = CARD_W
       this.dispH = cardH
     } else {
-      // Witte fotorand die zich straks (na load) om de werkelijke foto vouwt. In
-      // content-beeldvullend laten we 'm weg: dan vult de foto tot de rand en zouden
-      // alleen de zijranden zichtbaar zijn (tegen de geblurde achtergrond = lelijk).
+      // Fotorand (per kader-stijl) die zich straks (na load) om de werkelijke
+      // foto vouwt. In content-beeldvullend laten we 'm weg: dan vult de foto
+      // tot de rand en zouden alleen de zijranden zichtbaar zijn (tegen de
+      // geblurde achtergrond = lelijk).
+      this.frameStyleCur = resolveFrameStyle(item.frame, this.T)
       const frame = new Graphics()
-      frame.visible = !this.fullscreen
+      frame.visible = !this.fullscreen && this.frameStyleCur !== 'none'
       container.addChild(frame)
       this.frame = frame
       const sprite = new Sprite(Texture.WHITE)
@@ -165,6 +173,9 @@ export class FocusScene implements Scene {
       sprite.tint = this.T.colors.focusLoading
       container.addChild(sprite)
       this.sprite = sprite
+      const pm = new Graphics()
+      container.addChild(pm)
+      this.photoMask = pm
       this.currentKey = `focus-${item.id}`
       this.contentW = FOCUS
       this.contentH = FOCUS
@@ -173,17 +184,25 @@ export class FocusScene implements Scene {
       this.drawPhotoFrame(FOCUS, FOCUS)
     }
 
-    // Caption onder het item (alleen bij foto's; bij tekst ís de kaart de tekst).
+    // Caption: bij een polaroid-kader ín de brede onderrand (donkere inkt op
+    // de rand), anders onder het item (alleen bij foto's; bij tekst ís de
+    // kaart de tekst).
     if (item.caption && !isText) {
+      const polaroid = this.frameStyleCur === 'polaroid'
       const cap = new Text({
         text: item.caption,
-        style: { fill: this.T.colors.textSoft, fontSize: 18, fontFamily: this.T.fonts.caption },
+        style: {
+          fill: polaroid ? this.T.colors.paperInk : this.T.colors.textSoft,
+          fontSize: polaroid ? 24 : 18,
+          fontFamily: this.T.fonts.caption,
+        },
       })
       cap.resolution = 2
-      cap.anchor.set(0.5, 0)
-      cap.position.set(0, this.contentH / 2 + 20)
+      cap.anchor.set(0.5, polaroid ? 0.5 : 0)
+      if (polaroid && this.fullscreen) cap.alpha = 0 // band is verborgen in beeldvullend
       container.addChild(cap)
       this.caption = cap
+      this.positionCaption(this.contentW, this.contentH)
     }
   }
 
@@ -208,14 +227,57 @@ export class FocusScene implements Scene {
     }
   }
 
-  /** Teken de witte fotorand rond een foto van `w`×`h` (past zich aan de werkelijke
-   * fotoverhouding aan; net als de tegels in de jaar-view). */
+  /** Teken de fotorand (per kader-stijl, met subtiele slagschaduw) rond een
+   * foto van `w`×`h` (past zich aan de werkelijke fotoverhouding aan; net als
+   * de tegels in de jaar-view). Regelt ook het masker voor afgeronde hoeken. */
   private drawPhotoFrame(w: number, h: number): void {
     if (!this.frame) return
+    const fs = this.frameStyleCur
     this.frame.clear()
-    this.frame
-      .roundRect(-w / 2 - PHOTO_BORDER, -h / 2 - PHOTO_BORDER, w + PHOTO_BORDER * 2, h + PHOTO_BORDER * 2, 8)
-      .fill(this.T.colors.frame)
+    if (fs !== 'none') {
+      // Polaroid: brede onderrand voor de caption; afgerond: grotere radius.
+      const band = fs === 'polaroid' ? PHOTO_BORDER * 3 : 0
+      const r = fs === 'rounded' ? 22 : fs === 'polaroid' ? 5 : 8
+      this.frame
+        .roundRect(-w / 2 - PHOTO_BORDER + 3, -h / 2 - PHOTO_BORDER + 7, w + PHOTO_BORDER * 2, h + PHOTO_BORDER * 2 + band, r + 2)
+        .fill({ color: 0x000000, alpha: 0.16 })
+      this.frame
+        .roundRect(-w / 2 - PHOTO_BORDER, -h / 2 - PHOTO_BORDER, w + PHOTO_BORDER * 2, h + PHOTO_BORDER * 2 + band, r)
+        .fill(this.T.colors.frame)
+    }
+    // Afgeronde foto-hoeken via het masker; uit in beeldvullend (daar vult de
+    // foto de schermrand en zouden ronde hoeken op de blur zweven).
+    if (this.sprite && this.photoMask) {
+      if (fs === 'rounded' && !this.fullscreen) {
+        this.photoMask.clear()
+        this.photoMask.roundRect(-w / 2, -h / 2, w, h, 16).fill(0xffffff)
+        this.sprite.mask = this.photoMask
+      } else {
+        this.sprite.mask = null
+        this.photoMask.clear()
+      }
+    }
+    this.positionCaption(w, h)
+  }
+
+  /** Caption-positie per kader-stijl: polaroid = gecentreerd in de onderrand
+   * (op de bandbreedte geklemd), anders onder het item. */
+  private positionCaption(w: number, h: number): void {
+    if (!this.caption) return
+    if (this.frameStyleCur === 'polaroid') {
+      this.caption.position.set(0, h / 2 + (PHOTO_BORDER + PHOTO_BORDER * 3) / 2)
+      this.caption.scale.set(1)
+      const maxW = w + PHOTO_BORDER * 2 - 16
+      if (this.caption.width > maxW) this.caption.scale.set(maxW / this.caption.width)
+    } else {
+      this.caption.position.set(0, h / 2 + PHOTO_BORDER + 18)
+    }
+  }
+
+  /** De polaroid-caption hoort bij de band en faadt dus met het kader mee
+   * (in beeldvullend zou donkere inkt op de donkere blur zweven). */
+  private syncPolaroidCaption(alpha: number): void {
+    if (this.frameStyleCur === 'polaroid' && this.caption) this.caption.alpha = alpha
   }
 
   /** De doel-zoom voor een gegeven modus (beeldvullend of normaal). */
@@ -288,6 +350,9 @@ export class FocusScene implements Scene {
    * de engine. */
   setFullscreen(on: boolean): void {
     this.fullscreen = on
+    // Masker/kader-geometrie volgt de beeldvullend-stand (afgeronde hoeken uit
+    // in beeldvullend); de frame-fade zelf loopt via de animatie-lus.
+    this.drawPhotoFrame(this.dispW, this.dispH)
     const target = this.baseZoomFor(on)
     this.baseZoom = target
     // Blur-achtergrond alvast klaarzetten: één keer schalen voor de KLEINSTE zoom
@@ -387,11 +452,13 @@ export class FocusScene implements Scene {
           this.frame.alpha = 1
           this.frame.visible = !this.fullscreen
         }
+        this.syncPolaroidCaption(this.fullscreen ? 0 : 1)
         this.refreshBlurBg()
       } else {
         const eased = easeInOutCubic(t)
         const full = this.fsAnim.toFull ? eased : 1 - eased // 0 = normaal, 1 = beeldvullend
         if (this.frame) this.frame.alpha = 1 - full
+        this.syncPolaroidCaption(1 - full)
         this.bgBlur.visible = this.canShowBlur()
         this.bgBlur.alpha = full
         if (t >= 1) {
@@ -404,6 +471,7 @@ export class FocusScene implements Scene {
             this.frame.alpha = 1
             this.frame.visible = !this.fullscreen
           }
+          this.syncPolaroidCaption(this.fullscreen ? 0 : 1)
           this.refreshBlurBg()
         }
       }
@@ -423,8 +491,7 @@ export class FocusScene implements Scene {
       this.sprite.setSize(tw, th)
       this.dispW = tw
       this.dispH = th
-      this.drawPhotoFrame(tw, th)
-      if (this.caption) this.caption.position.set(0, th / 2 + PHOTO_BORDER + 18)
+      this.drawPhotoFrame(tw, th) // positioneert ook de caption
       this.loaded = true
       // Nu de echte foto-maat bekend is → beeldvullend opnieuw fitten. Niet tijdens
       // een lopende beeldvullend-animatie (die snapt aan het eind zelf de juiste
