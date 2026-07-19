@@ -14,6 +14,7 @@
 
 import { Container, Graphics, Sprite, Text, Texture } from 'pixi.js'
 import type { Backend, EventSummary, YearDetail } from '../../lib/backend'
+import { CLASSIC_DARK as THEME } from '../../theme/tokens'
 import type { FrameContext, RenderEngine } from '../core/engine'
 import type { DragHandle } from '../core/gestures'
 import type { Scene } from './scene'
@@ -45,7 +46,7 @@ const STICKY_GAP_PX = 4 // lossere gap voor een kaart die z'n lane behoudt (hyst
 // scherp getekend op schermresolutie (de leader-laag wordt met 1/zoom
 // counter-scaled en in scherm-coördinaten getekend).
 const LEADER_WIDTH = 1 // schermdikte (px)
-const LEADER_COLOR = 0xbcc5d6 // licht blauw-grijs (iets minder wit)
+const LEADER_COLOR = THEME.colors.leader
 const LEADER_ALPHA = 0.85
 // Horizontale offset (scherm-px) van een kaart t.o.v. zijn datummarkering, zodat
 // de leader een mooie S-bezier kan maken (recht omhoog → opzij → recht de tegel in).
@@ -146,20 +147,16 @@ interface Node {
   fade: number
 }
 
-// Felle basiskleuren (warm/koel afgewisseld) voor de meerdaagse-blokjes.
-const SPAN_PALETTE_RAW = [
-  0xff5c5c, 0x3cd6d6, 0xffd93c, 0xb15cff, 0x6ee06e, 0xff5cc0, 0x5c8cff, 0xffa63c, 0x38c9a0,
-  0xf05545,
-]
-function opaqueSpan(color: number): number {
-  const bg = 0x0a0a0f
+// Meerdaagse-blokjes: de felle basiskleuren uit het thema, geblend tegen de
+// thema-achtergrond (zodat de balkjes "opaak op de as" ogen).
+function opaqueSpan(color: number, bg: number): number {
   const mix = (c: number, b: number): number => Math.round(c * 0.45 + b * 0.55)
   const r = mix((color >> 16) & 255, (bg >> 16) & 255)
   const g = mix((color >> 8) & 255, (bg >> 8) & 255)
   const b = mix(color & 255, bg & 255)
   return (r << 16) | (g << 8) | b
 }
-const SPAN_PALETTE = SPAN_PALETTE_RAW.map(opaqueSpan)
+const SPAN_PALETTE = THEME.colors.spanPalette.map((c) => opaqueSpan(c, THEME.colors.appBg))
 
 /** Stabiele hash (FNV-1a) van een id. */
 function hashId(s: string): number {
@@ -178,9 +175,7 @@ function truncateTitle(s: string, n: number): string {
 
 // Gedempte kleuren voor de placeholder-tegel van een memory zónder foto (per
 // memory deterministisch → ze variëren; donker genoeg voor witte titeltekst).
-const PLACEHOLDER_PALETTE = [
-  0x3d4a5c, 0x4a3d5c, 0x5c3d4a, 0x3d5c4a, 0x5c4a3d, 0x3d5c5c, 0x504a3d, 0x473d5c,
-]
+const PLACEHOLDER_PALETTE = THEME.colors.placeholderPalette
 function placeholderColor(id: string): number {
   return PLACEHOLDER_PALETTE[hashId(id) % PLACEHOLDER_PALETTE.length]!
 }
@@ -257,10 +252,13 @@ export class YearScene implements Scene {
 
     // ---- As-lijn + maand-separators (wereldruimte, stretchen met de zoom) ----
     const axis = new Graphics()
-    axis.moveTo(-AXIS_W / 2, 0).lineTo(AXIS_W / 2, 0).stroke({ width: 1, color: 0x3a4256, pixelLine: true })
+    axis
+      .moveTo(-AXIS_W / 2, 0)
+      .lineTo(AXIS_W / 2, 0)
+      .stroke({ width: 1, color: THEME.colors.axis, pixelLine: true })
     for (let m = 1; m < 12; m++) {
       const mx = dateToX(new Date(year, m, 1).getTime())
-      axis.moveTo(mx, -14).lineTo(mx, 14).stroke({ width: 1, color: 0x2a3142, pixelLine: true })
+      axis.moveTo(mx, -14).lineTo(mx, 14).stroke({ width: 1, color: THEME.colors.axisTick, pixelLine: true })
     }
     this.root.addChild(axis)
     this.root.addChild(this.rangeBand)
@@ -271,7 +269,7 @@ export class YearScene implements Scene {
       const midX = (dateToX(new Date(year, m, 1).getTime()) + dateToX(new Date(year, m + 1, 1).getTime())) / 2
       const label = new Text({
         text: MONTHS[m],
-        style: { fill: 0x8a97b0, fontSize: 15, fontFamily: 'Segoe UI, sans-serif' },
+        style: { fill: THEME.colors.textMuted, fontSize: 15, fontFamily: THEME.fonts.body },
       })
       label.resolution = 2
       label.anchor.set(0.5, 0)
@@ -319,7 +317,7 @@ export class YearScene implements Scene {
     if (detail.events.length === 0) {
       const hint = new Text({
         text: 'Geen memories in dit jaar',
-        style: { fill: 0x6a7690, fontSize: 20, fontFamily: 'Segoe UI, sans-serif' },
+        style: { fill: THEME.colors.textFaint, fontSize: 20, fontFamily: THEME.fonts.body },
       })
       hint.resolution = 2
       hint.anchor.set(0.5)
@@ -332,7 +330,7 @@ export class YearScene implements Scene {
     this.root.addChild(this.dayLine)
     this.dayLabel = new Text({
       text: '',
-      style: { fill: 0xdfe7f5, fontSize: 15, fontWeight: '600', fontFamily: 'Segoe UI, sans-serif' },
+      style: { fill: THEME.colors.textBright, fontSize: 15, fontWeight: '600', fontFamily: THEME.fonts.body },
     })
     this.dayLabel.resolution = 2
     this.dayLabel.anchor.set(0.5, 1)
@@ -352,7 +350,7 @@ export class YearScene implements Scene {
   private buildYearLabel(text: string): Text {
     const t = new Text({
       text,
-      style: { fill: 0xffffff, fontSize: 64, fontWeight: '700', fontFamily: 'Georgia, serif' },
+      style: { fill: THEME.colors.text, fontSize: 64, fontWeight: '700', fontFamily: THEME.fonts.display },
     })
     t.resolution = 2
     t.anchor.set(0.5)
@@ -399,14 +397,14 @@ export class YearScene implements Scene {
     const frame = new Graphics()
     frame
       .rect(-THUMB_W / 2 - BORDER, -THUMB_H / 2 - BORDER, THUMB_W + BORDER * 2, THUMB_H + BORDER * 2)
-      .fill(0xf5f5f0)
+      .fill(THEME.colors.frame)
     card.addChild(frame)
     if (hasCover) {
       const photoLayer = new Container()
       sprite = new Sprite(Texture.WHITE)
       sprite.anchor.set(0.5)
       sprite.setSize(THUMB_W, THUMB_H)
-      sprite.tint = 0x2a3345
+      sprite.tint = THEME.colors.thumbLoading
       sprite2 = new Sprite(Texture.WHITE)
       sprite2.anchor.set(0.5)
       sprite2.setSize(THUMB_W, THUMB_H)
@@ -422,10 +420,10 @@ export class YearScene implements Scene {
         title = new Text({
           text: truncateTitle(ev.title, TITLE_MAX),
           style: {
-            fill: 0xe8edf6,
+            fill: THEME.colors.cardTitle,
             fontSize: 18,
             fontWeight: '600',
-            fontFamily: 'Segoe UI, sans-serif',
+            fontFamily: THEME.fonts.title,
             align: 'center',
             wordWrap: true,
             wordWrapWidth: THUMB_W + BORDER * 2,
@@ -444,10 +442,10 @@ export class YearScene implements Scene {
       const inner = new Text({
         text: truncateTitle(ev.title ?? 'Memory', 40),
         style: {
-          fill: 0xeef1f7,
+          fill: THEME.colors.placeholderText,
           fontSize: 15,
           fontWeight: '600',
-          fontFamily: 'Segoe UI, sans-serif',
+          fontFamily: THEME.fonts.title,
           align: 'center',
           wordWrap: true,
           wordWrapWidth: THUMB_W - 20,
@@ -468,7 +466,9 @@ export class YearScene implements Scene {
     if (!isSpan) {
       dot = new Container()
       const g = new Graphics()
-      g.circle(0, 0, DOT_R).fill(hasCover ? 0xcfd6e4 : 0x8a97b0).stroke({ width: 2, color: 0x1a2030 })
+      g.circle(0, 0, DOT_R)
+        .fill(hasCover ? THEME.colors.textSoft : THEME.colors.textMuted)
+        .stroke({ width: 2, color: THEME.colors.surface })
       dot.addChild(g)
       dot.visible = false
       this.dotsLayer.addChild(dot)
@@ -693,7 +693,7 @@ export class YearScene implements Scene {
     const a = Math.min(startWorldX, endWorldX)
     const b = Math.max(startWorldX, endWorldX)
     const h = this.bandHalfH()
-    this.rangeBand.rect(a, -h, b - a, 2 * h).fill({ color: 0x6ea8ff, alpha: 0.14 })
+    this.rangeBand.rect(a, -h, b - a, 2 * h).fill({ color: THEME.colors.accent, alpha: 0.14 })
     this.hoverWX = endWorldX
     this.renderDay()
   }
@@ -706,7 +706,7 @@ export class YearScene implements Scene {
     const x = this.hoverWX
     const h = this.bandHalfH()
     this.dayLine.clear()
-    this.dayLine.moveTo(x, -h).lineTo(x, h).stroke({ width: 1.5, color: 0x6ea8ff, alpha: 0.9 })
+    this.dayLine.moveTo(x, -h).lineTo(x, h).stroke({ width: 1.5, color: THEME.colors.accent, alpha: 0.9 })
     const d = new Date(this.yearStart + Math.min(1, Math.max(0, (x + AXIS_W / 2) / AXIS_W)) * this.span)
     this.dayLabel.text = `${d.getDate()} ${MONTHS[d.getMonth()]}`
     this.dayLabel.position.set(x, -h - 6)
@@ -792,7 +792,9 @@ export class YearScene implements Scene {
             n.frameDrawnScale = n.baseScreenScale
             const b = BORDER_PX / n.baseScreenScale
             n.frame.clear()
-            n.frame.rect(-THUMB_W / 2 - b, -THUMB_H / 2 - b, THUMB_W + b * 2, THUMB_H + b * 2).fill(0xf5f5f0)
+            n.frame
+              .rect(-THUMB_W / 2 - b, -THUMB_H / 2 - b, THUMB_W + b * 2, THUMB_H + b * 2)
+              .fill(THEME.colors.frame)
           }
           const targetHover = n.eventId === this.hoveredId ? 1.05 : 1
           n.hover += (targetHover - n.hover) * 0.2

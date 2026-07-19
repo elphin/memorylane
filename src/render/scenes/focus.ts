@@ -5,6 +5,7 @@
 
 import { BlurFilter, Container, Graphics, Sprite, Text, Texture } from 'pixi.js'
 import type { Backend, Item } from '../../lib/backend'
+import { CLASSIC_DARK as THEME } from '../../theme/tokens'
 import type { FrameContext, RenderEngine } from '../core/engine'
 import type { Scene } from './scene'
 
@@ -71,7 +72,7 @@ export class FocusScene implements Scene {
     // met de scherpe voorgrond; de blur-filter met ruime padding zodat de vervaging
     // niet hard afkapt aan de sprite-rand.
     this.bgBlur.anchor.set(0.5)
-    this.bgBlur.tint = 0x6a6a6a
+    this.bgBlur.tint = THEME.colors.focusBackdropDim
     this.bgBlur.visible = false
     // Zachtere, ruimere blur (minder "edgy"): sterker + meer passes voor een gladde
     // gaussiaan, en flink padding zodat de vervaging niet hard afkapt aan de
@@ -120,10 +121,10 @@ export class FocusScene implements Scene {
       const text = new Text({
         text: item.bodyText || item.caption || '…',
         style: {
-          fill: 0x2b2b2b,
+          fill: THEME.colors.paperInk,
           fontSize: 26,
           fontStyle: 'italic',
-          fontFamily: 'Georgia, serif',
+          fontFamily: THEME.fonts.paper,
           wordWrap: true,
           wordWrapWidth: CARD_W - 64,
           align: 'center',
@@ -134,9 +135,9 @@ export class FocusScene implements Scene {
       text.anchor.set(0.5)
       const cardH = Math.max(CARD_H, Math.ceil(text.height) + pad * 2)
       const bg = new Graphics()
-      bg.roundRect(-CARD_W / 2, -cardH / 2, CARD_W, cardH, 16).fill(0xfffdf5).stroke({
+      bg.roundRect(-CARD_W / 2, -cardH / 2, CARD_W, cardH, 16).fill(THEME.colors.paper).stroke({
         width: 1,
-        color: 0xe0dccb,
+        color: THEME.colors.paperStroke,
       })
       container.addChild(bg)
       container.addChild(text)
@@ -155,7 +156,7 @@ export class FocusScene implements Scene {
       const sprite = new Sprite(Texture.WHITE)
       sprite.anchor.set(0.5)
       sprite.setSize(FOCUS, FOCUS)
-      sprite.tint = 0x1a1f2b
+      sprite.tint = THEME.colors.focusLoading
       container.addChild(sprite)
       this.sprite = sprite
       this.currentKey = `focus-${item.id}`
@@ -170,7 +171,7 @@ export class FocusScene implements Scene {
     if (item.caption && !isText) {
       const cap = new Text({
         text: item.caption,
-        style: { fill: 0xcfd6e4, fontSize: 18, fontFamily: 'Segoe UI, sans-serif' },
+        style: { fill: THEME.colors.textSoft, fontSize: 18, fontFamily: THEME.fonts.caption },
       })
       cap.resolution = 2
       cap.anchor.set(0.5, 0)
@@ -208,7 +209,7 @@ export class FocusScene implements Scene {
     this.frame.clear()
     this.frame
       .roundRect(-w / 2 - PHOTO_BORDER, -h / 2 - PHOTO_BORDER, w + PHOTO_BORDER * 2, h + PHOTO_BORDER * 2, 8)
-      .fill(0xf5f5f0)
+      .fill(THEME.colors.frame)
   }
 
   /** De doel-zoom voor een gegeven modus (beeldvullend of normaal). */

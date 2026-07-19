@@ -5,6 +5,7 @@
 
 import { Container, Graphics, Sprite, Text, Texture } from 'pixi.js'
 import type { Backend, CanvasLayoutInput, EventDetail, Item } from '../../lib/backend'
+import { CLASSIC_DARK as THEME } from '../../theme/tokens'
 import type { FrameContext, RenderEngine } from '../core/engine'
 import type { DragHandle } from '../core/gestures'
 import type { NodePosition, Scene } from './scene'
@@ -222,14 +223,14 @@ export class EventScene implements Scene {
     const frame = new Graphics()
     frame
       .roundRect(-PHOTO / 2 - BORDER, -PHOTO / 2 - BORDER, PHOTO + BORDER * 2, PHOTO + BORDER * 2, 4)
-      .fill(0xf5f5f0)
+      .fill(THEME.colors.frame)
     container.addChild(frame)
     const mask = new Graphics()
     mask.rect(-PHOTO / 2, -PHOTO / 2, PHOTO, PHOTO).fill(0xffffff)
     const sprite = new Sprite(Texture.WHITE)
     sprite.anchor.set(0.5)
     sprite.setSize(PHOTO, PHOTO)
-    sprite.tint = 0x2a3345
+    sprite.tint = THEME.colors.thumbLoading
     container.addChild(sprite)
     container.addChild(mask)
     sprite.mask = mask
@@ -265,7 +266,7 @@ export class EventScene implements Scene {
     const w = n.cardW
     const h = n.cardH
     n.frame.clear()
-    n.frame.roundRect(-w / 2 - eb, -h / 2 - eb, w + eb * 2, h + eb * 2, 4).fill(0xf5f5f0)
+    n.frame.roundRect(-w / 2 - eb, -h / 2 - eb, w + eb * 2, h + eb * 2, 4).fill(THEME.colors.frame)
     const k = eb / BORDER // schaalt ring-dikte + -offset mee met de gedempte rand
     if (n.ring) {
       const rw = w / 2 + eb + 3 * k
@@ -813,18 +814,18 @@ export class EventScene implements Scene {
 
   private buildTextCard(container: Container, item: Item): { bg: Graphics; text: Text; clip: Graphics } {
     const bg = new Graphics()
-    bg.roundRect(-TEXT_W / 2, -TEXT_H / 2, TEXT_W, TEXT_H, 10).fill(0xfffdf5).stroke({
+    bg.roundRect(-TEXT_W / 2, -TEXT_H / 2, TEXT_W, TEXT_H, 10).fill(THEME.colors.paper).stroke({
       width: 1,
-      color: 0xe0dccb,
+      color: THEME.colors.paperStroke,
     })
     container.addChild(bg)
     const text = new Text({
       text: item.bodyText || item.caption || '…',
       style: {
-        fill: 0x2b2b2b,
+        fill: THEME.colors.paperInk,
         fontSize: 16,
         fontStyle: 'italic',
-        fontFamily: 'Georgia, serif',
+        fontFamily: THEME.fonts.paper,
         wordWrap: true,
         wordWrapWidth: TEXT_W - 32,
         align: 'center',
@@ -854,7 +855,10 @@ export class EventScene implements Scene {
     n.halfH = h / 2
     if (n.textBg) {
       n.textBg.clear()
-      n.textBg.roundRect(-w / 2, -h / 2, w, h, 10).fill(0xfffdf5).stroke({ width: 1, color: 0xe0dccb })
+      n.textBg
+        .roundRect(-w / 2, -h / 2, w, h, 10)
+        .fill(THEME.colors.paper)
+        .stroke({ width: 1, color: THEME.colors.paperStroke })
     }
     if (n.textClip) {
       n.textClip.clear()

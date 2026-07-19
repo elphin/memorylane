@@ -5,6 +5,7 @@
 
 import { Container, Graphics, Sprite, Text, Texture } from 'pixi.js'
 import type { Backend, YearSummary } from '../../lib/backend'
+import { CLASSIC_DARK as THEME } from '../../theme/tokens'
 import type { FrameContext, RenderEngine } from '../core/engine'
 import type { Scene } from './scene'
 
@@ -79,7 +80,9 @@ export class LifelineScene implements Scene {
       tile.position.set(worldX + TILE_W / 2, 0)
 
       const bg = new Graphics()
-      bg.roundRect(0, 0, TILE_W, TILE_H, 12).fill(0x1a2030).stroke({ width: 2, color: 0x2c3650 })
+      bg.roundRect(0, 0, TILE_W, TILE_H, 12)
+        .fill(THEME.colors.surface)
+        .stroke({ width: 2, color: THEME.colors.surfaceStroke })
       tile.addChild(bg)
 
       // Cover + crossfade-overlay in een geklipte container (afgeronde hoeken).
@@ -88,7 +91,7 @@ export class LifelineScene implements Scene {
       const mask = new Graphics()
       mask.roundRect(0, 0, COVER_W, COVER_H, 8).fill(0xffffff)
       const cover = new Sprite(Texture.WHITE)
-      cover.tint = 0x0e1420
+      cover.tint = THEME.colors.coverLoading
       cover.setSize(COVER_W, COVER_H)
       const cover2 = new Sprite(Texture.WHITE)
       cover2.setSize(COVER_W, COVER_H)
@@ -102,10 +105,10 @@ export class LifelineScene implements Scene {
       const label = new Text({
         text: year.title,
         style: {
-          fill: 0xffffff,
+          fill: THEME.colors.text,
           fontSize: 24,
           fontWeight: '700',
-          fontFamily: 'Segoe UI, sans-serif',
+          fontFamily: THEME.fonts.title,
         },
       })
       label.resolution = 2
@@ -118,7 +121,7 @@ export class LifelineScene implements Scene {
       const n = year.eventCount
       const sub = new Text({
         text: `${n} ${n === 1 ? 'herinnering' : 'herinneringen'}`,
-        style: { fill: 0x8a97b0, fontSize: 13, fontFamily: 'Segoe UI, sans-serif' },
+        style: { fill: THEME.colors.textMuted, fontSize: 13, fontFamily: THEME.fonts.body },
       })
       sub.resolution = 2
       sub.anchor.set(0.5, 0)

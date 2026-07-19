@@ -293,6 +293,8 @@ export function AppShell() {
   const [gridSort, setGridSortMode] = useState<'date' | 'name' | 'random'>('date')
   const [settings, setSettings] = useState<Settings>(loadSettings)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  // Debug: fps-tellertje (F9) voor in-app perf-metingen op de echte scenes.
+  const [showFps, setShowFps] = useState(false)
   const [vaultPath, setVaultPath] = useState<string | null>(null)
   // Titel bovenin: "Memory Lane" (overzicht), het jaar, of de eventnaam. `dir`
   // bepaalt de richting van de zoom/crossfade (in = dieper, out = terug).
@@ -413,6 +415,12 @@ export function AppShell() {
       if (e.key === 'F11') {
         e.preventDefault()
         toggleFsRef.current()
+        return
+      }
+      // F9: fps-overlay (debug) aan/uit — werkt overal.
+      if (e.key === 'F9') {
+        e.preventDefault()
+        setShowFps((v) => !v)
         return
       }
       if (e.ctrlKey || e.metaKey || e.altKey) return
@@ -2002,6 +2010,7 @@ export function AppShell() {
           onAspect={(a) => sceneRef.current?.setVideoAspect?.(a)}
         />
       )}
+      {showFps && <FpsOverlay engineRef={engineRef} />}
       {showFit &&
         phase === 'ready' &&
         !modal &&
@@ -3246,6 +3255,38 @@ function BackButton({ onClick }: { onClick: () => void }) {
         />
       </svg>
     </button>
+  )
+}
+
+/** Debug (F9): klein fps-tellertje dat de Pixi-ticker van de actieve engine
+ * uitleest — voor in-app perf-metingen op de echte scenes (de `?perf`-harness
+ * rendert een synthetische scene en meet scene-wijzigingen dus niet). */
+function FpsOverlay({ engineRef }: { engineRef: { current: RenderEngine | null } }) {
+  const [fps, setFps] = useState(0)
+  useEffect(() => {
+    const t = window.setInterval(() => {
+      setFps(Math.round(engineRef.current?.app.ticker.FPS ?? 0))
+    }, 500)
+    return () => window.clearInterval(t)
+  }, [engineRef])
+  return (
+    <div
+      style={{
+        position: 'fixed',
+        left: 8,
+        bottom: 8,
+        zIndex: 90,
+        padding: '3px 8px',
+        borderRadius: 6,
+        background: 'rgba(0, 0, 0, 0.55)',
+        color: '#9ae6a0',
+        fontSize: 12,
+        fontFamily: 'ui-monospace, monospace',
+        pointerEvents: 'none',
+      }}
+    >
+      {fps} fps
+    </div>
   )
 }
 

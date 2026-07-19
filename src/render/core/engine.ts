@@ -3,6 +3,7 @@
 // frame de camera-transform; scenes haken in via `onFrame`.
 
 import { Application, Container, Ticker, UPDATE_PRIORITY } from 'pixi.js'
+import { CLASSIC_DARK } from '../../theme/tokens'
 import { Camera, type Viewport } from './camera'
 import { GestureController, type DragHandle, type DragMods } from './gestures'
 import { LodManager } from './lod'
@@ -95,7 +96,7 @@ export class RenderEngine {
       // Foto-sprites zijn axis-aligned quads; MSAA kost frame-tijd zonder
       // zichtbare winst. Uit = flink sneller.
       antialias: false,
-      background: 0x0a0a0f,
+      background: CLASSIC_DARK.colors.appBg,
       preference: 'webgl',
       powerPreference: 'high-performance',
       autoDensity: true,
