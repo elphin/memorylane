@@ -6,16 +6,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { QRCodeSVG } from 'qrcode.react'
 import type { Backend, ImportProgress, ImportReport, InboxStatus } from '../lib/backend'
-
-const C = {
-  ink: '#fff',
-  sub: '#8a97b0',
-  faint: '#6a7690',
-  line: '#2c3650',
-  card: '#1b2233',
-  accent: '#3b82f6',
-  danger: '#e0574f',
-}
+import { ui, type UiPalette } from '../theme/ui'
 
 const STEP_LABEL: Record<ImportProgress['step'], string> = {
   download: 'downloaden',
@@ -39,28 +30,33 @@ function formatDate(iso?: string): string {
   return `${d.getDate()} ${MND[d.getMonth()]} ${d.getFullYear()}`
 }
 
-const btn: React.CSSProperties = {
+const btn = (u: UiPalette): React.CSSProperties => ({
   padding: '9px 14px',
   borderRadius: 8,
-  border: `1px solid ${C.line}`,
+  border: `1px solid ${u.border}`,
   background: 'transparent',
-  color: C.ink,
+  color: u.text,
   font: '13px sans-serif',
   cursor: 'pointer',
-}
-const btnPrimary: React.CSSProperties = { ...btn, background: C.accent, borderColor: C.accent }
-const field: React.CSSProperties = {
+})
+const btnPrimary = (u: UiPalette): React.CSSProperties => ({
+  ...btn(u),
+  background: u.primary,
+  borderColor: u.primary,
+  color: u.primaryText,
+})
+const field = (u: UiPalette): React.CSSProperties => ({
   width: '100%',
   padding: '9px 11px',
   borderRadius: 8,
-  border: `1px solid ${C.line}`,
-  background: '#0f1420',
-  color: C.ink,
+  border: `1px solid ${u.border}`,
+  background: u.phoneInputBg,
+  color: u.text,
   font: '13px sans-serif',
   boxSizing: 'border-box',
-}
-const label: React.CSSProperties = { fontSize: 12, color: C.sub, margin: '10px 0 5px' }
-const desc: React.CSSProperties = { fontSize: 12, color: C.faint, marginTop: 6 }
+})
+const label = (u: UiPalette): React.CSSProperties => ({ fontSize: 12, color: u.textMuted, margin: '10px 0 5px' })
+const desc = (u: UiPalette): React.CSSProperties => ({ fontSize: 12, color: u.textFaint, marginTop: 6 })
 
 // Ingebakken standaard-brievenbus (build-time, uit .env). Zijn beide gezet, dan
 // hoeft de gebruiker niets in te vullen — alleen op "Koppel telefoon" klikken.
@@ -69,6 +65,8 @@ const DEFAULT_INVITE = ((import.meta.env.VITE_INBOX_INVITE_CODE as string | unde
 const HAS_DEFAULTS = DEFAULT_SERVER !== '' && DEFAULT_INVITE !== ''
 
 export function SettingsPhone({ backend, onImported }: { backend: Backend; onImported?: () => void }) {
+  // Actief UI-palet (volgt THEME.uiMode van het app-thema).
+  const u = ui()
   const [status, setStatus] = useState<InboxStatus | null>(null)
   const [serverUrl, setServerUrl] = useState(DEFAULT_SERVER)
   const [inviteCode, setInviteCode] = useState(DEFAULT_INVITE)
@@ -216,15 +214,15 @@ export function SettingsPhone({ backend, onImported }: { backend: Backend; onImp
   }
 
   if (!status) {
-    return <div style={{ color: C.sub, fontSize: 13 }}>Laden…</div>
+    return <div style={{ color: u.textMuted, fontSize: 13 }}>Laden…</div>
   }
 
   // ---- QR-weergave (na pairen of roteren) ----
   if (qr) {
     return (
       <div>
-        <div style={{ fontSize: 15, fontWeight: 600, color: C.ink }}>Scan met je telefoon</div>
-        <div style={{ ...desc, marginBottom: 12 }}>
+        <div style={{ fontSize: 15, fontWeight: 600, color: u.text }}>Scan met je telefoon</div>
+        <div style={{ ...desc(u), marginBottom: 12 }}>
           Open de <b>camera-app</b> van je telefoon en richt 'm op de code. Tik op de melding om de
           MemoryLane-brievenbus te openen en op je beginscherm te zetten.
         </div>
@@ -241,11 +239,11 @@ export function SettingsPhone({ backend, onImported }: { backend: Backend; onImp
         >
           <QRCodeSVG value={qr} size={232} level="M" />
         </div>
-        <div style={{ ...desc, textAlign: 'center', marginTop: 12 }}>
+        <div style={{ ...desc(u), textAlign: 'center', marginTop: 12 }}>
           De code bevat je geheime sleutel — deel 'm met niemand en maak er geen foto van.
         </div>
         <div style={{ display: 'flex', justifyContent: 'center', marginTop: 14 }}>
-          <button style={btnPrimary} onClick={() => setQr(null)}>
+          <button style={btnPrimary(u)} onClick={() => setQr(null)}>
             Klaar
           </button>
         </div>
@@ -260,23 +258,23 @@ export function SettingsPhone({ backend, onImported }: { backend: Backend; onImp
     const oneClick = HAS_DEFAULTS && !showAdvanced
     return (
       <div>
-        <div style={{ fontSize: 15, fontWeight: 600, color: C.ink }}>Telefoon koppelen</div>
-        <div style={desc}>
+        <div style={{ fontSize: 15, fontWeight: 600, color: u.text }}>Telefoon koppelen</div>
+        <div style={desc(u)}>
           Leg onderweg memories vast op je telefoon; thuis haal je ze met één knop binnen. Alles is
           end-to-end versleuteld — de server ziet nooit je foto's of tekst.
         </div>
 
         {oneClick ? (
           <>
-            {error && <div style={{ color: C.danger, fontSize: 12, marginTop: 12 }}>{error}</div>}
+            {error && <div style={{ color: u.danger, fontSize: 12, marginTop: 12 }}>{error}</div>}
             <div style={{ marginTop: 14 }}>
-              <button style={{ ...btnPrimary, opacity: busy ? 0.5 : 1 }} disabled={busy} onClick={() => void pair()}>
+              <button style={{ ...btnPrimary(u), opacity: busy ? 0.5 : 1 }} disabled={busy} onClick={() => void pair()}>
                 {busy ? 'Bezig…' : 'Koppel telefoon'}
               </button>
             </div>
             <button
               className="link"
-              style={{ marginTop: 12, background: 'none', border: 0, color: C.sub, fontSize: 12, cursor: 'pointer', padding: 0 }}
+              style={{ marginTop: 12, background: 'none', border: 0, color: u.textMuted, fontSize: 12, cursor: 'pointer', padding: 0 }}
               onClick={() => setShowAdvanced(true)}
             >
               Een andere server gebruiken…
@@ -284,18 +282,18 @@ export function SettingsPhone({ backend, onImported }: { backend: Backend; onImp
           </>
         ) : (
           <>
-            <div style={label}>Server-URL</div>
+            <div style={label(u)}>Server-URL</div>
             <input
-              style={field}
+              style={field(u)}
               value={serverUrl}
               onChange={(e) => setServerUrl(e.target.value)}
               placeholder="https://…workers.dev"
               spellCheck={false}
               autoCapitalize="off"
             />
-            <div style={label}>Invite-code</div>
+            <div style={label(u)}>Invite-code</div>
             <input
-              style={field}
+              style={field(u)}
               value={inviteCode}
               onChange={(e) => setInviteCode(e.target.value)}
               placeholder="De code uit je Cloudflare-instellingen"
@@ -303,11 +301,11 @@ export function SettingsPhone({ backend, onImported }: { backend: Backend; onImp
               autoCapitalize="off"
             />
 
-            {error && <div style={{ color: C.danger, fontSize: 12, marginTop: 10 }}>{error}</div>}
+            {error && <div style={{ color: u.danger, fontSize: 12, marginTop: 10 }}>{error}</div>}
 
             <div style={{ marginTop: 14 }}>
               <button
-                style={{ ...btnPrimary, opacity: busy || !serverUrl.trim() || !inviteCode.trim() ? 0.5 : 1 }}
+                style={{ ...btnPrimary(u), opacity: busy || !serverUrl.trim() || !inviteCode.trim() ? 0.5 : 1 }}
                 disabled={busy || !serverUrl.trim() || !inviteCode.trim()}
                 onClick={() => void pair()}
               >
@@ -323,27 +321,27 @@ export function SettingsPhone({ backend, onImported }: { backend: Backend; onImp
   // ---- Gekoppeld: status + beheer ----
   return (
     <div>
-      <div style={{ fontSize: 15, fontWeight: 600, color: C.ink }}>Telefoon gekoppeld</div>
+      <div style={{ fontSize: 15, fontWeight: 600, color: u.text }}>Telefoon gekoppeld</div>
       <div
         style={{
           marginTop: 10,
           padding: '12px 14px',
-          background: C.card,
-          border: `1px solid ${C.line}`,
+          background: u.statusCardBg,
+          border: `1px solid ${u.border}`,
           borderRadius: 10,
         }}
       >
-        <div style={{ fontSize: 13, color: C.ink }}>
+        <div style={{ fontSize: 13, color: u.text }}>
           Brievenbus <b style={{ fontFamily: 'ui-monospace, monospace' }}>{status.mailboxShortId}…</b>
         </div>
         {status.pairedAt && (
-          <div style={{ fontSize: 12, color: C.sub, marginTop: 3 }}>Sinds {formatDate(status.pairedAt)}</div>
+          <div style={{ fontSize: 12, color: u.textMuted, marginTop: 3 }}>Sinds {formatDate(status.pairedAt)}</div>
         )}
         {status.serverUrl && (
-          <div style={{ fontSize: 11, color: C.faint, marginTop: 3, wordBreak: 'break-all' }}>{status.serverUrl}</div>
+          <div style={{ fontSize: 11, color: u.textFaint, marginTop: 3, wordBreak: 'break-all' }}>{status.serverUrl}</div>
         )}
         {pending !== null && (
-          <div style={{ fontSize: 12, color: pending > 0 ? '#e0b34f' : C.sub, marginTop: 6 }}>
+          <div style={{ fontSize: 12, color: pending > 0 ? u.warnSoft : u.textMuted, marginTop: 6 }}>
             {pending > 0 ? `📥 ${pending} memory${pending === 1 ? '' : "'s"} onderweg — klaar om te importeren` : 'Geen memories onderweg'}
           </div>
         )}
@@ -352,7 +350,7 @@ export function SettingsPhone({ backend, onImported }: { backend: Backend; onImp
       {/* Importeren */}
       <div style={{ marginTop: 12 }}>
         <button
-          style={{ ...btnPrimary, width: '100%', opacity: importing ? 0.6 : 1 }}
+          style={{ ...btnPrimary(u), width: '100%', opacity: importing ? 0.6 : 1 }}
           disabled={importing}
           onClick={() => void doImport()}
         >
@@ -360,28 +358,28 @@ export function SettingsPhone({ backend, onImported }: { backend: Backend; onImp
         </button>
         {importing && progress && (
           <div style={{ marginTop: 10 }}>
-            <div style={{ height: 8, background: C.line, borderRadius: 999, overflow: 'hidden' }}>
+            <div style={{ height: 8, background: u.border, borderRadius: 999, overflow: 'hidden' }}>
               <div
                 style={{
                   width: `${progress.memoryCount ? Math.round(((progress.memoryIndex + 1) / progress.memoryCount) * 100) : 0}%`,
                   height: '100%',
-                  background: C.accent,
+                  background: u.primary,
                   transition: 'width .2s',
                 }}
               />
             </div>
-            <div style={{ fontSize: 12, color: C.sub, marginTop: 6 }}>
+            <div style={{ fontSize: 12, color: u.textMuted, marginTop: 6 }}>
               Memory {progress.memoryIndex + 1} van {progress.memoryCount} · {STEP_LABEL[progress.step]}
               {progress.fileCount > 0 && progress.step !== 'ack' ? ` (bestand ${progress.fileIndex + 1}/${progress.fileCount})` : ''}
             </div>
           </div>
         )}
         {report && (
-          <div style={{ marginTop: 10, fontSize: 13, color: C.ink }}>
+          <div style={{ marginTop: 10, fontSize: 13, color: u.text }}>
             ✓ {report.imported} geïmporteerd
-            {report.skipped > 0 && <span style={{ color: '#e0b34f' }}> · {report.skipped} overgeslagen</span>}
+            {report.skipped > 0 && <span style={{ color: u.warnSoft }}> · {report.skipped} overgeslagen</span>}
             {report.errors.length > 0 && (
-              <ul style={{ margin: '6px 0 0', paddingLeft: 18, color: C.danger, fontSize: 12 }}>
+              <ul style={{ margin: '6px 0 0', paddingLeft: 18, color: u.danger, fontSize: 12 }}>
                 {report.errors.slice(0, 5).map((er) => (
                   <li key={er.memoryId}>{er.message}</li>
                 ))}
@@ -397,18 +395,18 @@ export function SettingsPhone({ backend, onImported }: { backend: Backend; onImp
           style={{
             marginTop: 12,
             padding: '12px 14px',
-            background: '#2a2410',
-            border: '1px solid #5a4c1e',
+            background: u.warnBg,
+            border: `1px solid ${u.warnBorder}`,
             borderRadius: 10,
           }}
         >
-          <div style={{ fontSize: 13, color: '#e6d9a8' }}>
+          <div style={{ fontSize: 13, color: u.warnText }}>
             Een nieuwe koppelcode maakt de {pending} klaarstaande memory{pending === 1 ? '' : "'s"} onbruikbaar
             (die zijn met de oude sleutel versleuteld). Importeer ze eerst, of gooi ze weg.
           </div>
           <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
             <button
-              style={{ ...btn, borderColor: C.danger, color: C.danger }}
+              style={{ ...btn(u), borderColor: u.danger, color: u.danger }}
               disabled={busy}
               onClick={() => void rotate(true)}
             >
@@ -418,24 +416,24 @@ export function SettingsPhone({ backend, onImported }: { backend: Backend; onImp
         </div>
       )}
 
-      {error && <div style={{ color: C.danger, fontSize: 12, marginTop: 10 }}>{error}</div>}
+      {error && <div style={{ color: u.danger, fontSize: 12, marginTop: 10 }}>{error}</div>}
 
       <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
-        <button style={btn} disabled={busy} onClick={() => void showQr()}>
+        <button style={btn(u)} disabled={busy} onClick={() => void showQr()}>
           Toon QR-code
         </button>
-        <button style={btn} disabled={busy} onClick={() => void rotate(false)}>
+        <button style={btn(u)} disabled={busy} onClick={() => void rotate(false)}>
           Nieuwe koppelcode
         </button>
         <button
-          style={{ ...btn, borderColor: C.danger, color: C.danger }}
+          style={{ ...btn(u), borderColor: u.danger, color: u.danger }}
           disabled={busy}
           onClick={() => void unpair()}
         >
           Ontkoppelen
         </button>
       </div>
-      <div style={desc}>
+      <div style={desc(u)}>
         "Toon QR-code" laat dezelfde koppeling opnieuw zien (om te heropenen of een tweede telefoon te
         koppelen). "Nieuwe koppelcode" vervángt je oude koppeling (bijv. als je telefoon kwijt is).
       </div>

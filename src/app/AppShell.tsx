@@ -18,6 +18,7 @@ import { RenderEngine } from '../render/core/engine'
 import { loadThemeFonts } from '../theme/fonts'
 import { THEMES, themeById } from '../theme/registry'
 import { THEME, setActiveTheme } from '../theme/tokens'
+import { ui, type UiPalette } from '../theme/ui'
 import { EventScene } from '../render/scenes/event'
 import type { NodePosition } from '../render/scenes/scene'
 import { Screensaver } from './Screensaver'
@@ -963,6 +964,11 @@ export function AppShell() {
     // zonder overgangsanimatie (live preview, geen "herlaad"-effect).
     const applyTheme = (id: string): void => {
       setActiveTheme(themeById(id))
+      // DOM-achtergrond meekleuren met het thema. index.html zet een hardcoded
+      // donker #0a0a0f op html/body/#root — zonder deze override flitst dat bij
+      // resize/opstart onder lichte thema's. body alléén is niet genoeg: #root
+      // ligt erbovenop met dezelfde CSS-achtergrond.
+      applyDomBackground()
       if (!engine) return
       engine.app.renderer.background.color = THEME.colors.appBg
       if (phaseRef.current !== 'ready') return
@@ -1150,6 +1156,9 @@ export function AppShell() {
       // Text-metrics). Een trage/falende font-load mag de start nooit blokkeren:
       // race met een korte timeout; de systeem-fallback rendert dan eerst.
       setActiveTheme(themeById(settingsRef.current.themeId))
+      // Eenmalig bij de boot: de DOM-achtergrond op de thema-kleur zetten (zie
+      // applyTheme — voorkomt een donkere flits bij lichte thema's).
+      applyDomBackground()
       const fontsReady = loadThemeFonts().then(() => {
         fontsDone = true
       })
@@ -2036,6 +2045,10 @@ export function AppShell() {
   // Terugknop linksboven: altijd zichtbaar op sub-niveaus (niet aan chromeVisible
   // gekoppeld, net als het tandwiel), maar weg in view-modus (schone weergave) en
   // in immersieve modi. Rechtsklik/Escape blijven daar de muis/toets-terug.
+  // Actief UI-palet voor de DOM-chrome (volgt THEME.uiMode; her-render bij een
+  // themawissel gebeurt via de settings-state).
+  const u = ui()
+
   const backVisible =
     phase === 'ready' &&
     uiLevel !== 'lifeline' &&
@@ -2067,14 +2080,14 @@ export function AppShell() {
       {phase === 'ready' && !modal && !editing && !eventForm && !metaForm && !searchOpen && !settingsOpen && !settings.viewMode && !fullscreen && chromeVisible && settings.showSearchButton && (
         <button
           onClick={() => setSearchOpen(true)}
-          style={{ ...searchBtn, left: backVisible ? 64 : 16 }}
+          style={{ ...searchBtn(u), left: backVisible ? 64 : 16 }}
           title="Zoeken (Ctrl+K)"
         >
           Zoeken…
         </button>
       )}
       {phase === 'ready' && !modal && !editing && !eventForm && !metaForm && !searchOpen && !settingsOpen && !settings.viewMode && !fullscreen && (
-        <button onClick={() => setSettingsOpen(true)} style={gearBtn} title="Instellingen">
+        <button onClick={() => setSettingsOpen(true)} style={gearBtn(u)} title="Instellingen">
           ⚙
         </button>
       )}
@@ -2143,7 +2156,7 @@ export function AppShell() {
               const z = engineRef.current?.pendingZoom
               if (z !== undefined) entryZoomRef.current = z
             }}
-            style={fitBtn}
+            style={fitBtn(u)}
             title="Alles passend in beeld"
           >
             ⤢ Alles passend
@@ -2162,13 +2175,13 @@ export function AppShell() {
         !settings.viewMode && (
           <button
             onClick={() => sceneRef.current?.zoomToggle?.()}
-            style={fitBtn}
+            style={fitBtn(u)}
             title="Wissel tussen alles passend en standaard kaartgrootte (of dubbelklik op het overzicht · Ctrl+0/Ctrl+1)"
           >
             ⤢ Zoom
           </button>
         )}
-      {toast && <div style={toastStyle}>{toast}</div>}
+      {toast && <div style={toastStyle(u)}>{toast}</div>}
       {matReport && <MaterializationOverlay report={matReport} onClose={() => setMatReport(null)} />}
       {phase === 'ready' && !modal && !editing && !eventForm && !metaForm && !searchOpen && !settingsOpen && !settings.viewMode && !fullscreen && (
         <Fab
@@ -2246,85 +2259,86 @@ function MetaPanel({
   onSubmit: () => void
   onCancel: () => void
 }) {
+  const u = ui()
   return (
     <div
       style={{
         position: 'absolute',
         inset: 0,
-        background: 'rgba(0,0,0,0.55)',
+        background: u.backdrop,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
       }}
     >
-      <div style={{ width: 520, maxWidth: '92%', background: '#161c28', borderRadius: 12, padding: 20 }}>
+      <div style={{ width: 520, maxWidth: '92%', background: u.card, color: u.text, borderRadius: 12, padding: 20 }}>
         <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 12 }}>Foto-gegevens</div>
-        <label style={metaLabel}>
+        <label style={metaLabel(u)}>
           Bijschrift
           <input
             autoFocus
             value={form.caption}
             onChange={(e) => onChange({ caption: e.target.value })}
             placeholder="Bijschrift bij de foto"
-            style={{ ...field, marginTop: 4 }}
+            style={{ ...field(u), marginTop: 4 }}
           />
         </label>
         <div style={{ display: 'flex', gap: 12, marginTop: 12 }}>
-          <label style={{ ...metaLabel, flex: 1 }}>
+          <label style={{ ...metaLabel(u), flex: 1 }}>
             Datum
             <input
               type="date"
               value={form.date}
               onChange={(e) => onChange({ date: e.target.value })}
-              style={{ ...field, marginTop: 4 }}
+              style={{ ...field(u), marginTop: 4 }}
             />
           </label>
-          <label style={{ ...metaLabel, flex: 1 }}>
+          <label style={{ ...metaLabel(u), flex: 1 }}>
             Plaats
             <input
               value={form.place}
               onChange={(e) => onChange({ place: e.target.value })}
               placeholder="bijv. Amsterdam"
-              style={{ ...field, marginTop: 4 }}
+              style={{ ...field(u), marginTop: 4 }}
             />
           </label>
         </div>
-        <label style={{ ...metaLabel, marginTop: 12 }}>
+        <label style={{ ...metaLabel(u), marginTop: 12 }}>
           Mensen (komma-gescheiden)
           <input
             value={form.people}
             onChange={(e) => onChange({ people: e.target.value })}
             placeholder="Jim, Wout, oma"
-            style={{ ...field, marginTop: 4 }}
+            style={{ ...field(u), marginTop: 4 }}
           />
         </label>
-        <label style={{ ...metaLabel, marginTop: 12 }}>
+        <label style={{ ...metaLabel(u), marginTop: 12 }}>
           Trefwoorden (komma-gescheiden)
           <input
             value={form.tags}
             onChange={(e) => onChange({ tags: e.target.value })}
             placeholder="strand, zomer, vakantie"
-            style={{ ...field, marginTop: 4 }}
+            style={{ ...field(u), marginTop: 4 }}
           />
         </label>
         {form.exif.length > 0 && (
-          <div style={{ marginTop: 16, borderTop: '1px solid #2c3650', paddingTop: 12 }}>
-            <div style={{ fontSize: 12, color: '#6a7690', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+          <div style={{ marginTop: 16, borderTop: `1px solid ${u.border}`, paddingTop: 12 }}>
+            <div style={{ fontSize: 12, color: u.textFaint, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5 }}>
               EXIF (uit de foto)
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
               {form.exif.map((e) => (
                 <div key={e.label} style={{ display: 'flex', gap: 14, fontSize: 13 }}>
-                  <span style={{ color: '#8a97b0', minWidth: 150 }}>{e.label}</span>
-                  <span style={{ color: '#dfe7f5' }}>{e.value}</span>
+                  <span style={{ color: u.textMuted, minWidth: 150 }}>{e.label}</span>
+                  <span style={{ color: u.btnText }}>{e.value}</span>
                 </div>
               ))}
             </div>
           </div>
         )}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 16 }}>
-          <button onClick={onCancel} style={ghostBtn}>Annuleren</button>
-          <button onClick={onSubmit} disabled={busy} style={primaryBtn}>
+          <button onClick={onCancel} style={ghostBtn(u)}>Annuleren</button>
+          <button onClick={onSubmit} disabled={busy} style={primaryBtn(u)}>
             {busy ? 'Bezig…' : 'Opslaan'}
           </button>
         </div>
@@ -2372,20 +2386,21 @@ function SettingsPanel({
       alive = false
     }
   }, [])
+  const u = ui()
   const seg = (m: 'custom' | 'grid' | 'scatter'): React.CSSProperties => ({
-    ...ghostBtn,
-    background: settings.defaultLayout === m ? '#3b82f6' : 'transparent',
-    borderColor: settings.defaultLayout === m ? '#3b82f6' : '#2c3650',
-    color: '#fff',
+    ...ghostBtn(u),
+    background: settings.defaultLayout === m ? u.primary : 'transparent',
+    borderColor: settings.defaultLayout === m ? u.primary : u.border,
+    color: settings.defaultLayout === m ? u.primaryText : u.text,
   })
   const segOn = (active: boolean): React.CSSProperties => ({
-    ...ghostBtn,
-    background: active ? '#3b82f6' : 'transparent',
-    borderColor: active ? '#3b82f6' : '#2c3650',
-    color: '#fff',
+    ...ghostBtn(u),
+    background: active ? u.primary : 'transparent',
+    borderColor: active ? u.primary : u.border,
+    color: active ? u.primaryText : u.text,
   })
   const desc = (t: React.ReactNode): React.ReactElement => (
-    <div style={{ fontSize: 12, color: '#6a7690', marginTop: 6 }}>{t}</div>
+    <div style={{ fontSize: 12, color: u.textFaint, marginTop: 6 }}>{t}</div>
   )
   const Toggle = ({
     on,
@@ -2398,22 +2413,22 @@ function SettingsPanel({
   }): React.ReactElement => (
     <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
       <input type="checkbox" checked={on} onChange={(e) => set(e.target.checked)} />
-      <span style={{ fontSize: 14, color: '#fff' }}>{label}</span>
+      <span style={{ fontSize: 14, color: u.text }}>{label}</span>
     </label>
   )
   const subhead = (t: string): React.ReactElement => (
-    <div style={{ fontSize: 13, color: '#8a97b0', margin: '16px 0 6px' }}>{t}</div>
+    <div style={{ fontSize: 13, color: u.textMuted, margin: '16px 0 6px' }}>{t}</div>
   )
   const kbd: React.CSSProperties = {
     display: 'inline-block',
     padding: '2px 7px',
     fontSize: 12,
     fontFamily: 'ui-monospace, monospace',
-    color: '#e6ebf5',
-    background: '#232c3d',
-    border: '1px solid #3a465e',
+    color: u.textCrisp,
+    background: u.kbdBg,
+    border: `1px solid ${u.kbdBorder}`,
     borderRadius: 5,
-    boxShadow: '0 1px 0 #10151f',
+    boxShadow: `0 1px 0 ${u.kbdShadow}`,
     whiteSpace: 'nowrap',
   }
   const tabBtn = (id: typeof tab, label: string): React.ReactElement => (
@@ -2423,9 +2438,9 @@ function SettingsPanel({
         flex: 1,
         padding: '10px 8px',
         border: 'none',
-        borderBottom: tab === id ? '2px solid #3b82f6' : '2px solid transparent',
+        borderBottom: tab === id ? `2px solid ${u.primary}` : '2px solid transparent',
         background: 'transparent',
-        color: tab === id ? '#fff' : '#8a97b0',
+        color: tab === id ? u.text : u.textMuted,
         font: '13px sans-serif',
         cursor: 'pointer',
       }}
@@ -2439,7 +2454,7 @@ function SettingsPanel({
       style={{
         position: 'absolute',
         inset: 0,
-        background: 'rgba(0,0,0,0.55)',
+        background: u.backdrop,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -2451,7 +2466,8 @@ function SettingsPanel({
           width: 640,
           maxWidth: '94%',
           maxHeight: '88vh',
-          background: '#161c28',
+          background: u.card,
+          color: u.text,
           borderRadius: 12,
           display: 'flex',
           flexDirection: 'column',
@@ -2459,7 +2475,7 @@ function SettingsPanel({
         }}
       >
         <div style={{ fontSize: 18, fontWeight: 700, padding: '18px 22px 10px' }}>Instellingen</div>
-        <div style={{ display: 'flex', padding: '0 12px', borderBottom: '1px solid #2c3650' }}>
+        <div style={{ display: 'flex', padding: '0 12px', borderBottom: `1px solid ${u.border}` }}>
           {tabBtn('weergave', 'Weergave')}
           {tabBtn('tijdlijn', 'Tijdlijn & canvas')}
           {tabBtn('dia', 'Diavoorstelling')}
@@ -2484,8 +2500,8 @@ function SettingsPanel({
                       overflow: 'hidden',
                       cursor: 'pointer',
                       textAlign: 'left',
-                      background: '#1c2432',
-                      border: settings.themeId === t.id ? '2px solid #4b9bff' : '2px solid #2c3650',
+                      background: u.cardAlt,
+                      border: settings.themeId === t.id ? `2px solid ${u.primary}` : `2px solid ${u.border}`,
                     }}
                   >
                     <div
@@ -2514,7 +2530,7 @@ function SettingsPanel({
                       style={{
                         padding: '5px 7px',
                         fontSize: 13,
-                        color: settings.themeId === t.id ? '#fff' : '#bcc5d6',
+                        color: settings.themeId === t.id ? u.text : u.tileText,
                         fontFamily: t.fonts.title,
                         whiteSpace: 'nowrap',
                         overflow: 'hidden',
@@ -2527,9 +2543,9 @@ function SettingsPanel({
                 ))}
               </div>
               {desc(
-                'Kleuren en fonts van de tijdlijn — direct toegepast. Papier-/linnen-texturen en de licht/donker-stijl van de panelen volgen in een latere stap.',
+                'Kleuren en fonts van de tijdlijn en de panelen — direct toegepast. Papier-/linnen-texturen volgen in een latere stap.',
               )}
-              <div style={{ height: 1, background: '#2c3650', margin: '16px 0' }} />
+              <div style={{ height: 1, background: u.border, margin: '16px 0' }} />
               <Toggle on={settings.showTitle} set={(v) => onChange({ showTitle: v })} label="Titel bovenin tonen" />
               {desc('"Memory Lane" op het overzicht, het jaar in een jaar, de memory-naam in een memory.')}
               {settings.showTitle && (
@@ -2542,7 +2558,7 @@ function SettingsPanel({
                   {desc('Heeft de foto geen caption, dan blijft de memory-naam staan (geen bestandsnamen).')}
                 </div>
               )}
-              <div style={{ height: 1, background: '#2c3650', margin: '16px 0' }} />
+              <div style={{ height: 1, background: u.border, margin: '16px 0' }} />
               <Toggle
                 on={settings.showSearchButton}
                 set={(v) => onChange({ showSearchButton: v })}
@@ -2554,7 +2570,7 @@ function SettingsPanel({
                   seconden zonder muisbeweging.
                 </>,
               )}
-              <div style={{ height: 1, background: '#2c3650', margin: '16px 0' }} />
+              <div style={{ height: 1, background: u.border, margin: '16px 0' }} />
               <Toggle
                 on={settings.viewMode}
                 set={(v) => onChange({ viewMode: v })}
@@ -2565,7 +2581,7 @@ function SettingsPanel({
                   Een schone weergave zonder knoppen. Druk op <b>E</b> om te wisselen.
                 </>,
               )}
-              <div style={{ height: 1, background: '#2c3650', margin: '16px 0' }} />
+              <div style={{ height: 1, background: u.border, margin: '16px 0' }} />
               <Toggle
                 on={settings.l3StepAnimation}
                 set={(v) => onChange({ l3StepAnimation: v })}
@@ -2573,7 +2589,7 @@ function SettingsPanel({
               />
               {desc('In de detailweergave schuift de vorige foto/video weg en de nieuwe in beeld. Uit = direct wisselen.')}
 
-              <div style={{ height: 1, background: '#2c3650', margin: '16px 0' }} />
+              <div style={{ height: 1, background: u.border, margin: '16px 0' }} />
               {subhead('Terug navigeren')}
               {desc(
                 <>
@@ -2635,7 +2651,7 @@ function SettingsPanel({
                 {desc('Uit = de foto behoudt zijn eigen verhouding (de tegel neemt de vorm van de foto over).')}
               </div>
 
-              <div style={{ height: 1, background: '#2c3650', margin: '16px 0' }} />
+              <div style={{ height: 1, background: u.border, margin: '16px 0' }} />
               <Toggle
                 on={settings.showMemoryTitles}
                 set={(v) => onChange({ showMemoryTitles: v })}
@@ -2643,7 +2659,7 @@ function SettingsPanel({
               />
               {desc('De naam bij de kaart, zichtbaar zodra je inzoomt op een thumbnail. Lange namen worden afgekapt.')}
 
-              <div style={{ height: 1, background: '#2c3650', margin: '16px 0' }} />
+              <div style={{ height: 1, background: u.border, margin: '16px 0' }} />
               <Toggle
                 on={settings.curvedLeaders}
                 set={(v) => onChange({ curvedLeaders: v })}
@@ -2651,7 +2667,7 @@ function SettingsPanel({
               />
               {desc('Uit = rechte lijntjes. De lijntjes lopen van de tijdlijn naar de memory-kaart.')}
 
-              <div style={{ height: 1, background: '#2c3650', margin: '16px 0' }} />
+              <div style={{ height: 1, background: u.border, margin: '16px 0' }} />
               <Toggle
                 on={settings.slideshow}
                 set={(v) => onChange({ slideshow: v })}
@@ -2659,7 +2675,7 @@ function SettingsPanel({
               />
               {settings.slideshow && (
                 <div style={{ marginTop: 10 }}>
-                  <div style={{ fontSize: 13, color: '#8a97b0', marginBottom: 4 }}>
+                  <div style={{ fontSize: 13, color: u.textMuted, marginBottom: 4 }}>
                     Snelheid: {settings.slideshowSpeed}s per foto
                   </div>
                   <input
@@ -2675,7 +2691,7 @@ function SettingsPanel({
               )}
               {desc('Wijzigingen gelden bij het (opnieuw) openen van een jaar.')}
 
-              <div style={{ height: 1, background: '#2c3650', margin: '16px 0' }} />
+              <div style={{ height: 1, background: u.border, margin: '16px 0' }} />
               <Toggle
                 on={settings.yearTileSlideshow}
                 set={(v) => onChange({ yearTileSlideshow: v })}
@@ -2683,7 +2699,7 @@ function SettingsPanel({
               />
               {settings.yearTileSlideshow && (
                 <div style={{ marginTop: 10 }}>
-                  <div style={{ fontSize: 13, color: '#8a97b0', marginBottom: 6 }}>Cover-bron</div>
+                  <div style={{ fontSize: 13, color: u.textMuted, marginBottom: 6 }}>Cover-bron</div>
                   <div style={{ display: 'flex', gap: 8 }}>
                     <button onClick={() => onChange({ yearCoverMode: 'featured' })} style={segOn(settings.yearCoverMode === 'featured')}>
                       Uitgelicht
@@ -2712,7 +2728,7 @@ function SettingsPanel({
                 </button>
               </div>
               {desc("'Ken Burns' zoomt/pant langzaam; 'Overvloeien' toont een stilstaande foto die overvloeit.")}
-              <div style={{ fontSize: 13, color: '#8a97b0', margin: '14px 0 4px' }}>
+              <div style={{ fontSize: 13, color: u.textMuted, margin: '14px 0 4px' }}>
                 Snelheid: {settings.diaSpeed}s per foto
               </div>
               <input
@@ -2725,9 +2741,9 @@ function SettingsPanel({
                 style={{ width: '100%' }}
               />
 
-              <div style={{ height: 1, background: '#2c3650', margin: '16px 0' }} />
+              <div style={{ height: 1, background: u.border, margin: '16px 0' }} />
               {subhead('Tagfilter')}
-              <label style={{ display: 'block', fontSize: 12, color: '#9aa6c0', marginBottom: 4 }}>
+              <label style={{ display: 'block', fontSize: 12, color: u.labelMuted, marginBottom: 4 }}>
                 Alleen deze tags (komma-gescheiden)
               </label>
               <input
@@ -2735,9 +2751,9 @@ function SettingsPanel({
                 value={settings.screensaverInclude}
                 onChange={(e) => onChange({ screensaverInclude: e.target.value })}
                 placeholder="bijv. vakantie, familie"
-                style={tagInput}
+                style={tagInput(u)}
               />
-              <label style={{ display: 'block', fontSize: 12, color: '#9aa6c0', margin: '10px 0 4px' }}>
+              <label style={{ display: 'block', fontSize: 12, color: u.labelMuted, margin: '10px 0 4px' }}>
                 Zonder deze tags (komma-gescheiden)
               </label>
               <input
@@ -2745,7 +2761,7 @@ function SettingsPanel({
                 value={settings.screensaverExclude}
                 onChange={(e) => onChange({ screensaverExclude: e.target.value })}
                 placeholder="bijv. werk"
-                style={tagInput}
+                style={tagInput(u)}
               />
               {desc(
                 <>
@@ -2762,9 +2778,9 @@ function SettingsPanel({
               <div
                 style={{
                   fontSize: 13,
-                  color: '#cfd6e4',
-                  background: 'rgba(12,16,24,0.6)',
-                  border: '1px solid #2c3650',
+                  color: u.textSoft,
+                  background: u.inputBgSoft,
+                  border: `1px solid ${u.border}`,
                   borderRadius: 8,
                   padding: '8px 10px',
                   wordBreak: 'break-all',
@@ -2773,16 +2789,16 @@ function SettingsPanel({
                 {vaultPath ?? '(nog geen map gekozen)'}
               </div>
               <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-                <button onClick={onChangeVault} style={ghostBtn}>Andere map kiezen…</button>
-                <button onClick={onReindex} style={ghostBtn}>Index herberekenen</button>
+                <button onClick={onChangeVault} style={ghostBtn(u)}>Andere map kiezen…</button>
+                <button onClick={onReindex} style={ghostBtn(u)}>Index herberekenen</button>
               </div>
               {desc(
                 'Kies een andere map met je vault, of herbereken de index (scan de map opnieuw) als je bestanden buiten de app hebt gewijzigd. Je bestanden blijven altijd behouden — de index is een weggooibare cache.',
               )}
 
-              <div style={{ height: 1, background: '#2c3650', margin: '16px 0' }} />
+              <div style={{ height: 1, background: u.border, margin: '16px 0' }} />
               {subhead('Resetten')}
-              <button onClick={onResetSettings} style={{ ...ghostBtn, borderColor: '#7a3b3b', color: '#ffb4b4' }}>
+              <button onClick={onResetSettings} style={{ ...ghostBtn(u), borderColor: u.dangerMutedBorder, color: u.dangerMutedText }}>
                 App-instellingen resetten
               </button>
               {desc(
@@ -2795,7 +2811,7 @@ function SettingsPanel({
               {backend ? (
                 <SettingsPhone backend={backend} onImported={onImported} />
               ) : (
-                <div style={{ color: '#8a97b0', fontSize: 13 }}>Backend nog niet gereed…</div>
+                <div style={{ color: u.textMuted, fontSize: 13 }}>Backend nog niet gereed…</div>
               )}
             </>
           )}
@@ -2864,7 +2880,7 @@ function SettingsPanel({
                       <div style={{ display: 'flex', gap: 4, flex: '0 0 190px', flexWrap: 'wrap', alignItems: 'center' }}>
                         {it.k.map((key, j) =>
                           key === '+' ? (
-                            <span key={j} style={{ color: '#6a7690', fontSize: 12 }}>
+                            <span key={j} style={{ color: u.textFaint, fontSize: 12 }}>
                               +
                             </span>
                           ) : (
@@ -2874,7 +2890,7 @@ function SettingsPanel({
                           ),
                         )}
                       </div>
-                      <div style={{ fontSize: 13, color: '#cfd6e4' }}>{it.d}</div>
+                      <div style={{ fontSize: 13, color: u.textSoft }}>{it.d}</div>
                     </div>
                   ))}
                 </div>
@@ -2884,16 +2900,16 @@ function SettingsPanel({
           {tab === 'over' && (
             <>
               <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginTop: 4 }}>
-                <div style={{ fontSize: 22, fontWeight: 700, color: '#fff' }}>MemoryLane</div>
-                <div style={{ fontSize: 13, color: '#8a97b0' }}>versie {appVersion}</div>
+                <div style={{ fontSize: 22, fontWeight: 700, color: u.text }}>MemoryLane</div>
+                <div style={{ fontSize: 13, color: u.textMuted }}>versie {appVersion}</div>
               </div>
-              <div style={{ fontSize: 14, color: '#cfd6e4', lineHeight: 1.6, marginTop: 10 }}>
+              <div style={{ fontSize: 14, color: u.textSoft, lineHeight: 1.6, marginTop: 10 }}>
                 Een persoonlijke, inzoombare tijdlijn voor je herinneringen — van een overzicht van
                 alle jaren tot één foto in detail. Alles blijft lokaal op je eigen computer.
               </div>
 
               {subhead('In het kort')}
-              <div style={{ fontSize: 13.5, color: '#cfd6e4', lineHeight: 1.8 }}>
+              <div style={{ fontSize: 13.5, color: u.textSoft, lineHeight: 1.8 }}>
                 • <b>Zoomen</b> (scrollen, of pijltjes + Enter) brengt je dieper: levenslijn → jaar →
                 memory → detailfoto. <b>Uitzoomen</b> of <b>Esc</b> gaat terug.
                 <br />• <b>Pijltjes</b> verplaatsen de focus (witte rand), <b>Enter</b> dieper,{' '}
@@ -2907,16 +2923,16 @@ function SettingsPanel({
               </div>
 
               {subhead('Je herinneringen')}
-              <div style={{ fontSize: 13.5, color: '#cfd6e4', lineHeight: 1.6 }}>
+              <div style={{ fontSize: 13.5, color: u.textSoft, lineHeight: 1.6 }}>
                 Alles staat als gewone bestanden in je eigen map (die je bij de eerste start kiest).
                 Een back-up maak je simpelweg door die map te kopiëren.
               </div>
 
               {subhead('Gemaakt door')}
-              <div style={{ fontSize: 14, color: '#cfd6e4', lineHeight: 1.7 }}>
+              <div style={{ fontSize: 14, color: u.textSoft, lineHeight: 1.7 }}>
                 Jim
                 <br />
-                <span style={{ color: '#8a97b0' }}>info@elphinstone.nl</span>
+                <span style={{ color: u.textMuted }}>info@elphinstone.nl</span>
               </div>
             </>
           )}
@@ -2926,10 +2942,10 @@ function SettingsPanel({
             display: 'flex',
             justifyContent: 'flex-end',
             padding: '12px 20px',
-            borderTop: '1px solid #2c3650',
+            borderTop: `1px solid ${u.border}`,
           }}
         >
-          <button onClick={onClose} style={primaryBtn}>Klaar</button>
+          <button onClick={onClose} style={primaryBtn(u)}>Klaar</button>
         </div>
       </div>
     </div>
@@ -2969,31 +2985,32 @@ function Fab({
   gridSort: 'date' | 'name' | 'random'
   onGridSort: (sort: 'date' | 'name' | 'random') => void
 }) {
+  const u = ui()
   const wrap: React.CSSProperties = { position: 'absolute', right: 20, bottom: 20, display: 'flex', gap: 10 }
   if (uiLevel === 'lifeline') {
     return (
       <div style={wrap}>
-        <button onClick={onAddYear} style={fabBtn}>+ Nieuw jaar</button>
+        <button onClick={onAddYear} style={fabBtn(u)}>+ Nieuw jaar</button>
       </div>
     )
   }
   if (uiLevel === 'year') {
     return (
       <div style={wrap}>
-        <button onClick={onAddEvent} style={fabBtn}>+ Nieuwe memory</button>
+        <button onClick={onAddEvent} style={fabBtn(u)}>+ Nieuwe memory</button>
       </div>
     )
   }
   if (uiLevel === 'event') {
     const seg = (m: 'custom' | 'grid' | 'scatter'): React.CSSProperties => ({
-      ...fabBtn,
-      background: layoutMode === m ? '#3b82f6' : '#1f2734',
+      ...fabBtn(u),
+      background: layoutMode === m ? u.primary : u.fabNeutralBg,
     })
     const sortSeg = (s: 'date' | 'name' | 'random'): React.CSSProperties => ({
-      ...fabBtn,
+      ...fabBtn(u),
       fontSize: 12,
       padding: '8px 12px',
-      background: gridSort === s ? '#3b82f6' : '#141a24',
+      background: gridSort === s ? u.primary : u.fabSortBg,
     })
     return (
       <div style={wrap}>
@@ -3001,7 +3018,7 @@ function Fab({
             — de rij is rechts verankerd, dus een knop links laat de rest op zijn plek. */}
         {layoutMode === 'grid' && (
           <>
-            <span style={{ ...fabBtn, background: 'transparent', color: '#7f8aa0', cursor: 'default', paddingRight: 2 }}>
+            <span style={{ ...fabBtn(u), background: 'transparent', color: u.fabHint, cursor: 'default', paddingRight: 2 }}>
               Sorteer
             </span>
             <button onClick={() => onGridSort('date')} style={sortSeg('date')} title="Sorteer op datum/tijd">
@@ -3020,7 +3037,7 @@ function Fab({
           </>
         )}
         {layoutMode !== 'custom' && (
-          <button onClick={onSaveLayout} style={{ ...fabBtn, background: '#166534' }} title="Deze opstelling vastleggen als je eigen layout">
+          <button onClick={onSaveLayout} style={{ ...fabBtn(u), background: u.okDeep }} title="Deze opstelling vastleggen als je eigen layout">
             Opslaan als Eigen
           </button>
         )}
@@ -3031,22 +3048,22 @@ function Fab({
         </button>
         <button
           onClick={onToggleScatterRotate}
-          style={{ ...fabBtn, background: scatterRotate ? '#3b82f6' : '#1f2734', width: 42, paddingLeft: 0, paddingRight: 0 }}
+          style={{ ...fabBtn(u), background: scatterRotate ? u.primary : u.fabNeutralBg, width: 42, paddingLeft: 0, paddingRight: 0 }}
           title={scatterRotate ? 'Scatter legt foto’s scheef (klik = recht)' : 'Scatter legt foto’s recht (klik = scheef)'}
         >
           {scatterRotate ? '⟲' : '▭'}
         </button>
-        <button onClick={onAddPhotos} style={fabBtn}>+ Foto&apos;s</button>
-        <button onClick={onAddNote} style={fabBtn}>+ Notitie</button>
-        <button onClick={onEditEvent} style={fabBtn}>Bewerk memory</button>
+        <button onClick={onAddPhotos} style={fabBtn(u)}>+ Foto&apos;s</button>
+        <button onClick={onAddNote} style={fabBtn(u)}>+ Notitie</button>
+        <button onClick={onEditEvent} style={fabBtn(u)}>Bewerk memory</button>
       </div>
     )
   }
   if (uiLevel === 'focus') {
     return (
       <div style={wrap}>
-        <button onClick={onEdit} style={fabBtn}>Bewerk</button>
-        <button onClick={onDelete} style={{ ...fabBtn, background: '#7f1d1d' }}>Verwijder</button>
+        <button onClick={onEdit} style={fabBtn(u)}>Bewerk</button>
+        <button onClick={onDelete} style={{ ...fabBtn(u), background: u.dangerDeep }}>Verwijder</button>
       </div>
     )
   }
@@ -3068,18 +3085,19 @@ function EditPanel({
   onSubmit: () => void
   onCancel: () => void
 }) {
+  const u = ui()
   return (
     <div
       style={{
         position: 'absolute',
         inset: 0,
-        background: 'rgba(0,0,0,0.55)',
+        background: u.backdrop,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
       }}
     >
-      <div style={{ width: 480, maxWidth: '90%', background: '#161c28', borderRadius: 12, padding: 20 }}>
+      <div style={{ width: 480, maxWidth: '90%', background: u.card, color: u.text, borderRadius: 12, padding: 20 }}>
         <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 12 }}>
           {kind === 'text' ? 'Notitie bewerken' : 'Bijschrift bewerken'}
         </div>
@@ -3089,7 +3107,7 @@ function EditPanel({
             value={value}
             onChange={(e) => onChange(e.target.value)}
             placeholder="Schrijf een herinnering…"
-            style={{ ...field, height: 200, resize: 'vertical' }}
+            style={{ ...field(u), height: 200, resize: 'vertical' }}
           />
         ) : (
           <input
@@ -3097,12 +3115,12 @@ function EditPanel({
             value={value}
             onChange={(e) => onChange(e.target.value)}
             placeholder="Bijschrift bij de foto"
-            style={field}
+            style={field(u)}
           />
         )}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 14 }}>
-          <button onClick={onCancel} style={ghostBtn}>Annuleren</button>
-          <button onClick={onSubmit} disabled={busy} style={primaryBtn}>
+          <button onClick={onCancel} style={ghostBtn(u)}>Annuleren</button>
+          <button onClick={onSubmit} disabled={busy} style={primaryBtn(u)}>
             {busy ? 'Bezig…' : 'Opslaan'}
           </button>
         </div>
@@ -3124,6 +3142,7 @@ function EventDialog({
   onSubmit: () => void
   onCancel: () => void
 }) {
+  const u = ui()
   const endBeforeStart = form.endAt !== '' && form.endAt < form.startAt
   const invalid = !form.title.trim() || !form.startAt || endBeforeStart
   // Belang-rating: bij bewerken kan de size fijn-afgesteld zijn (Shift-slepen op
@@ -3140,7 +3159,7 @@ function EventDialog({
       style={{
         position: 'absolute',
         inset: 0,
-        background: 'rgba(0,0,0,0.55)',
+        background: u.backdrop,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -3148,7 +3167,7 @@ function EventDialog({
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        style={{ width: 480, maxWidth: '90%', background: '#161c28', borderRadius: 12, padding: 20 }}
+        style={{ width: 480, maxWidth: '90%', background: u.card, color: u.text, borderRadius: 12, padding: 20 }}
       >
         <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 12 }}>
           {form.mode === 'create' ? (form.atDate ? 'Nieuw jaar — eerste memory' : 'Nieuwe memory') : 'Memory bewerken'}
@@ -3158,39 +3177,39 @@ function EventDialog({
           value={form.title}
           onChange={(e) => onChange({ title: e.target.value })}
           placeholder="Titel van de memory"
-          style={field}
+          style={field(u)}
         />
         <div style={{ display: 'flex', gap: 12, marginTop: 12 }}>
-          <label style={dateLabel}>
+          <label style={dateLabel(u)}>
             Begindatum
             <input
               type="date"
               value={form.startAt}
               onChange={(e) => onChange({ startAt: e.target.value })}
-              style={{ ...field, marginTop: 4 }}
+              style={{ ...field(u), marginTop: 4 }}
             />
           </label>
-          <label style={dateLabel}>
+          <label style={dateLabel(u)}>
             Einddatum (optioneel)
             <input
               type="date"
               value={form.endAt}
               min={form.startAt || undefined}
               onChange={(e) => onChange({ endAt: e.target.value })}
-              style={{ ...field, marginTop: 4 }}
+              style={{ ...field(u), marginTop: 4 }}
             />
           </label>
         </div>
         {endBeforeStart && (
-          <div style={{ color: '#f0a0a0', fontSize: 13, marginTop: 8 }}>
+          <div style={{ color: u.errorText, fontSize: 13, marginTop: 8 }}>
             De einddatum ligt vóór de begindatum.
           </div>
         )}
         <div style={{ marginTop: 14 }}>
-          <div style={{ fontSize: 13, color: '#9aa6bd', marginBottom: 6 }}>
+          <div style={{ fontSize: 13, color: u.hintLabel, marginBottom: 6 }}>
             Hoe bijzonder?
             {isCustomSize && (
-              <span style={{ color: '#8794aa', marginLeft: 8 }}>· aangepast ({curSize})</span>
+              <span style={{ color: u.hintMuted, marginLeft: 8 }}>· aangepast ({curSize})</span>
             )}
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
@@ -3208,13 +3227,13 @@ function EventDialog({
                     borderRadius: 8,
                     cursor: 'pointer',
                     textAlign: 'center',
-                    border: active ? '1px solid #6ea8ff' : '1px solid #2a3345',
-                    background: active ? 'rgba(110,168,255,0.16)' : '#1b2230',
-                    color: active ? '#dfe7f5' : '#aab4c8',
+                    border: active ? `1px solid ${u.primarySoft}` : `1px solid ${u.borderSoft}`,
+                    background: active ? u.primaryFaintBg : u.choiceBg,
+                    color: active ? u.btnText : u.chipText,
                   }}
                 >
                   <div style={{ fontWeight: 600, fontSize: 14 }}>{c.label}</div>
-                  <div style={{ fontSize: 11, color: '#8794aa', marginTop: 2 }}>{c.hint}</div>
+                  <div style={{ fontSize: 11, color: u.hintMuted, marginTop: 2 }}>{c.hint}</div>
                 </button>
               )
             })}
@@ -3228,7 +3247,7 @@ function EventDialog({
               gap: 10,
               marginTop: 16,
               cursor: 'pointer',
-              color: '#cfd6e4',
+              color: u.textSoft,
               fontSize: 14,
             }}
           >
@@ -3239,15 +3258,15 @@ function EventDialog({
             />
             <span>
               🔨 Deze memory is nog <strong>in aanbouw</strong>
-              <span style={{ color: '#8794aa', marginLeft: 6, fontSize: 12 }}>
+              <span style={{ color: u.hintMuted, marginLeft: 6, fontSize: 12 }}>
                 · toont een badge in de jaar-view
               </span>
             </span>
           </label>
         )}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 14 }}>
-          <button onClick={onCancel} style={ghostBtn}>Annuleren</button>
-          <button onClick={onSubmit} disabled={busy || invalid} style={primaryBtn}>
+          <button onClick={onCancel} style={ghostBtn(u)}>Annuleren</button>
+          <button onClick={onSubmit} disabled={busy || invalid} style={primaryBtn(u)}>
             {busy ? 'Bezig…' : 'Opslaan'}
           </button>
         </div>
@@ -3269,29 +3288,30 @@ function Composer({
   onSubmit: () => void
   onCancel: () => void
 }) {
+  const u = ui()
   return (
     <div
       style={{
         position: 'absolute',
         inset: 0,
-        background: 'rgba(0,0,0,0.55)',
+        background: u.backdrop,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
       }}
     >
-      <div style={{ width: 480, maxWidth: '90%', background: '#161c28', borderRadius: 12, padding: 20 }}>
+      <div style={{ width: 480, maxWidth: '90%', background: u.card, color: u.text, borderRadius: 12, padding: 20 }}>
         <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 12 }}>Nieuwe notitie</div>
         <textarea
           autoFocus
           value={value}
           onChange={(e) => onChange(e.target.value)}
           placeholder="Schrijf een herinnering…"
-          style={{ ...field, height: 140, resize: 'vertical' }}
+          style={{ ...field(u), height: 140, resize: 'vertical' }}
         />
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 14 }}>
-          <button onClick={onCancel} style={ghostBtn}>Annuleren</button>
-          <button onClick={onSubmit} disabled={busy || !value.trim()} style={primaryBtn}>
+          <button onClick={onCancel} style={ghostBtn(u)}>Annuleren</button>
+          <button onClick={onSubmit} disabled={busy || !value.trim()} style={primaryBtn(u)}>
             {busy ? 'Bezig…' : 'Opslaan'}
           </button>
         </div>
@@ -3313,13 +3333,14 @@ function SearchPanel({
   onPick: (r: SearchResult) => void
   onClose: () => void
 }) {
+  const u = ui()
   return (
     <div
       onClick={onClose}
       style={{
         position: 'absolute',
         inset: 0,
-        background: 'rgba(0,0,0,0.5)',
+        background: u.backdropSoft,
         display: 'flex',
         justifyContent: 'center',
         paddingTop: 80,
@@ -3327,7 +3348,7 @@ function SearchPanel({
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        style={{ width: 560, maxWidth: '92%', background: '#161c28', borderRadius: 12, padding: 16, height: 'fit-content' }}
+        style={{ width: 560, maxWidth: '92%', background: u.card, color: u.text, borderRadius: 12, padding: 16, height: 'fit-content' }}
       >
         <input
           autoFocus
@@ -3335,11 +3356,11 @@ function SearchPanel({
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={(e) => e.key === 'Escape' && onClose()}
           placeholder="Zoek in je herinneringen…"
-          style={field}
+          style={field(u)}
         />
         <div style={{ marginTop: 10, maxHeight: 360, overflowY: 'auto' }}>
           {query.trim() && results.length === 0 && (
-            <div style={{ color: '#8a97b0', font: '13px sans-serif', padding: '10px 4px' }}>
+            <div style={{ color: u.textMuted, font: '13px sans-serif', padding: '10px 4px' }}>
               Niets gevonden.
             </div>
           )}
@@ -3354,14 +3375,14 @@ function SearchPanel({
                 padding: '10px 12px',
                 marginTop: 6,
                 borderRadius: 8,
-                border: '1px solid #2c3650',
-                background: '#0e1420',
-                color: '#e6ebf5',
+                border: `1px solid ${u.border}`,
+                background: u.inputBg,
+                color: u.textCrisp,
                 cursor: 'pointer',
                 font: '14px sans-serif',
               }}
             >
-              <div style={{ color: '#8a97b0', fontSize: 12, marginBottom: 2 }}>
+              <div style={{ color: u.textMuted, fontSize: 12, marginBottom: 2 }}>
                 {r.eventTitle ?? 'Memory'}
               </div>
               {r.snippet}
@@ -3373,32 +3394,32 @@ function SearchPanel({
   )
 }
 
-const searchBtn: React.CSSProperties = {
+const searchBtn = (u: UiPalette): React.CSSProperties => ({
   position: 'absolute',
   top: 16,
   left: 16,
   padding: '8px 16px',
   borderRadius: 20,
-  border: '1px solid #2c3650',
-  background: 'rgba(22,28,40,0.85)',
-  color: '#cfd6e4',
+  border: `1px solid ${u.floatBtnBorder}`,
+  background: u.floatBtnBg,
+  color: u.floatBtnSoftText,
   font: '13px sans-serif',
   cursor: 'pointer',
-}
+})
 
-const fitBtn: React.CSSProperties = {
+const fitBtn = (u: UiPalette): React.CSSProperties => ({
   position: 'absolute',
   left: 20,
   bottom: 20,
   padding: '9px 16px',
   borderRadius: 20,
-  border: '1px solid rgba(255,255,255,0.18)',
-  background: 'rgba(22,28,40,0.6)',
-  color: '#e6eaf2',
+  border: `1px solid ${u.fitBtnBorder}`,
+  background: u.fitBtnBg,
+  color: u.fitBtnText,
   font: '13px sans-serif',
   cursor: 'pointer',
   backdropFilter: 'blur(4px)',
-}
+})
 
 /** Terugknop linksboven: een subtiele cirkel met een chevron-links. In rust een
  * vage, bijna transparante cirkel met een zwak-witte pijl (niet storend); bij
@@ -3406,6 +3427,7 @@ const fitBtn: React.CSSProperties = {
  * tandwiel — groot genoeg om ook op touch te tikken. */
 function BackButton({ onClick }: { onClick: () => void }) {
   const [hover, setHover] = useState(false)
+  const u = ui()
   return (
     <button
       onClick={onClick}
@@ -3413,12 +3435,12 @@ function BackButton({ onClick }: { onClick: () => void }) {
       onMouseLeave={() => setHover(false)}
       title="Een niveau terug (Esc)"
       aria-label="Een niveau terug"
-      style={{ ...backBtn, ...(hover ? backBtnHover : null) }}
+      style={{ ...backBtn(u), ...(hover ? backBtnHover(u) : null) }}
     >
       <svg width={20} height={20} viewBox="0 0 24 24" fill="none" aria-hidden>
         <path
           d="M15 5l-7 7 7 7"
-          stroke={hover ? '#ffffff' : 'rgba(255,255,255,0.45)'}
+          stroke={hover ? u.floatBtnText : u.backArrow}
           strokeWidth={2.2}
           strokeLinecap="round"
           strokeLinejoin="round"
@@ -3431,6 +3453,17 @@ function BackButton({ onClick }: { onClick: () => void }) {
 /** Pixi-hex (0xrrggbb) → CSS-hex ('#rrggbb'), voor de thema-previews. */
 function hexColor(c: number): string {
   return `#${c.toString(16).padStart(6, '0')}`
+}
+
+/** Zet de DOM-achtergrond (html/body/#root) op de thema-achtergrondkleur, zodat
+ * de hardcoded donkere `#0a0a0f` uit index.html niet doorschemert/flitst bij
+ * resize of opstart onder lichte thema's. */
+function applyDomBackground(): void {
+  const bg = hexColor(THEME.colors.appBg)
+  document.documentElement.style.background = bg
+  document.body.style.background = bg
+  const root = document.getElementById('root')
+  if (root) root.style.background = bg
 }
 
 /** Debug (F9): klein fps-tellertje dat de Pixi-ticker van de actieve engine
@@ -3486,11 +3519,12 @@ function MaterializationOverlay({
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
   const created = report.yearsCreated + report.eventsCreated
+  const u = ui()
   return (
-    <div style={overlayBackdrop} onClick={onClose}>
-      <div style={overlayCard} onClick={(e) => e.stopPropagation()}>
+    <div style={overlayBackdrop(u)} onClick={onClose}>
+      <div style={overlayCard(u)} onClick={(e) => e.stopPropagation()}>
         <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 10 }}>Je vault is doorlopen</div>
-        <div style={{ fontSize: 14, color: '#cfd6e4', lineHeight: 1.6 }}>
+        <div style={{ fontSize: 14, color: u.textSoft, lineHeight: 1.6 }}>
           {created > 0 ? (
             <>
               De app heeft je mappenstructuur doorlopen en de ontbrekende metadata-bestanden
@@ -3514,7 +3548,7 @@ function MaterializationOverlay({
         </div>
 
         {report.loosePhotoFolders.length > 0 && (
-          <div style={{ marginTop: 14, fontSize: 13.5, color: '#cfd6e4', lineHeight: 1.6 }}>
+          <div style={{ marginTop: 14, fontSize: 13.5, color: u.textSoft, lineHeight: 1.6 }}>
             <b>Losse foto's gevonden</b> (foto's direct in een jaarmap, nog niet in een memory).
             Ze zijn zichtbaar als een "Losse foto's"-bundel; maak er een memory van om ze te ordenen:
             <ul style={{ margin: '6px 0 0', paddingLeft: 20 }}>
@@ -3531,7 +3565,7 @@ function MaterializationOverlay({
         )}
 
         {report.errors.length > 0 && (
-          <div style={{ marginTop: 14, fontSize: 13.5, color: '#f3b0b0', lineHeight: 1.6 }}>
+          <div style={{ marginTop: 14, fontSize: 13.5, color: u.errorListText, lineHeight: 1.6 }}>
             <b>Kon deze mappen niet bijwerken</b> (bijvoorbeeld alleen-lezen):
             <ul style={{ margin: '6px 0 0', paddingLeft: 20 }}>
               {report.errors.slice(0, 12).map((e, i) => (
@@ -3545,7 +3579,7 @@ function MaterializationOverlay({
         )}
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 18 }}>
-          <button onClick={onClose} style={{ ...fabBtn, background: '#3b82f6' }}>
+          <button onClick={onClose} style={{ ...fabBtn(u), background: u.primary }}>
             Begrepen
           </button>
         </div>
@@ -3554,32 +3588,34 @@ function MaterializationOverlay({
   )
 }
 
-const overlayBackdrop: React.CSSProperties = {
+const overlayBackdrop = (u: UiPalette): React.CSSProperties => ({
   position: 'absolute',
   inset: 0,
-  background: 'rgba(0,0,0,0.6)',
+  background: u.backdropHeavy,
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
   zIndex: 1200,
-}
+})
 
-const overlayCard: React.CSSProperties = {
+const overlayCard = (u: UiPalette): React.CSSProperties => ({
   width: 560,
   maxWidth: '92%',
   maxHeight: '84vh',
   overflowY: 'auto',
-  background: '#161c28',
-  border: '1px solid #2c3650',
+  background: u.card,
+  border: `1px solid ${u.border}`,
   borderRadius: 12,
   padding: '20px 22px',
+  color: u.text,
   boxShadow: '0 20px 60px rgba(0,0,0,0.6)',
-}
+})
 
 /** Titel bovenin die bij een niveau-wissel zoomt + crossfadet, in dezelfde richting
  * als de scene-transitie: 'in' (dieper) = de nieuwe titel groeit uit het klein en de
  * oude zwelt weg; 'out' (terug) = de nieuwe komt uit het groot en de oude krimpt weg. */
 function TitleBar({ text, dir }: { text: string; dir: 'in' | 'out' }) {
+  const u = ui()
   const idRef = useRef(0)
   const prev = useRef(text)
   const [entries, setEntries] = useState<{ id: number; text: string; dir: 'in' | 'out' }[]>([
@@ -3603,7 +3639,7 @@ function TitleBar({ text, dir }: { text: string; dir: 'in' | 'out' }) {
           <div
             key={en.id}
             style={{
-              ...titleStyle,
+              ...titleStyle(u),
               animation: isNew
                 ? 'ml-title-enter 380ms ease-out both'
                 : 'ml-title-exit 340ms ease-in both',
@@ -3629,7 +3665,7 @@ function TitleBar({ text, dir }: { text: string; dir: 'in' | 'out' }) {
   )
 }
 
-const titleStyle: React.CSSProperties = {
+const titleStyle = (u: UiPalette): React.CSSProperties => ({
   position: 'absolute',
   top: 18,
   left: '50%',
@@ -3643,44 +3679,44 @@ const titleStyle: React.CSSProperties = {
   fontSize: 30,
   fontWeight: 600,
   letterSpacing: 0.5,
-  color: 'rgba(245,247,251,0.92)',
-  textShadow: '0 2px 12px rgba(0,0,0,0.6)',
+  color: u.canvasTitleText,
+  textShadow: u.canvasTitleShadow,
   pointerEvents: 'none',
   zIndex: 5,
-}
+})
 
-const toastStyle: React.CSSProperties = {
+const toastStyle = (u: UiPalette): React.CSSProperties => ({
   position: 'absolute',
   bottom: 24,
   left: '50%',
   transform: 'translateX(-50%)',
   padding: '10px 18px',
   borderRadius: 12,
-  background: 'rgba(22,28,40,0.95)',
-  border: '1px solid #2c3650',
-  color: '#e6eaf2',
+  background: u.toastBg,
+  border: `1px solid ${u.border}`,
+  color: u.toastText,
   font: '13px sans-serif',
   boxShadow: '0 6px 20px rgba(0,0,0,0.5)',
   zIndex: 1100,
   pointerEvents: 'none',
-}
+})
 
-const gearBtn: React.CSSProperties = {
+const gearBtn = (u: UiPalette): React.CSSProperties => ({
   position: 'absolute',
   top: 16,
   right: 16,
   width: 38,
   height: 38,
   borderRadius: 19,
-  border: '1px solid #2c3650',
-  background: 'rgba(22,28,40,0.85)',
-  color: '#cfd6e4',
+  border: `1px solid ${u.floatBtnBorder}`,
+  background: u.floatBtnBg,
+  color: u.floatBtnSoftText,
   fontSize: 18,
   lineHeight: '1',
   cursor: 'pointer',
-}
+})
 
-const backBtn: React.CSSProperties = {
+const backBtn = (u: UiPalette): React.CSSProperties => ({
   position: 'absolute',
   top: 16,
   left: 16,
@@ -3691,63 +3727,63 @@ const backBtn: React.CSSProperties = {
   alignItems: 'center',
   justifyContent: 'center',
   // Rust: vage cirkel, nauwelijks aanwezig. Hover licht 'm op (zie backBtnHover).
-  border: '1px solid rgba(255,255,255,0.10)',
-  background: 'rgba(255,255,255,0.06)',
+  border: `1px solid ${u.backRestBorder}`,
+  background: u.backRestBg,
   padding: 0,
   cursor: 'pointer',
   transition: 'background 140ms ease, border-color 140ms ease',
-}
+})
 
-const backBtnHover: React.CSSProperties = {
-  border: '1px solid #2c3650',
-  background: 'rgba(22,28,40,0.85)',
-}
+const backBtnHover = (u: UiPalette): React.CSSProperties => ({
+  border: `1px solid ${u.floatBtnBorder}`,
+  background: u.floatBtnBg,
+})
 
-const fabBtn: React.CSSProperties = {
+const fabBtn = (u: UiPalette): React.CSSProperties => ({
   padding: '10px 16px',
   borderRadius: 24,
   border: 'none',
-  background: '#3b82f6',
-  color: '#fff',
+  background: u.primary,
+  color: u.primaryText,
   font: '14px sans-serif',
   cursor: 'pointer',
   boxShadow: '0 4px 14px rgba(0,0,0,0.4)',
-}
+})
 
-const field: React.CSSProperties = {
+const field = (u: UiPalette): React.CSSProperties => ({
   width: '100%',
   boxSizing: 'border-box',
   padding: '10px 12px',
   borderRadius: 8,
-  border: '1px solid #2c3650',
-  background: '#0e1420',
-  color: '#fff',
+  border: `1px solid ${u.inputBorder}`,
+  background: u.inputBg,
+  color: u.text,
   font: '15px sans-serif',
-}
+})
 
-const dateLabel: React.CSSProperties = {
+const dateLabel = (u: UiPalette): React.CSSProperties => ({
   flex: 1,
   display: 'flex',
   flexDirection: 'column',
   fontSize: 13,
-  color: '#8a97b0',
-}
+  color: u.textMuted,
+})
 
-const metaLabel: React.CSSProperties = {
+const metaLabel = (u: UiPalette): React.CSSProperties => ({
   display: 'flex',
   flexDirection: 'column',
   fontSize: 13,
-  color: '#8a97b0',
-}
+  color: u.textMuted,
+})
 
-const ghostBtn: React.CSSProperties = {
+const ghostBtn = (u: UiPalette): React.CSSProperties => ({
   padding: '8px 16px',
   borderRadius: 8,
-  border: '1px solid #2c3650',
+  border: `1px solid ${u.btnBorder}`,
   background: 'transparent',
-  color: '#cfd6e4',
+  color: u.textSoft,
   cursor: 'pointer',
-}
+})
 
 function Overlay({
   phase,
@@ -3760,6 +3796,7 @@ function Overlay({
   onPick: () => void
   onCreateFirst: () => void
 }) {
+  const u = ui()
   const box: React.CSSProperties = {
     position: 'absolute',
     inset: 0,
@@ -3770,11 +3807,14 @@ function Overlay({
     gap: 16,
     textAlign: 'center',
     padding: 24,
+    // Expliciet (i.p.v. de witte body-default uit index.html), zodat de koppen
+    // ook onder lichte thema's leesbaar zijn. Dark = ongewijzigd wit.
+    color: u.text,
   }
   if (phase === 'loading') {
     return (
       <div style={box}>
-        <div style={{ color: '#8a97b0', font: '14px sans-serif' }}>Laden…</div>
+        <div style={{ color: u.textMuted, font: '14px sans-serif' }}>Laden…</div>
       </div>
     )
   }
@@ -3782,11 +3822,11 @@ function Overlay({
     return (
       <div style={box}>
         <div style={{ fontSize: 28, fontWeight: 700 }}>MemoryLane</div>
-        <div style={{ color: '#8a97b0', maxWidth: 420, font: '14px sans-serif' }}>
+        <div style={{ color: u.textMuted, maxWidth: 420, font: '14px sans-serif' }}>
           Kies de map met je herinneringen. Je mappen op schijf blijven altijd de bron —
           MemoryLane bouwt er alleen een tijdlijn omheen.
         </div>
-        <button onClick={onPick} style={primaryBtn}>
+        <button onClick={onPick} style={primaryBtn(u)}>
           Kies je MemoryLane-map
         </button>
       </div>
@@ -3796,11 +3836,11 @@ function Overlay({
     return (
       <div style={box}>
         <div style={{ fontSize: 22, fontWeight: 700 }}>Nog leeg</div>
-        <div style={{ color: '#8a97b0', maxWidth: 420, font: '14px sans-serif' }}>
+        <div style={{ color: u.textMuted, maxWidth: 420, font: '14px sans-serif' }}>
           Deze map is nog leeg. Maak je eerste memory — het bijbehorende jaar wordt
           automatisch aangemaakt.
         </div>
-        <button onClick={onCreateFirst} style={primaryBtn}>
+        <button onClick={onCreateFirst} style={primaryBtn(u)}>
           + Maak je eerste memory
         </button>
       </div>
@@ -3808,29 +3848,29 @@ function Overlay({
   }
   return (
     <div style={box}>
-      <div style={{ fontSize: 20, fontWeight: 700, color: '#ff8a8a' }}>Er ging iets mis</div>
-      <div style={{ color: '#8a97b0', font: '13px monospace', maxWidth: 520 }}>{message}</div>
+      <div style={{ fontSize: 20, fontWeight: 700, color: u.errorTitle }}>Er ging iets mis</div>
+      <div style={{ color: u.textMuted, font: '13px monospace', maxWidth: 520 }}>{message}</div>
     </div>
   )
 }
 
-const primaryBtn: React.CSSProperties = {
+const primaryBtn = (u: UiPalette): React.CSSProperties => ({
   padding: '10px 20px',
   borderRadius: 8,
   border: 'none',
-  background: '#3b82f6',
-  color: '#fff',
+  background: u.primary,
+  color: u.primaryText,
   font: '15px sans-serif',
   cursor: 'pointer',
-}
+})
 
-const tagInput: React.CSSProperties = {
+const tagInput = (u: UiPalette): React.CSSProperties => ({
   width: '100%',
   boxSizing: 'border-box',
   padding: '8px 10px',
   borderRadius: 8,
-  border: '1px solid #2c3650',
-  background: 'rgba(12,16,24,0.6)',
-  color: '#e6eaf2',
+  border: `1px solid ${u.inputBorder}`,
+  background: u.inputBgSoft,
+  color: u.textBright,
   font: '13px sans-serif',
-}
+})
