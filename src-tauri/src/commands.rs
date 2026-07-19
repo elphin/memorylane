@@ -12,7 +12,7 @@ use crate::index::{
     self, DensityPoint, EventDetail, SearchResult, YearDetail, YearPhoto, YearSummary,
 };
 use crate::media::{self, cache::Tier};
-use crate::model::{CanvasItem, IndexError, VaultModel};
+use crate::model::{CanvasItem, IndexError, ThemeChoice, VaultModel};
 use crate::vault;
 use crate::vault::writer;
 
@@ -317,6 +317,44 @@ impl VaultService {
                 .ok_or_else(|| format!("jaar {year_id} niet gevonden"))?
         };
         writer::set_year_size_factor(&vault, &folder, factor).map_err(|e| e.to_string())?;
+        self.rescan()?;
+        Ok(())
+    }
+
+    /// Zet (of wist bij `None`/leeg) het thema van een jaar (file first, rescan).
+    pub fn set_year_theme(
+        &self,
+        year_id: &str,
+        theme: Option<&ThemeChoice>,
+    ) -> Result<(), String> {
+        let vault = self.current_vault()?;
+        let folder = {
+            let conn = self.conn.lock().map_err(lock_err)?;
+            index::year_folder(&conn, year_id)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("jaar {year_id} niet gevonden"))?
+        };
+        writer::set_year_theme(&vault, &folder, theme).map_err(|e| e.to_string())?;
+        self.rescan()?;
+        Ok(())
+    }
+
+    /// Zet (of wist bij `None`/leeg) het thema van een event (file first, rescan).
+    /// Synthetische events ("Losse foto's") hebben geen eigen `_event.md`; de
+    /// writer slaat die netjes over (zelfde guard als de bestaande curatie).
+    pub fn set_event_theme(
+        &self,
+        event_id: &str,
+        theme: Option<&ThemeChoice>,
+    ) -> Result<(), String> {
+        let vault = self.current_vault()?;
+        let folder = {
+            let conn = self.conn.lock().map_err(lock_err)?;
+            index::event_folder(&conn, event_id)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("event {event_id} niet gevonden"))?
+        };
+        writer::set_event_theme(&vault, &folder, theme).map_err(|e| e.to_string())?;
         self.rescan()?;
         Ok(())
     }
@@ -802,6 +840,26 @@ pub fn set_year_size_factor(
     state.set_year_size_factor(&year_id, factor)
 }
 
+/// Zet (of wist bij `None`/leeg) het thema van een jaar (personalisatie-cascade).
+#[tauri::command]
+pub fn set_year_theme(
+    state: State<VaultService>,
+    year_id: String,
+    theme: Option<ThemeChoice>,
+) -> Result<(), String> {
+    state.set_year_theme(&year_id, theme.as_ref())
+}
+
+/// Zet (of wist bij `None`/leeg) het thema van een event (personalisatie-cascade).
+#[tauri::command]
+pub fn set_event_theme(
+    state: State<VaultService>,
+    event_id: String,
+    theme: Option<ThemeChoice>,
+) -> Result<(), String> {
+    state.set_event_theme(&event_id, theme.as_ref())
+}
+
 #[tauri::command]
 pub fn delete_item(state: State<VaultService>, item_id: String) -> Result<(), String> {
     state.delete_item(&item_id)
@@ -927,6 +985,43 @@ mod tests {
         service.set_year_cover("y24", None).unwrap();
         let years = service.with_conn(index::list_years).unwrap();
         assert_eq!(years.iter().find(|y| y.id == "y24").unwrap().pinned_cover, None);
+    }
+
+    #[test]
+    fn year_and_event_theme_set_and_clear_via_service() {
+        let tmp = tempfile::tempdir().unwrap();
+        let service = service_with_photo(tmp.path());
+        let theme = ThemeChoice {
+            id: Some("warm-linen".into()),
+            accent: Some("#c47b4f".into()),
+            ..ThemeChoice::default()
+        };
+
+        // Jaar-thema: file-first + rescan → zichtbaar in list_years én als
+        // year_theme op get_event (cascade).
+        service.set_year_theme("y24", Some(&theme)).unwrap();
+        let years = service.with_conn(index::list_years).unwrap();
+        assert_eq!(years[0].theme.as_ref(), Some(&theme));
+        let ym = std::fs::read_to_string(tmp.path().join("2024/_year.md")).unwrap();
+        assert!(ym.contains("theme: {id: warm-linen, accent: \"#c47b4f\"}"), "{ym}");
+
+        // Event-thema.
+        let ev_theme = ThemeChoice { id: Some("kodachrome".into()), ..ThemeChoice::default() };
+        service.set_event_theme("ev1", Some(&ev_theme)).unwrap();
+        let ed = service.with_conn(|c| index::get_event(c, "ev1")).unwrap().unwrap();
+        assert_eq!(ed.event.theme.as_ref(), Some(&ev_theme));
+        assert_eq!(ed.year_theme.as_ref(), Some(&theme), "year_theme voor de cascade");
+
+        // Wissen → velden weg uit frontmatter én index.
+        service.set_year_theme("y24", None).unwrap();
+        service.set_event_theme("ev1", None).unwrap();
+        let years = service.with_conn(index::list_years).unwrap();
+        assert!(years[0].theme.is_none());
+        let ed = service.with_conn(|c| index::get_event(c, "ev1")).unwrap().unwrap();
+        assert!(ed.event.theme.is_none());
+        assert!(ed.year_theme.is_none());
+        let ym = std::fs::read_to_string(tmp.path().join("2024/_year.md")).unwrap();
+        assert!(!ym.contains("theme"), "geen spoor in _year.md: {ym}");
     }
 
     #[test]

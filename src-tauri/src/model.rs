@@ -76,6 +76,21 @@ impl EventKind {
     }
 }
 
+/// Thema-keuze van een jaar of event (personalisatie). Alle subvelden zijn
+/// opake strings: de thema-registry leeft in de frontend; Rust valideert niet.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThemeChoice {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title_font: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Location {
     pub lat: f64,
@@ -104,6 +119,9 @@ pub struct Year {
     /// event-`size`-ratings intact.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size_factor: Option<f64>,
+    /// Thema-keuze van dit jaar (personalisatie-cascade). None = erven van de app.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<ThemeChoice>,
 }
 
 /// Een gebeurtenis (`_event.md`).
@@ -132,6 +150,9 @@ pub struct Event {
     /// "In aanbouw" (under construction): memory nog niet af. Afwezig = false.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub under_construction: Option<bool>,
+    /// Thema-keuze van dit event (personalisatie-cascade). None = erven van het jaar.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<ThemeChoice>,
     /// Id van het jaar waaronder dit event valt.
     pub year_id: String,
     /// Vault-relatief pad naar de eventmap (forward slashes).

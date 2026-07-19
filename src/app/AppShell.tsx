@@ -17,8 +17,9 @@ import { createBackend } from '../lib/backend'
 import { RenderEngine } from '../render/core/engine'
 import { loadThemeFonts } from '../theme/fonts'
 import { THEMES, themeById } from '../theme/registry'
+import { ACCENT_SWATCHES, TITLE_FONTS, resolveTheme, type ThemeChoiceLike } from '../theme/resolve'
 import { THEME, setActiveTheme } from '../theme/tokens'
-import { ui, type UiPalette } from '../theme/ui'
+import { UI_DARK, UI_LIGHT, ui, type UiPalette } from '../theme/ui'
 import { EventScene } from '../render/scenes/event'
 import type { NodePosition } from '../render/scenes/scene'
 import { Screensaver } from './Screensaver'
@@ -300,8 +301,19 @@ export function AppShell() {
   const [gridSort, setGridSortMode] = useState<'date' | 'name' | 'random'>('date')
   const [settings, setSettings] = useState<Settings>(loadSettings)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  // Thema-kiezer voor het huidige jaar (L1) of event (L2): klein overlay-paneel,
+  // keuzes worden direct toegepast (live preview via scene-herbouw op de plek).
+  const [themePanel, setThemePanel] = useState<null | 'year' | 'event'>(null)
+  // De huidige keuze van het open paneel (state-spiegel van currentThemeChoicesRef).
+  const [themePanelValue, setThemePanelValue] = useState<ThemeChoiceLike | null>(null)
+  // Serialisatie-ketting voor thema-writes (volgorde-garantie bij snel klikken).
+  const themeWriteChainRef = useRef<Promise<void>>(Promise.resolve())
   // Debug: fps-tellertje (F9) voor in-app perf-metingen op de echte scenes.
   const [showFps, setShowFps] = useState(false)
+  // uiMode van het thema van het HUIDIGE niveau (kan afwijken van het
+  // app-thema, bijv. een donker Kodachrome-jaar in een lichte app) — stuurt de
+  // over-het-canvas zwevende titel.
+  const [sceneUiMode, setSceneUiMode] = useState<'dark' | 'light'>('dark')
   const [vaultPath, setVaultPath] = useState<string | null>(null)
   // Titel bovenin: "Memory Lane" (overzicht), het jaar, of de eventnaam. `dir`
   // bepaalt de richting van de zoom/crossfade (in = dieper, out = terug).
@@ -394,6 +406,55 @@ export function AppShell() {
     if (patch.squarePhotos !== undefined && levelRef.current === 'event' && currentEventRef.current) {
       void enterEventRef.current(currentEventRef.current)
     }
+  }
+
+  // Open de thema-kiezer voor het huidige jaar (L1) of event (L2). Synthetische
+  // "Losse foto's"-bundels hebben geen eigen _event.md → geen thema mogelijk
+  // (zelfde regel als de bestaande curatie).
+  const openThemePanel = (scope: 'year' | 'event'): void => {
+    if (scope === 'event' && currentEventInfoRef.current?.synthetic) {
+      setToast('Losse foto’s — maak er eerst een memory van om een thema te kiezen')
+      return
+    }
+    setThemePanelValue(
+      (scope === 'year' ? currentThemeChoicesRef.current.year : currentThemeChoicesRef.current.event) ?? null,
+    )
+    setThemePanel(scope)
+  }
+
+  // Eén thema-keuze van het open paneel toepassen: direct wegschrijven naar de
+  // frontmatter (file-first + rescan in de backend) en de scene op zijn plaats
+  // herbouwen — dat ís de live preview. "Geërfd" (null) wist het veld weer.
+  // Writes worden geserialiseerd (snel doorklikken mag de schrijfvolgorde niet
+  // omdraaien) en bij een fout wordt de optimistische update teruggedraaid.
+  const changeScopeTheme = (choice: ThemeChoiceLike | null): void => {
+    const scope = themePanel
+    if (!scope) return
+    setThemePanelValue(choice)
+    themeWriteChainRef.current = themeWriteChainRef.current.then(async () => {
+      const backend = backendRef.current
+      if (!backend) return
+      const prev =
+        (scope === 'year' ? currentThemeChoicesRef.current.year : currentThemeChoicesRef.current.event) ?? null
+      try {
+        if (scope === 'year') {
+          const yid = currentYearRef.current
+          if (!yid) return
+          currentThemeChoicesRef.current = { ...currentThemeChoicesRef.current, year: choice }
+          await backend.setYearTheme(yid, choice)
+        } else {
+          const eid = currentEventRef.current
+          if (!eid) return
+          currentThemeChoicesRef.current = { ...currentThemeChoicesRef.current, event: choice }
+          await backend.setEventTheme(eid, choice)
+        }
+        refreshCurrentSceneRef.current()
+      } catch (e) {
+        currentThemeChoicesRef.current = { ...currentThemeChoicesRef.current, [scope]: prev }
+        setThemePanelValue(prev)
+        setToast(String(e))
+      }
+    })
   }
 
   // App-fullscreen aan/uit: OS-venster fullscreen + alle chrome weg. Raakt de
@@ -571,6 +632,9 @@ export function AppShell() {
   const currentYearRef = useRef<string | null>(null)
   const currentEventRef = useRef<string | null>(null)
   const currentEventInfoRef = useRef<EventInfo | null>(null)
+  // Rauwe thema-keuzes (jaar + event) van het open event, zodat de focus-scene
+  // (L3) en een snap-herbouw vers kunnen resolven tegen het actuele app-thema.
+  const currentThemeChoicesRef = useRef<{ year?: ThemeChoiceLike | null; event?: ThemeChoiceLike | null }>({})
   const currentYearCoverRef = useRef<string | null>(null) // item-id van de jaar-cover
   const currentItemsRef = useRef<Item[]>([])
   const entryZoomRef = useRef(1)
@@ -596,6 +660,8 @@ export function AppShell() {
   // Themawissel: activeert het thema en herbouwt de actieve scene op zijn plaats
   // (zelfde niveau + camera, zonder overgangsanimatie — live preview).
   const applyThemeRef = useRef<(id: string) => void>(() => {})
+  // Alleen de scene-herbouw op de huidige plek (voor de jaar-/event-kiezers).
+  const refreshCurrentSceneRef = useRef<() => void>(() => {})
 
   useEffect(() => {
     let engine: RenderEngine | null = null
@@ -628,6 +694,10 @@ export function AppShell() {
         if (snapCam) old.destroy()
         else engine.exitScene(old.root, 'out', () => old.destroy())
       }
+      // Canvas-achtergrond volgt het thema van het huidige niveau: op L0 het
+      // app-thema (jaar-thema's kleuren alleen hun eigen tegel).
+      engine.app.renderer.background.color = THEME.colors.appBg
+      setSceneUiMode(THEME.uiMode)
       const scene = new LifelineScene(engine, backendRef.current, yearsRef.current, {
         enabled: settingsRef.current.yearTileSlideshow,
         mode: settingsRef.current.yearCoverMode,
@@ -713,6 +783,12 @@ export function AppShell() {
           prev: yi > 0 ? yearsRef.current[yi - 1]?.title : undefined,
           next: yi >= 0 && yi < yearsRef.current.length - 1 ? yearsRef.current[yi + 1]?.title : undefined,
         }
+        // Canvas-achtergrond volgt het geresolvede jaar-thema — zo heeft een
+        // Kodachrome-jaar écht zijn eigen sfeer, en klopt de span-blend (die
+        // tegen het jaar-appBg rekent) met wat er achter staat.
+        const yearT = resolveTheme(detail.year.theme)
+        engine.app.renderer.background.color = yearT.colors.appBg
+        setSceneUiMode(yearT.uiMode)
         const scene = new YearScene(engine, backendRef.current, detail, {
           enabled: settingsRef.current.slideshow,
           speedMs: settingsRef.current.slideshowSpeed * 1000,
@@ -747,6 +823,10 @@ export function AppShell() {
         setHeader({ text: detail.year.title, dir: slide ? 'in' : (dir as 'in' | 'out') })
         applyPanLock()
         currentYearRef.current = yearId
+        currentThemeChoicesRef.current = {
+          ...currentThemeChoicesRef.current,
+          year: detail.year.theme ?? null,
+        }
         // In het snap-pad (themawissel) is de camera net op de oude stand gezet;
         // de entry-referentie (uitzoom-terug/zoomFloor) moet de oorspronkelijke
         // fit-zoom blijven, anders klemt uitzoomen of springt het direct terug.
@@ -844,6 +924,10 @@ export function AppShell() {
           if (snapCam) old.destroy()
           else engine.exitScene(old.root, dir, () => old.destroy())
         }
+        // Canvas-achtergrond volgt het geresolvede event-thema (app → jaar → event).
+        const eventT = resolveTheme(detail.yearTheme, detail.event.theme)
+        engine.app.renderer.background.color = eventT.colors.appBg
+        setSceneUiMode(eventT.uiMode)
         const scene = new EventScene(
           engine,
           backend,
@@ -885,6 +969,7 @@ export function AppShell() {
         currentEventRef.current = eventId
         currentEventInfoRef.current = detail.event
         currentYearCoverRef.current = detail.yearCover ?? null
+        currentThemeChoicesRef.current = { year: detail.yearTheme ?? null, event: detail.event.theme ?? null }
         currentItemsRef.current = detail.items
         // Zie enterYear: entry-referentie alleen bij een echte entry bijwerken.
         if (!snapCam) entryZoomRef.current = engine.pendingZoom
@@ -929,11 +1014,23 @@ export function AppShell() {
         if (snapCam) old.destroy()
         else engine.exitScene(old.root, 'in', () => old.destroy())
       }
-      const scene = new FocusScene(engine, backendRef.current, items, index, (delta, id) => {
-        // Titel meelaten lopen bij stappen (tik óf pijltjestoets).
-        const it = id ? currentItemsRef.current.find((x) => x.id === id) : undefined
-        setHeader({ text: focusTitleFor(it), dir: delta > 0 ? 'in' : 'out' })
-      })
+      // Canvas-achtergrond volgt het event-thema (zelfde scope als L2).
+      const focusT = resolveTheme(currentThemeChoicesRef.current.year, currentThemeChoicesRef.current.event)
+      engine.app.renderer.background.color = focusT.colors.appBg
+      setSceneUiMode(focusT.uiMode)
+      const scene = new FocusScene(
+        engine,
+        backendRef.current,
+        items,
+        index,
+        (delta, id) => {
+          // Titel meelaten lopen bij stappen (tik óf pijltjestoets).
+          const it = id ? currentItemsRef.current.find((x) => x.id === id) : undefined
+          setHeader({ text: focusTitleFor(it), dir: delta > 0 ? 'in' : 'out' })
+        },
+        // Vers resolven (app → jaar → event) zodat een themawissel meetelt.
+        resolveTheme(currentThemeChoicesRef.current.year, currentThemeChoicesRef.current.event),
+      )
       scene.setAnimateSteps(settingsRef.current.l3StepAnimation)
       if (contentFillRef.current) scene.setFullscreen(true)
       sceneRef.current = scene
@@ -962,16 +1059,11 @@ export function AppShell() {
     // (die is éénmalig gezet bij app.init en geen onderdeel van een scene) en
     // herbouw de actieve scene op zijn plaats — zelfde niveau, zelfde camera,
     // zonder overgangsanimatie (live preview, geen "herlaad"-effect).
-    const applyTheme = (id: string): void => {
-      setActiveTheme(themeById(id))
-      // DOM-achtergrond meekleuren met het thema. index.html zet een hardcoded
-      // donker #0a0a0f op html/body/#root — zonder deze override flitst dat bij
-      // resize/opstart onder lichte thema's. body alléén is niet genoeg: #root
-      // ligt erbovenop met dezelfde CSS-achtergrond.
-      applyDomBackground()
-      if (!engine) return
-      engine.app.renderer.background.color = THEME.colors.appBg
-      if (phaseRef.current !== 'ready') return
+    // Herbouw de actieve scene op zijn plaats (zelfde niveau + camera, zonder
+    // overgangsanimatie). Gebruikt door de themawissel én door de per-jaar/
+    // per-event thema-kiezers (live preview na een frontmatter-write + rescan).
+    const refreshCurrentScene = (): void => {
+      if (!engine || phaseRef.current !== 'ready') return
       const cam = { x: engine.camera.x, y: engine.camera.y, zoom: engine.camera.zoom }
       const lvl = levelRef.current
       if (lvl === 'lifeline') {
@@ -984,6 +1076,19 @@ export function AppShell() {
         const itemId = sceneRef.current?.currentId?.()
         if (itemId) enterFocus(itemId, cam)
       }
+    }
+    refreshCurrentSceneRef.current = refreshCurrentScene
+
+    const applyTheme = (id: string): void => {
+      setActiveTheme(themeById(id))
+      // DOM-achtergrond meekleuren met het thema. index.html zet een hardcoded
+      // donker #0a0a0f op html/body/#root — zonder deze override flitst dat bij
+      // resize/opstart onder lichte thema's. body alléén is niet genoeg: #root
+      // ligt erbovenop met dezelfde CSS-achtergrond.
+      applyDomBackground()
+      if (!engine) return
+      engine.app.renderer.background.color = THEME.colors.appBg
+      refreshCurrentScene()
     }
     applyThemeRef.current = applyTheme
 
@@ -1572,8 +1677,9 @@ export function AppShell() {
   // screensaver hoort hier ook bij: dan slaan de globale Esc/'e'-handlers zichzelf
   // over en navigeert er niets onder de screensaver.
   useEffect(() => {
-    overlayOpenRef.current = settingsOpen || searchOpen || screensaverIds !== null || matReport !== null
-  }, [settingsOpen, searchOpen, screensaverIds, matReport])
+    overlayOpenRef.current =
+      settingsOpen || searchOpen || screensaverIds !== null || matReport !== null || themePanel !== null
+  }, [settingsOpen, searchOpen, screensaverIds, matReport, themePanel])
 
   // Korte toast (bijv. "geen foto's gevonden") die vanzelf verdwijnt.
   useEffect(() => {
@@ -1630,6 +1736,10 @@ export function AppShell() {
     lifelineCamRef.current = null
     if (years.length > 0) {
       sceneRef.current?.destroy()
+      // Terug naar L0: achtergrond + titel-uiMode terug naar het app-thema
+      // (je kunt hier vanaf een donker gethemad jaar/event komen).
+      engine.app.renderer.background.color = THEME.colors.appBg
+      setSceneUiMode(THEME.uiMode)
       sceneRef.current = new LifelineScene(engine, backend, years, {
         enabled: settingsRef.current.yearTileSlideshow,
         mode: settingsRef.current.yearCoverMode,
@@ -2074,7 +2184,7 @@ export function AppShell() {
         />
       )}
       {phase === 'ready' && settings.showTitle && !screensaverIds && !fullscreen && (
-        <TitleBar text={header.text} dir={header.dir} />
+        <TitleBar text={header.text} dir={header.dir} mode={sceneUiMode} />
       )}
       {backVisible && <BackButton onClick={() => goBackRef.current()} />}
       {phase === 'ready' && !modal && !editing && !eventForm && !metaForm && !searchOpen && !settingsOpen && !settings.viewMode && !fullscreen && chromeVisible && settings.showSearchButton && (
@@ -2111,6 +2221,26 @@ export function AppShell() {
           onResetSettings={resetAppSettings}
           backend={backendRef.current}
           onImported={() => void rebuildLifeline()}
+        />
+      )}
+      {themePanel && (
+        <ThemePanel
+          scope={themePanel}
+          title={
+            themePanel === 'year'
+              ? `Thema — ${header.text}`
+              : `Thema — ${currentEventInfoRef.current?.title || 'memory'}`
+          }
+          inheritedName={
+            themePanel === 'event' &&
+            currentThemeChoicesRef.current.year?.id &&
+            THEMES.some((t) => t.id === currentThemeChoicesRef.current.year?.id)
+              ? `${themeById(currentThemeChoicesRef.current.year.id).name} (jaar)`
+              : `${themeById(settings.themeId).name} (app)`
+          }
+          value={themePanelValue}
+          onChange={changeScopeTheme}
+          onClose={() => setThemePanel(null)}
         />
       )}
       {screensaverIds && (
@@ -2192,6 +2322,8 @@ export function AppShell() {
           onAddNote={() => setModal('note')}
           onAddPhotos={() => void addPhotos()}
           onEditEvent={openEditEvent}
+          onYearTheme={() => openThemePanel('year')}
+          onEventTheme={() => openThemePanel('event')}
           onLayout={changeLayout}
           onSaveLayout={saveLayoutAsCustom}
           onEdit={startEdit}
@@ -2960,6 +3092,8 @@ function Fab({
   onAddNote,
   onAddPhotos,
   onEditEvent,
+  onYearTheme,
+  onEventTheme,
   onLayout,
   onSaveLayout,
   onEdit,
@@ -2976,6 +3110,8 @@ function Fab({
   onAddNote: () => void
   onAddPhotos: () => void
   onEditEvent: () => void
+  onYearTheme: () => void
+  onEventTheme: () => void
   onLayout: (mode: 'custom' | 'grid' | 'scatter') => void
   onSaveLayout: () => void
   onEdit: () => void
@@ -2997,6 +3133,9 @@ function Fab({
   if (uiLevel === 'year') {
     return (
       <div style={wrap}>
+        <button onClick={onYearTheme} style={{ ...fabBtn(u), background: u.fabNeutralBg }} title="Thema van dit jaar">
+          Thema
+        </button>
         <button onClick={onAddEvent} style={fabBtn(u)}>+ Nieuwe memory</button>
       </div>
     )
@@ -3055,6 +3194,9 @@ function Fab({
         </button>
         <button onClick={onAddPhotos} style={fabBtn(u)}>+ Foto&apos;s</button>
         <button onClick={onAddNote} style={fabBtn(u)}>+ Notitie</button>
+        <button onClick={onEventTheme} style={{ ...fabBtn(u), background: u.fabNeutralBg }} title="Thema van deze memory">
+          Thema
+        </button>
         <button onClick={onEditEvent} style={fabBtn(u)}>Bewerk memory</button>
       </div>
     )
@@ -3455,6 +3597,232 @@ function hexColor(c: number): string {
   return `#${c.toString(16).padStart(6, '0')}`
 }
 
+/** Thema-kiezer voor één niveau (jaar of event). Keuzes worden direct
+ * toegepast — de tijdlijn erachter herbouwt op zijn plek (live preview);
+ * "Geërfd" wist de keuze van dit niveau weer (het veld verdwijnt dan uit de
+ * frontmatter). Bij een event zijn er extra accent-/titelfont-overrides. */
+function ThemePanel({
+  scope,
+  title,
+  inheritedName,
+  value,
+  onChange,
+  onClose,
+}: {
+  scope: 'year' | 'event'
+  title: string
+  inheritedName: string
+  value: ThemeChoiceLike | null
+  onChange: (c: ThemeChoiceLike | null) => void
+  onClose: () => void
+}) {
+  const u = ui()
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') {
+        e.stopPropagation()
+        onClose()
+      }
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  const norm = (c: ThemeChoiceLike): ThemeChoiceLike | null =>
+    c.id || c.accent || c.background || c.titleFont ? c : null
+  const patch = (p: Partial<ThemeChoiceLike>): void => {
+    const next: ThemeChoiceLike = { ...value, ...p }
+    for (const k of Object.keys(next) as (keyof ThemeChoiceLike)[]) {
+      if (next[k] === undefined) delete next[k]
+    }
+    onChange(norm(next))
+  }
+  const tile: React.CSSProperties = {
+    padding: 0,
+    borderRadius: 8,
+    overflow: 'hidden',
+    cursor: 'pointer',
+    textAlign: 'left',
+    background: u.cardAlt,
+  }
+  const chip = (selected: boolean): React.CSSProperties => ({
+    padding: '6px 12px',
+    borderRadius: 8,
+    cursor: 'pointer',
+    background: u.cardAlt,
+    color: u.text,
+    fontSize: 13,
+    border: selected ? `2px solid ${u.primary}` : `2px solid ${u.border}`,
+  })
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: 'absolute',
+        inset: 0,
+        zIndex: 1200, // boven de Fab/zoomknop (zelfde laag als de andere overlays)
+        background: u.backdropSoft,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: 560,
+          maxWidth: '94%',
+          maxHeight: '86vh',
+          overflowY: 'auto',
+          background: u.card,
+          color: u.text,
+          borderRadius: 12,
+          padding: '18px 22px',
+        }}
+      >
+        <div style={{ fontSize: 17, fontWeight: 700, marginBottom: 12 }}>{title}</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
+          <button
+            onClick={() => patch({ id: undefined })}
+            title="Gebruik het thema van het niveau erboven"
+            style={{ ...tile, border: !value?.id ? `2px solid ${u.primary}` : `2px dashed ${u.border}` }}
+          >
+            <div
+              style={{
+                height: 40,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: u.textMuted,
+                fontSize: 12,
+              }}
+            >
+              Geërfd
+            </div>
+            <div
+              style={{
+                padding: '5px 7px',
+                fontSize: 12,
+                color: u.tileText,
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}
+            >
+              {inheritedName}
+            </div>
+          </button>
+          {THEMES.map((t) => (
+            <button
+              key={t.id}
+              onClick={() => patch({ id: t.id })}
+              title={t.name}
+              style={{ ...tile, border: value?.id === t.id ? `2px solid ${u.primary}` : `2px solid ${u.border}` }}
+            >
+              <div
+                style={{
+                  height: 40,
+                  background: hexColor(t.colors.appBg),
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 5,
+                }}
+              >
+                <span
+                  style={{
+                    width: 16,
+                    height: 12,
+                    borderRadius: 2,
+                    background: hexColor(t.colors.surface),
+                    border: `1px solid ${hexColor(t.colors.surfaceStroke)}`,
+                  }}
+                />
+                <span style={{ width: 11, height: 11, borderRadius: 6, background: hexColor(t.colors.accent) }} />
+                <span style={{ width: 16, height: 12, borderRadius: 2, background: hexColor(t.colors.frame) }} />
+              </div>
+              <div
+                style={{
+                  padding: '5px 7px',
+                  fontSize: 12,
+                  color: value?.id === t.id ? u.text : u.tileText,
+                  fontFamily: t.fonts.title,
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                }}
+              >
+                {t.name}
+              </div>
+            </button>
+          ))}
+        </div>
+        {scope === 'event' && (
+          <>
+            <div style={{ fontSize: 13, color: u.textMuted, margin: '14px 0 6px' }}>Accentkleur</div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+              <button
+                onClick={() => patch({ accent: undefined })}
+                title="Geërfd"
+                style={{
+                  width: 28,
+                  height: 28,
+                  borderRadius: 14,
+                  background: u.cardAlt,
+                  color: u.textMuted,
+                  fontSize: 12,
+                  cursor: 'pointer',
+                  border: !value?.accent ? `2px solid ${u.primary}` : `2px solid ${u.border}`,
+                }}
+              >
+                —
+              </button>
+              {ACCENT_SWATCHES.map((c) => (
+                <button
+                  key={c}
+                  onClick={() => patch({ accent: c })}
+                  title={c}
+                  style={{
+                    width: 28,
+                    height: 28,
+                    borderRadius: 14,
+                    background: c,
+                    cursor: 'pointer',
+                    border: value?.accent === c ? `2px solid ${u.primary}` : `2px solid ${u.border}`,
+                  }}
+                />
+              ))}
+            </div>
+            <div style={{ fontSize: 13, color: u.textMuted, margin: '14px 0 6px' }}>Titel-font</div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button onClick={() => patch({ titleFont: undefined })} style={chip(!value?.titleFont)}>
+                Geërfd
+              </button>
+              {TITLE_FONTS.map((f) => (
+                <button
+                  key={f.id}
+                  onClick={() => patch({ titleFont: f.id })}
+                  style={{ ...chip(value?.titleFont === f.id), fontFamily: f.stack }}
+                >
+                  {f.name}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 16 }}>
+          <button onClick={() => onChange(null)} style={ghostBtn(u)}>
+            Herstel naar geërfd
+          </button>
+          <button onClick={onClose} style={primaryBtn(u)}>
+            Klaar
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 /** Zet de DOM-achtergrond (html/body/#root) op de thema-achtergrondkleur, zodat
  * de hardcoded donkere `#0a0a0f` uit index.html niet doorschemert/flitst bij
  * resize of opstart onder lichte thema's. */
@@ -3614,8 +3982,13 @@ const overlayCard = (u: UiPalette): React.CSSProperties => ({
 /** Titel bovenin die bij een niveau-wissel zoomt + crossfadet, in dezelfde richting
  * als de scene-transitie: 'in' (dieper) = de nieuwe titel groeit uit het klein en de
  * oude zwelt weg; 'out' (terug) = de nieuwe komt uit het groot en de oude krimpt weg. */
-function TitleBar({ text, dir }: { text: string; dir: 'in' | 'out' }) {
-  const u = ui()
+// De titel zweeft over het CANVAS (niet over een paneel): zijn kleur volgt
+// daarom de uiMode van het thema van het huidige niveau (`mode`) — een donker
+// Kodachrome-jaar in een lichte app krijgt zo gewoon een lichte titel.
+function TitleBar({ text, dir, mode }: { text: string; dir: 'in' | 'out'; mode: 'dark' | 'light' }) {
+  const base = ui()
+  const scene = mode === 'light' ? UI_LIGHT : UI_DARK
+  const u = { ...base, canvasTitleText: scene.canvasTitleText, canvasTitleShadow: scene.canvasTitleShadow }
   const idRef = useRef(0)
   const prev = useRef(text)
   const [entries, setEntries] = useState<{ id: number; text: string; dir: 'in' | 'out' }[]>([

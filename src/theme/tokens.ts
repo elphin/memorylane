@@ -134,7 +134,7 @@ export const CLASSIC_DARK: ResolvedTheme = {
   },
 }
 
-function cloneTheme(t: ResolvedTheme): ResolvedTheme {
+export function cloneTheme(t: ResolvedTheme): ResolvedTheme {
   return {
     ...t,
     background: { ...t.background },

@@ -9,7 +9,7 @@ use std::path::Path;
 
 use serde::Serialize;
 
-use crate::model::{CanvasItem, ItemType};
+use crate::model::{CanvasItem, ItemType, ThemeChoice};
 
 // ---- Slug- en YAML-helpers (port van v1 generator.ts) --------------------
 
@@ -535,6 +535,28 @@ fn set_fm_block(fm: &mut Vec<String>, key: &str, line_value: Option<String>) {
     }
 }
 
+/// Inline flow-map voor een ThemeChoice (`{id: warm-linen, accent: "#c47b4f"}`):
+/// alleen de gevulde subvelden, in vaste volgorde id/accent/background/titleFont,
+/// waardes via `yaml_str` (quotet o.a. `#`, dus hex-kleuren round-trippen).
+/// `None` als alle subvelden leeg zijn (= "geërfd" → veld verwijderen).
+fn theme_flow_map(theme: &ThemeChoice) -> Option<String> {
+    let mut parts: Vec<String> = Vec::new();
+    let mut push = |key: &str, value: &Option<String>| {
+        if let Some(v) = value.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            parts.push(format!("{key}: {}", yaml_str(v)));
+        }
+    };
+    push("id", &theme.id);
+    push("accent", &theme.accent);
+    push("background", &theme.background);
+    push("titleFont", &theme.title_font);
+    if parts.is_empty() {
+        None
+    } else {
+        Some(format!("{{{}}}", parts.join(", ")))
+    }
+}
+
 /// Inline flow-seq (`["a", "b"]`) met altijd-gequote items (round-trip-veilig via
 /// de eigen parser); `None` als de lijst na trimmen leeg is.
 fn flow_seq(items: &[String]) -> Option<String> {
@@ -704,6 +726,23 @@ pub fn set_event_under_construction(
     })
 }
 
+/// Zet (of wist) het `theme`-veld in `<folder>/_event.md` als één inline
+/// flow-map-regel (`theme: {id: …, accent: "#…"}`). `None` — of een ThemeChoice
+/// zonder gevulde subvelden — verwijdert het veld/blok volledig ("geërfd" laat
+/// geen spoor achter). Via `set_fm_block`, dus een handgeschreven genest
+/// `theme:`-blok wordt netjes gedraind en door de ene regel vervangen. Zelfde
+/// materialisatie-/no-op-gedrag als [`set_event_size`] (via `edit_event_md`).
+pub fn set_event_theme(
+    vault_root: &Path,
+    folder_path: &str,
+    theme: Option<&ThemeChoice>,
+) -> std::io::Result<()> {
+    let value = theme.and_then(theme_flow_map);
+    edit_event_md(vault_root, folder_path, |fm| {
+        set_fm_block(fm, "theme", value);
+    })
+}
+
 /// Zet (of wist bij `None`) de vaste jaar-cover in `<folder>/_year.md`. Bestaat er
 /// geen `_year.md` (of één zonder frontmatter-fences), dan maken we er één met
 /// minimale frontmatter — bewust ZONDER `id`, zodat de scanner deterministisch
@@ -806,6 +845,64 @@ pub fn set_year_size_factor(
         )
     };
     set_fm_field(&mut fm, "sizeFactor", value.as_deref());
+
+    let mut out = String::from("---\n");
+    out.push_str(&fm.join("\n"));
+    out.push_str("\n---\n");
+    if !body.is_empty() {
+        out.push('\n');
+        out.push_str(&body);
+        out.push('\n');
+    }
+    write_atomic(&path, &out)
+}
+
+/// Zet (of wist) het `theme`-veld in `<folder>/_year.md` als één inline
+/// flow-map-regel. `None` — of een ThemeChoice zonder gevulde subvelden —
+/// verwijdert het veld/blok volledig ("geërfd" laat geen spoor achter).
+/// Zelfde `_year.md`-aanmaaklogica als [`set_year_cover`] (bewust ZONDER `id`
+/// → jaar-id blijft stabiel); wissen zonder bestand blijft een no-op.
+pub fn set_year_theme(
+    vault_root: &Path,
+    folder_name: &str,
+    theme: Option<&ThemeChoice>,
+) -> std::io::Result<()> {
+    let path = vault_root.join(folder_name).join("_year.md");
+    let original = std::fs::read_to_string(&path).ok();
+    let value = theme.and_then(theme_flow_map);
+    // Niets te wissen als er geen bestand is → geen loos `_year.md` aanmaken.
+    if value.is_none() && original.is_none() {
+        return Ok(());
+    }
+    let fenced = original.as_ref().and_then(|c| {
+        let n = c.replace("\r\n", "\n");
+        let lines: Vec<String> = n.split('\n').map(|s| s.to_string()).collect();
+        let open = lines.iter().position(|l| l.trim() == "---")?;
+        let close = lines
+            .iter()
+            .enumerate()
+            .skip(open + 1)
+            .find(|(_, l)| l.trim() == "---")
+            .map(|(i, _)| i)?;
+        Some((lines, open, close))
+    });
+    let (mut fm, body): (Vec<String>, String) = if let Some((lines, open, close)) = fenced {
+        (
+            lines[open + 1..close].iter().map(|s| s.to_string()).collect(),
+            lines[close + 1..].join("\n").trim().to_string(),
+        )
+    } else {
+        // Geen fences (bestand ontbreekt of malformed): minimale frontmatter ZONDER id.
+        (
+            vec![
+                "type: year".to_string(),
+                format!("title: \"{folder_name}\""),
+                format!("startAt: {folder_name}-01-01"),
+            ],
+            original.as_deref().unwrap_or("").trim().to_string(),
+        )
+    };
+    set_fm_block(&mut fm, "theme", value);
 
     let mut out = String::from("---\n");
     out.push_str(&fm.join("\n"));
@@ -1685,6 +1782,165 @@ mod tests {
         assert!(!root.join("2024/_year.md").exists());
         set_year_size_factor(root, "2024", None).unwrap();
         assert!(!root.join("2024/_year.md").exists());
+    }
+
+    #[test]
+    fn set_year_theme_roundtrips_via_scanner_and_clears() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("2024")).unwrap();
+        std::fs::write(
+            root.join("2024/_year.md"),
+            "---\nid: y24\ntype: year\ntitle: \"2024\"\nstartAt: 2024-01-01\ncover: mooie-foto\n---\nEen jaarnotitie.\n",
+        )
+        .unwrap();
+
+        // Schrijven: alleen gevulde subvelden, accent met '#' moet round-trippen.
+        let theme = ThemeChoice {
+            id: Some("warm-linen".into()),
+            accent: Some("#c47b4f".into()),
+            background: None,
+            title_font: Some("typewriter".into()),
+        };
+        set_year_theme(root, "2024", Some(&theme)).unwrap();
+        let c1 = std::fs::read_to_string(root.join("2024/_year.md")).unwrap();
+        assert!(
+            c1.contains("theme: {id: warm-linen, accent: \"#c47b4f\", titleFont: typewriter}"),
+            "één inline flow-map-regel, vaste volgorde: {c1}"
+        );
+        // De scanner leest exact dezelfde ThemeChoice terug.
+        let model = crate::vault::scan(root);
+        assert_eq!(model.years[0].theme.as_ref(), Some(&theme));
+        // Overige velden + body intact.
+        let p1 = crate::vault::frontmatter::parse(&c1);
+        assert_eq!(p1.get_str("id").unwrap(), "y24");
+        assert_eq!(p1.get_str("cover").unwrap(), "mooie-foto");
+        assert_eq!(p1.body, "Een jaarnotitie.");
+
+        // None → veld volledig weg ("geërfd"), rest intact.
+        set_year_theme(root, "2024", None).unwrap();
+        let c2 = std::fs::read_to_string(root.join("2024/_year.md")).unwrap();
+        assert!(!c2.contains("theme"), "geen spoor van theme na wissen: {c2}");
+        let p2 = crate::vault::frontmatter::parse(&c2);
+        assert_eq!(p2.get_str("cover").unwrap(), "mooie-foto");
+        assert_eq!(p2.body, "Een jaarnotitie.");
+        let model2 = crate::vault::scan(root);
+        assert!(model2.years[0].theme.is_none());
+    }
+
+    #[test]
+    fn set_year_theme_with_empty_subfields_clears_like_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("2024")).unwrap();
+        std::fs::write(
+            root.join("2024/_year.md"),
+            "---\ntype: year\ntitle: \"2024\"\nstartAt: 2024-01-01\ntheme: {id: warm-linen}\n---\n",
+        )
+        .unwrap();
+        // Alle subvelden leeg → zelfde als None: veld weg.
+        set_year_theme(root, "2024", Some(&ThemeChoice::default())).unwrap();
+        let c = std::fs::read_to_string(root.join("2024/_year.md")).unwrap();
+        assert!(!c.contains("theme"), "lege ThemeChoice wist het veld: {c}");
+    }
+
+    #[test]
+    fn set_year_theme_materializes_missing_year_md_without_id() {
+        // `_year.md` ontbreekt → aanmaken zoals set_year_cover (ZONDER id).
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("2024")).unwrap();
+
+        let theme = ThemeChoice { id: Some("kraft".into()), ..ThemeChoice::default() };
+        set_year_theme(root, "2024", Some(&theme)).unwrap();
+        let c = std::fs::read_to_string(root.join("2024/_year.md")).unwrap();
+        let p = crate::vault::frontmatter::parse(&c);
+        assert_eq!(p.get_str("type").unwrap(), "year");
+        assert_eq!(p.get_str("startAt").unwrap(), "2024-01-01");
+        assert!(p.get_str("id").is_none(), "geen id → scanner leidt stable_id af");
+        let model = crate::vault::scan(root);
+        assert_eq!(model.years[0].theme.as_ref(), Some(&theme));
+
+        // Wissen zonder bestand blijft een no-op (geen loos bestand).
+        std::fs::remove_file(root.join("2024/_year.md")).unwrap();
+        set_year_theme(root, "2024", None).unwrap();
+        assert!(!root.join("2024/_year.md").exists());
+    }
+
+    #[test]
+    fn set_event_theme_roundtrips_and_clears() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let (_id, folder) = create_event(root, "2024", "Reis", "2024-07-01", None, Some(70)).unwrap();
+
+        let theme = ThemeChoice {
+            id: Some("kodachrome".into()),
+            accent: Some("#aa3311".into()),
+            background: Some("kraft".into()),
+            title_font: None,
+        };
+        set_event_theme(root, &folder, Some(&theme)).unwrap();
+        let c1 = std::fs::read_to_string(root.join(&folder).join("_event.md")).unwrap();
+        assert!(
+            c1.contains("theme: {id: kodachrome, accent: \"#aa3311\", background: kraft}"),
+            "flow-map-regel met alleen gevulde subvelden: {c1}"
+        );
+        // Scanner leest exact dezelfde ThemeChoice terug; overige velden intact.
+        let model = crate::vault::scan(root);
+        let ev = model.events.iter().find(|e| !e.synthetic).unwrap();
+        assert_eq!(ev.theme.as_ref(), Some(&theme));
+        assert_eq!(ev.title.as_deref(), Some("Reis"));
+        assert_eq!(ev.size, Some(70));
+
+        // None → veld weg, rest intact.
+        set_event_theme(root, &folder, None).unwrap();
+        let c2 = std::fs::read_to_string(root.join(&folder).join("_event.md")).unwrap();
+        assert!(!c2.contains("theme"), "geen spoor van theme na wissen: {c2}");
+        let p2 = crate::vault::frontmatter::parse(&c2);
+        assert_eq!(p2.get_str("title").unwrap(), "Reis");
+        assert_eq!(p2.get_str("size").unwrap(), "70");
+    }
+
+    #[test]
+    fn set_event_theme_replaces_handwritten_nested_block() {
+        // Een handgeschreven GENEST theme-blok (met onbekend subveld) moet door
+        // een set-aanroep volledig gedraind en vervangen worden door de ene
+        // flow-map-regel — geen verweesde geïndenteerde regels.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("2024/ev")).unwrap();
+        std::fs::write(
+            root.join("2024/ev/_event.md"),
+            "---\nid: ev1\ntype: event\ntitle: Reis\nstartAt: 2024-07-01\ntheme:\n  id: oud-thema\n  glitter: veel\ncategory: reizen\n---\nBeschrijving blijft.\n",
+        )
+        .unwrap();
+
+        let theme = ThemeChoice { id: Some("warm-linen".into()), ..ThemeChoice::default() };
+        set_event_theme(root, "2024/ev", Some(&theme)).unwrap();
+        let c = std::fs::read_to_string(root.join("2024/ev/_event.md")).unwrap();
+        assert!(c.contains("theme: {id: warm-linen}"), "vervangen door flow-map: {c}");
+        assert!(!c.contains("oud-thema"), "oude geneste regels weg: {c}");
+        assert!(!c.contains("glitter"), "onbekend subveld mee gedraind: {c}");
+        let p = crate::vault::frontmatter::parse(&c);
+        assert_eq!(p.get_str("id").unwrap(), "ev1");
+        assert_eq!(p.get_str("category").unwrap(), "reizen");
+        assert_eq!(p.body, "Beschrijving blijft.");
+        // En de scanner leest de nieuwe keuze.
+        let model = crate::vault::scan(root);
+        let ev = model.events.iter().find(|e| !e.synthetic).unwrap();
+        assert_eq!(ev.theme.as_ref(), Some(&theme));
+    }
+
+    #[test]
+    fn set_event_theme_is_noop_for_loose_year_folder() {
+        // Losse-media bundel op jaarniveau: geen _event.md aanmaken (zoals de
+        // bestaande curatie-setters).
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("2024")).unwrap();
+        let theme = ThemeChoice { id: Some("kraft".into()), ..ThemeChoice::default() };
+        set_event_theme(root, "2024", Some(&theme)).unwrap();
+        assert!(!root.join("2024/_event.md").exists());
     }
 
     #[test]

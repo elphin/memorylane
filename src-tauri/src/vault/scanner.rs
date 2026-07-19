@@ -13,7 +13,8 @@ use std::fs;
 use std::path::Path;
 
 use crate::model::{
-    Event, EventKind, IndexError, Item, ItemType, Location, Severity, VaultModel, Year,
+    Event, EventKind, IndexError, Item, ItemType, Location, Severity, ThemeChoice, VaultModel,
+    Year,
 };
 use crate::vault::canvas;
 use crate::vault::frontmatter::{self, Parsed, Yaml};
@@ -80,6 +81,7 @@ fn scan_year(root: &Path, year_path: &Path, folder_name: &str, model: &mut Vault
         .as_ref()
         .and_then(|p| p.get_str("sizeFactor"))
         .and_then(|s| s.trim().parse::<f64>().ok());
+    let theme = parsed.as_ref().and_then(read_theme);
     let year = Year {
         id: id.clone(),
         year: year_num,
@@ -89,6 +91,7 @@ fn scan_year(root: &Path, year_path: &Path, folder_name: &str, model: &mut Vault
         folder_name: folder_name.to_string(),
         cover,
         size_factor,
+        theme,
     };
 
     let entries = match sorted_dir(year_path) {
@@ -182,6 +185,7 @@ fn scan_loose_media_event(
         tags: Vec::new(),
         size: None,
         under_construction: None,
+        theme: None,
         year_id: year.id.clone(),
         folder_path,
         synthetic: true,
@@ -241,6 +245,7 @@ fn scan_event(root: &Path, event_path: &Path, year: &Year, model: &mut VaultMode
             .as_ref()
             .and_then(|p| p.get_str("underConstruction"))
             .map(|s| s.trim().eq_ignore_ascii_case("true")),
+        theme: parsed.as_ref().and_then(read_theme),
         year_id: year.id.clone(),
         folder_path: folder_path.clone(),
         synthetic: false,
@@ -618,6 +623,42 @@ fn infer_event_from_folder(folder_name: &str) -> InferredEvent {
     }
 }
 
+/// Leest het `theme:`-veld uit `_year.md`/`_event.md`-frontmatter. Ondersteunt
+/// zowel een genest blok als een inline flow-map (de parser levert beide als
+/// `Yaml::Map`). Onbekende subvelden worden stil genegeerd; lege subvelden
+/// tellen als afwezig. Een scalar-`theme` (handgeschreven, bijv.
+/// `theme: warm-linen`) wordt tolerant gelezen als `{id: warm-linen}`.
+/// Een volledig leeg resultaat → None (= erven).
+fn read_theme(parsed: &Parsed) -> Option<ThemeChoice> {
+    let value = parsed.get("theme")?;
+    if let Some(map) = value.as_map() {
+        let get = |key: &str| {
+            map.get(key)
+                .and_then(Yaml::as_str)
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        };
+        let theme = ThemeChoice {
+            id: get("id"),
+            accent: get("accent"),
+            background: get("background"),
+            title_font: get("titleFont"),
+        };
+        if theme == ThemeChoice::default() {
+            None
+        } else {
+            Some(theme)
+        }
+    } else {
+        // Scalar → tolerant als thema-id.
+        let id = value.as_str().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())?;
+        Some(ThemeChoice {
+            id: Some(id),
+            ..ThemeChoice::default()
+        })
+    }
+}
+
 fn read_location(parsed: &Parsed, key: &str) -> Option<Location> {
     let map = parsed.get(key)?.as_map()?;
     let lat = map.get("lat").and_then(Yaml::as_f64)?;
@@ -807,6 +848,63 @@ mod tests {
         let items: Vec<_> = model.items.iter().filter(|i| i.event_id == ev.id).collect();
         assert_eq!(items.len(), 2);
         assert_eq!(format!("{}/{}", ev.folder_path, items[0].media.as_deref().unwrap_or("")), "2018/a.jpg");
+    }
+
+    #[test]
+    fn reads_theme_flow_map_and_nested_block() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("2024/ev")).unwrap();
+        // Jaar met inline flow-map (incl. gequote accent met '#').
+        std::fs::write(
+            root.join("2024/_year.md"),
+            "---\ntype: year\ntitle: \"2024\"\nstartAt: 2024-01-01\ntheme: {id: warm-linen, accent: \"#c47b4f\"}\n---\n",
+        )
+        .unwrap();
+        // Event met een handgeschreven GENEST blok + een onbekend subveld.
+        std::fs::write(
+            root.join("2024/ev/_event.md"),
+            "---\ntype: event\ntitle: Reis\nstartAt: 2024-07-01\ntheme:\n  id: kodachrome\n  titleFont: typewriter\n  glitter: veel\n---\n",
+        )
+        .unwrap();
+
+        let model = scan(root);
+        let y = model.years[0].theme.as_ref().expect("jaar-thema gelezen");
+        assert_eq!(y.id.as_deref(), Some("warm-linen"));
+        assert_eq!(y.accent.as_deref(), Some("#c47b4f"));
+        assert!(y.background.is_none());
+        let e = model.events[0].theme.as_ref().expect("event-thema gelezen");
+        assert_eq!(e.id.as_deref(), Some("kodachrome"));
+        assert_eq!(e.title_font.as_deref(), Some("typewriter"));
+        assert!(e.accent.is_none(), "onbekend subveld stil genegeerd, rest intact");
+    }
+
+    #[test]
+    fn scalar_theme_reads_as_id_and_absent_is_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("2024")).unwrap();
+        std::fs::write(
+            root.join("2024/_year.md"),
+            "---\ntype: year\ntitle: \"2024\"\nstartAt: 2024-01-01\ntheme: warm-linen\n---\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join("2025")).unwrap();
+        std::fs::write(
+            root.join("2025/_year.md"),
+            "---\ntype: year\ntitle: \"2025\"\nstartAt: 2025-01-01\n---\n",
+        )
+        .unwrap();
+
+        let model = scan(root);
+        let y24 = model.years.iter().find(|y| y.year == 2024).unwrap();
+        assert_eq!(
+            y24.theme.as_ref().and_then(|t| t.id.as_deref()),
+            Some("warm-linen"),
+            "scalar-theme wordt tolerant gelezen als id"
+        );
+        let y25 = model.years.iter().find(|y| y.year == 2025).unwrap();
+        assert!(y25.theme.is_none(), "geen theme-veld → None (erven)");
     }
 
     #[test]

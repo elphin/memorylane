@@ -8,21 +8,22 @@ use rusqlite::{params, Connection};
 use serde::Serialize;
 
 use crate::model::{
-    CanvasItem, Event, EventKind, IndexError, Item, ItemType, Location, Severity, VaultModel, Year,
+    CanvasItem, Event, EventKind, IndexError, Item, ItemType, Location, Severity, ThemeChoice,
+    VaultModel, Year,
 };
 
 const SCHEMA: &str = r#"
 CREATE TABLE years (
     id TEXT PRIMARY KEY, year INTEGER NOT NULL, title TEXT NOT NULL,
     start_at TEXT NOT NULL, end_at TEXT, folder_name TEXT NOT NULL, cover_photo TEXT,
-    size_factor REAL
+    size_factor REAL, theme TEXT
 );
 CREATE TABLE events (
     id TEXT PRIMARY KEY, year_id TEXT NOT NULL, kind TEXT NOT NULL,
     title TEXT, description TEXT, start_at TEXT NOT NULL, end_at TEXT,
     location_lat REAL, location_lng REAL, location_label TEXT,
     featured_photo TEXT, tags TEXT NOT NULL, folder_path TEXT NOT NULL, size INTEGER,
-    under_construction INTEGER, synthetic INTEGER NOT NULL
+    under_construction INTEGER, theme TEXT, synthetic INTEGER NOT NULL
 );
 CREATE TABLE items (
     id TEXT PRIMARY KEY, event_id TEXT NOT NULL, item_type TEXT NOT NULL,
@@ -69,9 +70,19 @@ pub fn load(conn: &mut Connection, model: &VaultModel) -> rusqlite::Result<()> {
 
     for y in &model.years {
         tx.execute(
-            "INSERT INTO years (id, year, title, start_at, end_at, folder_name, cover_photo, size_factor)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![y.id, y.year, y.title, y.start_at, y.end_at, y.folder_name, y.cover, y.size_factor],
+            "INSERT INTO years (id, year, title, start_at, end_at, folder_name, cover_photo, size_factor, theme)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                y.id,
+                y.year,
+                y.title,
+                y.start_at,
+                y.end_at,
+                y.folder_name,
+                y.cover,
+                y.size_factor,
+                theme_to_json(&y.theme),
+            ],
         )?;
     }
 
@@ -80,8 +91,8 @@ pub fn load(conn: &mut Connection, model: &VaultModel) -> rusqlite::Result<()> {
         tx.execute(
             "INSERT INTO events (id, year_id, kind, title, description, start_at, end_at,
                  location_lat, location_lng, location_label, featured_photo, tags, folder_path, size,
-                 under_construction, synthetic)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16)",
+                 under_construction, theme, synthetic)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
             params![
                 e.id,
                 e.year_id,
@@ -98,6 +109,7 @@ pub fn load(conn: &mut Connection, model: &VaultModel) -> rusqlite::Result<()> {
                 e.folder_path,
                 e.size,
                 e.under_construction,
+                theme_to_json(&e.theme),
                 e.synthetic as i64,
             ],
         )?;
@@ -208,6 +220,8 @@ pub struct YearSummary {
     /// Vaste jaar-cover (item-id) indien geprikt — de tegel is dan statisch (geen
     /// slideshow/willekeurig). None = geen pin.
     pub pinned_cover: Option<String>,
+    /// Thema-keuze van dit jaar (personalisatie-cascade). None = erven van de app.
+    pub theme: Option<ThemeChoice>,
 }
 
 #[derive(Debug, Serialize)]
@@ -228,6 +242,8 @@ pub struct EventSummary {
     pub under_construction: Option<bool>,
     /// True = synthetische "Losse foto's"-bundel (curatie niet mogelijk).
     pub synthetic: bool,
+    /// Thema-keuze van dit event (personalisatie-cascade). None = erven van het jaar.
+    pub theme: Option<ThemeChoice>,
 }
 
 #[derive(Debug, Serialize)]
@@ -246,6 +262,10 @@ pub struct EventDetail {
     /// Vaste jaar-cover (item-id) van het jaar waar dit event onder valt, of None.
     /// Voor de tweede ring op L2 en de toggle-vergelijking.
     pub year_cover: Option<String>,
+    /// Thema-keuze van het jaar waar dit event onder valt, of None — zodat
+    /// `get_event` zelfvoorzienend is voor de cascade app → jaar → event
+    /// (zelfde precedent als `year_cover`).
+    pub year_theme: Option<ThemeChoice>,
 }
 
 /// Een foto/video van een jaar voor de L1-collage (ook ongedateerde items).
@@ -311,7 +331,8 @@ pub fn list_years(conn: &Connection) -> rusqlite::Result<Vec<YearSummary>> {
                     WHERE e.year_id = y.id AND e.featured_photo IS NOT NULL)
                WHERE fid IS NOT NULL),
              (SELECT i.id FROM items i JOIN events e ON i.event_id = e.id
-                WHERE e.year_id = y.id AND i.item_type = 'photo' AND i.id = y.cover_photo LIMIT 1)
+                WHERE e.year_id = y.id AND i.item_type = 'photo' AND i.id = y.cover_photo LIMIT 1),
+             y.theme
          FROM years y ORDER BY y.year",
     )?;
     let rows = stmt.query_map([], |r| {
@@ -327,6 +348,7 @@ pub fn list_years(conn: &Connection) -> rusqlite::Result<Vec<YearSummary>> {
             photo_ids: split_ids(r.get(8)?),
             featured_ids: split_ids(r.get(9)?),
             pinned_cover: r.get(10)?,
+            theme: theme_from_json(r.get(11)?),
         })
     })?;
     rows.collect()
@@ -335,7 +357,7 @@ pub fn list_years(conn: &Connection) -> rusqlite::Result<Vec<YearSummary>> {
 pub fn get_year(conn: &Connection, year_id: &str) -> rusqlite::Result<Option<YearDetail>> {
     let year = conn
         .query_row(
-            "SELECT id, year, title, start_at, end_at, folder_name, cover_photo, size_factor FROM years WHERE id = ?1",
+            "SELECT id, year, title, start_at, end_at, folder_name, cover_photo, size_factor, theme FROM years WHERE id = ?1",
             params![year_id],
             |r| {
                 Ok(Year {
@@ -347,6 +369,7 @@ pub fn get_year(conn: &Connection, year_id: &str) -> rusqlite::Result<Option<Yea
                     folder_name: r.get(5)?,
                     cover: r.get(6)?,
                     size_factor: r.get(7)?,
+                    theme: theme_from_json(r.get(8)?),
                 })
             },
         )
@@ -369,7 +392,7 @@ pub fn get_year(conn: &Connection, year_id: &str) -> rusqlite::Result<Option<Yea
              (SELECT group_concat(id) FROM
                (SELECT id FROM items WHERE event_id = e.id AND item_type = 'photo'
                     ORDER BY (timestamp_ms IS NULL), timestamp_ms LIMIT 24)),
-             e.size, e.under_construction, e.synthetic
+             e.size, e.under_construction, e.synthetic, e.theme
          FROM events e WHERE e.year_id = ?1 ORDER BY e.start_at",
     )?;
     let events = stmt
@@ -387,6 +410,7 @@ pub fn get_year(conn: &Connection, year_id: &str) -> rusqlite::Result<Option<Yea
                 size: r.get(8)?,
                 under_construction: r.get(9)?,
                 synthetic: r.get::<_, i64>(10)? != 0,
+                theme: theme_from_json(r.get(11)?),
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -399,7 +423,7 @@ pub fn get_event(conn: &Connection, event_id: &str) -> rusqlite::Result<Option<E
         .query_row(
             "SELECT id, year_id, kind, title, description, start_at, end_at,
                  location_lat, location_lng, location_label, featured_photo, tags, folder_path, size,
-                 under_construction, synthetic
+                 under_construction, theme, synthetic
              FROM events WHERE id = ?1",
             params![event_id],
             row_to_event,
@@ -450,11 +474,23 @@ pub fn get_event(conn: &Connection, event_id: &str) -> rusqlite::Result<Option<E
         )
         .ok();
 
+    // Thema van het jaar van dit event — maakt get_event zelfvoorzienend voor
+    // de cascade app → jaar → event (zelfde precedent als year_cover).
+    let year_theme: Option<ThemeChoice> = conn
+        .query_row(
+            "SELECT theme FROM years WHERE id = ?1",
+            params![event.year_id],
+            |r| r.get::<_, Option<String>>(0),
+        )
+        .ok()
+        .and_then(theme_from_json);
+
     Ok(Some(EventDetail {
         event,
         items,
         canvas,
         year_cover,
+        year_theme,
     }))
 }
 
@@ -798,8 +834,9 @@ fn row_to_event(r: &rusqlite::Row) -> rusqlite::Result<Event> {
         tags: parse_json_vec(&tags),
         size: r.get(13)?,
         under_construction: r.get(14)?,
+        theme: theme_from_json(r.get(15)?),
         folder_path: r.get(12)?,
-        synthetic: r.get::<_, i64>(15)? != 0,
+        synthetic: r.get::<_, i64>(16)? != 0,
     })
 }
 
@@ -849,6 +886,16 @@ fn json(v: &[String]) -> String {
     serde_json::to_string(v).unwrap_or_else(|_| "[]".to_string())
 }
 
+/// Serialiseert een ThemeChoice naar de `theme`-kolom (JSON-tekst; NULL bij None).
+fn theme_to_json(theme: &Option<ThemeChoice>) -> Option<String> {
+    theme.as_ref().and_then(|t| serde_json::to_string(t).ok())
+}
+
+/// Leest de `theme`-kolom terug (NULL of onparseerbaar → None).
+fn theme_from_json(s: Option<String>) -> Option<ThemeChoice> {
+    s.and_then(|s| serde_json::from_str(&s).ok())
+}
+
 fn parse_json_vec(s: &str) -> Vec<String> {
     serde_json::from_str(s).unwrap_or_default()
 }
@@ -883,6 +930,7 @@ mod tests {
             folder_name: "2024".into(),
             cover: None,
             size_factor: None,
+            theme: None,
         });
         m.events.push(Event {
             id: "ev1".into(),
@@ -900,6 +948,7 @@ mod tests {
             tags: vec!["vakantie".into()],
             size: None,
             under_construction: None,
+            theme: None,
             year_id: "y2024".into(),
             folder_path: "2024/2024-11-23 palermo".into(),
             synthetic: false,
@@ -990,6 +1039,7 @@ mod tests {
             folder_name: "2012".into(),
             cover: None,
             size_factor: None,
+            theme: None,
         });
         m.events.push(Event {
             id: "loose".into(),
@@ -1003,6 +1053,7 @@ mod tests {
             tags: vec![],
             size: None,
             under_construction: None,
+            theme: None,
             year_id: "y".into(),
             folder_path: "2012".into(),
             synthetic: true,
@@ -1021,6 +1072,7 @@ mod tests {
             tags: vec![],
             size: None,
             under_construction: None,
+            theme: None,
             year_id: "y".into(),
             folder_path: "2012/2012-06-01 verjaardag".into(),
             synthetic: false,
@@ -1035,6 +1087,46 @@ mod tests {
         // list_years telt de synthetische bundel NIET mee: alleen de echte memory.
         let years = list_years(&conn).unwrap();
         assert_eq!(years[0].event_count, 1, "synthetische bundel telt niet als memory");
+    }
+
+    #[test]
+    fn theme_round_trips_through_db() {
+        // Jaar- en event-thema moeten door load → list_years/get_year/get_event
+        // heen komen, inclusief het afgeleide `year_theme` op EventDetail.
+        let mut m = sample_model();
+        m.years[0].theme = Some(ThemeChoice {
+            id: Some("warm-linen".into()),
+            accent: Some("#c47b4f".into()),
+            ..ThemeChoice::default()
+        });
+        m.events[0].theme = Some(ThemeChoice {
+            id: Some("kodachrome".into()),
+            title_font: Some("typewriter".into()),
+            ..ThemeChoice::default()
+        });
+        let mut conn = open_in_memory().unwrap();
+        load(&mut conn, &m).unwrap();
+
+        let years = list_years(&conn).unwrap();
+        let yt = years[0].theme.as_ref().expect("jaar-thema in list_years");
+        assert_eq!(yt.id.as_deref(), Some("warm-linen"));
+        assert_eq!(yt.accent.as_deref(), Some("#c47b4f"));
+
+        let yd = get_year(&conn, "y2024").unwrap().unwrap();
+        assert_eq!(yd.year.theme, m.years[0].theme, "Year.theme via get_year");
+        assert_eq!(yd.events[0].theme, m.events[0].theme, "EventSummary.theme");
+
+        let ed = get_event(&conn, "ev1").unwrap().unwrap();
+        assert_eq!(ed.event.theme, m.events[0].theme, "Event.theme via get_event");
+        assert_eq!(ed.year_theme, m.years[0].theme, "year_theme voor de cascade");
+
+        // Zonder thema blijft alles None (bestaande vaults ongewijzigd).
+        let mut conn2 = open_in_memory().unwrap();
+        load(&mut conn2, &sample_model()).unwrap();
+        assert!(list_years(&conn2).unwrap()[0].theme.is_none());
+        let ed2 = get_event(&conn2, "ev1").unwrap().unwrap();
+        assert!(ed2.event.theme.is_none());
+        assert!(ed2.year_theme.is_none());
     }
 
     #[test]
@@ -1122,6 +1214,7 @@ mod tests {
                 folder_name: year.to_string(),
                 cover: None,
                 size_factor: None,
+                theme: None,
             });
             m.events.push(Event {
                 id: eid.into(),
@@ -1135,6 +1228,7 @@ mod tests {
                 tags: vec![],
                 size: None,
                 under_construction: None,
+                theme: None,
                 year_id: yid.into(),
                 folder_path: format!("{year}/e"),
                 synthetic: false,
@@ -1299,6 +1393,7 @@ mod tests {
             folder_name: "2024".into(),
             cover: None,
             size_factor: None,
+            theme: None,
         });
         m.events.push(Event {
             id: "ev1".into(),
@@ -1312,6 +1407,7 @@ mod tests {
             tags: vec![],
             size: None,
             under_construction: None,
+            theme: None,
             year_id: "y2024".into(),
             folder_path: "2024/ev1".into(),
             synthetic: false,
@@ -1352,6 +1448,7 @@ mod tests {
             tags: vec![],
             size: None,
             under_construction: None,
+            theme: None,
             year_id: "y2024".into(),
             folder_path: "2024/ev2".into(),
             synthetic: false,
@@ -1416,6 +1513,7 @@ mod tests {
                 tags: vec![],
                 size: None,
                 under_construction: None,
+                theme: None,
                 year_id: "y2024".into(),
                 folder_path: format!("2024/{id}"),
                 synthetic: false,
@@ -1432,6 +1530,7 @@ mod tests {
             folder_name: "2024".into(),
             cover: None,
             size_factor: None,
+            theme: None,
         });
         // A: featured wijst naar een bestaande foto-slug → die exact.
         m.events.push(event("evA", Some("mooi")));

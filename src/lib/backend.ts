@@ -5,6 +5,16 @@
 
 import type { ItemType } from '../render/scenes/types'
 
+/** Thema-keuze van een jaar of event (personalisatie-cascade). Alle velden
+ * optioneel: alleen wat op dit niveau expliciet gekozen is; de rest erft.
+ * Spiegelt de Rust-`ThemeChoice` (frontmatter = wire = TS). */
+export interface ThemeChoice {
+  id?: string
+  accent?: string
+  background?: string
+  titleFont?: string
+}
+
 export interface YearSummary {
   id: string
   year: number
@@ -20,6 +30,8 @@ export interface YearSummary {
   featuredIds: string[]
   /** Vaste jaar-cover (item-id) indien geprikt — tegel is dan statisch. */
   pinnedCover?: string
+  /** Thema-keuze van dit jaar. Afwezig = erven van de app. */
+  theme?: ThemeChoice
 }
 
 export interface EventSummary {
@@ -38,6 +50,8 @@ export interface EventSummary {
   underConstruction?: boolean
   /** True = synthetische "Losse foto's"-bundel (curatie niet mogelijk). */
   synthetic?: boolean
+  /** Thema-keuze van dit event. Afwezig = erven van het jaar. */
+  theme?: ThemeChoice
 }
 
 export interface Year {
@@ -50,6 +64,8 @@ export interface Year {
   /** Globale schaalfactor voor álle event-kaarten van dit jaar (proportioneel
    * "passend maken"). Afwezig = 1.0 (geen schaling). */
   sizeFactor?: number
+  /** Thema-keuze van dit jaar. Afwezig = erven van de app. */
+  theme?: ThemeChoice
 }
 
 export interface YearDetail {
@@ -114,6 +130,8 @@ export interface EventInfo {
   underConstruction?: boolean
   /** True = synthetische "Losse foto's"-bundel (curatie niet mogelijk). */
   synthetic?: boolean
+  /** Thema-keuze van dit event. Afwezig = erven van het jaar. */
+  theme?: ThemeChoice
 }
 
 export interface EventDetail {
@@ -122,6 +140,9 @@ export interface EventDetail {
   canvas: CanvasItem[]
   /** Vaste jaar-cover (item-id) van dit jaar, of undefined — voor de 2e ring op L2. */
   yearCover?: string
+  /** Thema-keuze van het jaar van dit event — maakt getEvent zelfvoorzienend
+   * voor de cascade app → jaar → event (zelfde precedent als yearCover). */
+  yearTheme?: ThemeChoice
 }
 
 export interface ExifEntry {
@@ -233,6 +254,10 @@ export interface Backend {
   setYearCover(yearId: string, itemRef: string | null): Promise<void>
   /** Zet (of wist bij `null`/≈1.0) de globale event-kaartschaal van een jaar. */
   setYearSizeFactor(yearId: string, factor: number | null): Promise<void>
+  /** Zet (of wist bij `null`/leeg) het thema van een jaar. */
+  setYearTheme(yearId: string, theme: ThemeChoice | null): Promise<void>
+  /** Zet (of wist bij `null`/leeg) het thema van een event. */
+  setEventTheme(eventId: string, theme: ThemeChoice | null): Promise<void>
   /** Zet (of wist bij `null`) het belang/grootte (1–100) van een event. */
   setEventSize(eventId: string, size: number | null): Promise<void>
   /** Zet of wist de "in aanbouw"-vlag van een event. */
@@ -477,6 +502,16 @@ class TauriBackend implements Backend {
     await invoke('set_year_size_factor', { yearId, factor })
   }
 
+  async setYearTheme(yearId: string, theme: ThemeChoice | null): Promise<void> {
+    const invoke = await this.api()
+    await invoke('set_year_theme', { yearId, theme })
+  }
+
+  async setEventTheme(eventId: string, theme: ThemeChoice | null): Promise<void> {
+    const invoke = await this.api()
+    await invoke('set_event_theme', { eventId, theme })
+  }
+
   async importPhotos(eventId: string): Promise<number> {
     const dialog = await import('@tauri-apps/plugin-dialog')
     const picked = await dialog.open({
@@ -601,6 +636,8 @@ class MockBackend implements Backend {
   private featured = new Map<string, string>() // eventId → item-ref
   private yearCovers = new Map<string, string>() // yearId → item-id (vaste jaar-cover)
   private yearFactors = new Map<string, number>() // yearId → globale event-kaartschaal
+  private yearThemes = new Map<string, ThemeChoice>() // yearId → thema-keuze
+  private eventThemes = new Map<string, ThemeChoice>() // eventId → thema-keuze
   private newEventSeq = 0
   private thumbCache = new Map<string, string>()
 
@@ -687,10 +724,14 @@ class MockBackend implements Backend {
     }
   }
   async listYears(): Promise<YearSummary[]> {
-    // pinnedCover dynamisch: kan tijdens de sessie via setYearCover wijzigen.
+    // pinnedCover/theme dynamisch: kunnen tijdens de sessie wijzigen.
     return this.years.map((y) => {
       const pin = this.yearCovers.get(y.id)
-      return pin ? { ...y, pinnedCover: pin, coverItemId: pin } : { ...y, pinnedCover: undefined }
+      const theme = this.yearThemes.get(y.id)
+      const base = pin
+        ? { ...y, pinnedCover: pin, coverItemId: pin }
+        : { ...y, pinnedCover: undefined }
+      return { ...base, theme }
     })
   }
   async setYearCover(yearId: string, itemRef: string | null): Promise<void> {
@@ -700,6 +741,26 @@ class MockBackend implements Backend {
   async setYearSizeFactor(yearId: string, factor: number | null): Promise<void> {
     if (factor == null || Math.abs(factor - 1) <= 0.001) this.yearFactors.delete(yearId)
     else this.yearFactors.set(yearId, Math.max(0.1, Math.min(5, factor)))
+  }
+  /** Spiegelt Rust: alleen gevulde subvelden; alles leeg → keuze wissen ("geërfd"). */
+  private static cleanTheme(theme: ThemeChoice | null): ThemeChoice | undefined {
+    if (!theme) return undefined
+    const out: ThemeChoice = {}
+    if (theme.id?.trim()) out.id = theme.id.trim()
+    if (theme.accent?.trim()) out.accent = theme.accent.trim()
+    if (theme.background?.trim()) out.background = theme.background.trim()
+    if (theme.titleFont?.trim()) out.titleFont = theme.titleFont.trim()
+    return Object.keys(out).length ? out : undefined
+  }
+  async setYearTheme(yearId: string, theme: ThemeChoice | null): Promise<void> {
+    const clean = MockBackend.cleanTheme(theme)
+    if (clean) this.yearThemes.set(yearId, clean)
+    else this.yearThemes.delete(yearId)
+  }
+  async setEventTheme(eventId: string, theme: ThemeChoice | null): Promise<void> {
+    const clean = MockBackend.cleanTheme(theme)
+    if (clean) this.eventThemes.set(eventId, clean)
+    else this.eventThemes.delete(eventId)
   }
   async getYear(yearId: string): Promise<YearDetail | null> {
     const detail = this.details.get(yearId)
@@ -711,12 +772,13 @@ class MockBackend implements Backend {
       const n = 6 + (hueFor(ev.id) % 7)
       // Foto's van dit event (i=1..n-1; i=0 is de tekstkaart) — voor de slideshow.
       const photoIds = Array.from({ length: Math.max(0, n - 1) }, (_, k) => `${ev.id}-i${k + 1}`)
+      const theme = this.eventThemes.get(ev.id)
       const feat = this.featured.get(ev.id)
-      if (feat) return { ...ev, coverItemId: feat, photoIds }
+      if (feat) return { ...ev, coverItemId: feat, photoIds, theme }
       const k = 1 + Math.floor(Math.random() * Math.max(1, n - 1))
-      return { ...ev, coverItemId: `${ev.id}-i${k}`, photoIds }
+      return { ...ev, coverItemId: `${ev.id}-i${k}`, photoIds, theme }
     })
-    return { year: { ...detail.year, sizeFactor }, events }
+    return { year: { ...detail.year, sizeFactor, theme: this.yearThemes.get(yearId) }, events }
   }
   async getTimelineDensity(yearId: string): Promise<DensityPoint[]> {
     return this.density.get(yearId) ?? []
@@ -803,10 +865,12 @@ class MockBackend implements Backend {
         featuredPhoto: this.featured.get(eventId),
         size: summary?.size,
         underConstruction: summary?.underConstruction,
+        theme: this.eventThemes.get(eventId),
       },
       items,
       canvas: [],
       yearCover: this.yearCovers.get(yearId),
+      yearTheme: this.yearThemes.get(yearId),
     }
   }
   async saveCanvasLayout(): Promise<void> {

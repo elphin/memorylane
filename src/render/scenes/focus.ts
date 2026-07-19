@@ -5,7 +5,8 @@
 
 import { BlurFilter, Container, Graphics, Sprite, Text, Texture } from 'pixi.js'
 import type { Backend, Item } from '../../lib/backend'
-import { THEME } from '../../theme/tokens'
+import { resolveTheme } from '../../theme/resolve'
+import type { ResolvedTheme } from '../../theme/tokens'
 import type { FrameContext, RenderEngine } from '../core/engine'
 import type { Scene } from './scene'
 
@@ -22,6 +23,9 @@ const easeInOutCubic = (t: number): number =>
 
 export class FocusScene implements Scene {
   readonly root = new Container()
+  // Geresolvede tokens van het event waar dit item in zit (aangeleverd door de
+  // app-shell; zonder wordt het actieve app-thema gebruikt).
+  private T: ResolvedTheme
   // Geblurde achtergrond-vulling (alleen in content-beeldvullend): een uitvergrote,
   // vervaagde kopie van de huidige foto/poster die de zwarte balken vult. Achter
   // `display`, zodat de slide-transitie en de video-verberging 'm niet raken.
@@ -66,13 +70,15 @@ export class FocusScene implements Scene {
     // Aangeroepen na elke stap (tik óf pijltjestoets) met de richting en het nieuwe
     // item-id, zodat de app-shell de titel kan meelaten lopen.
     private onStep?: (delta: number, currentId: string | null) => void,
+    theme?: ResolvedTheme,
   ) {
+    this.T = theme ?? resolveTheme()
     this.index = Math.max(0, Math.min(startIndex, items.length - 1))
     // Blur-achtergrond als EERSTE child (achter alles). Donkere tint voor contrast
     // met de scherpe voorgrond; de blur-filter met ruime padding zodat de vervaging
     // niet hard afkapt aan de sprite-rand.
     this.bgBlur.anchor.set(0.5)
-    this.bgBlur.tint = THEME.colors.focusBackdropDim
+    this.bgBlur.tint = this.T.colors.focusBackdropDim
     this.bgBlur.visible = false
     // Zachtere, ruimere blur (minder "edgy"): sterker + meer passes voor een gladde
     // gaussiaan, en flink padding zodat de vervaging niet hard afkapt aan de
@@ -121,10 +127,10 @@ export class FocusScene implements Scene {
       const text = new Text({
         text: item.bodyText || item.caption || '…',
         style: {
-          fill: THEME.colors.paperInk,
+          fill: this.T.colors.paperInk,
           fontSize: 26,
           fontStyle: 'italic',
-          fontFamily: THEME.fonts.paper,
+          fontFamily: this.T.fonts.paper,
           wordWrap: true,
           wordWrapWidth: CARD_W - 64,
           align: 'center',
@@ -135,9 +141,9 @@ export class FocusScene implements Scene {
       text.anchor.set(0.5)
       const cardH = Math.max(CARD_H, Math.ceil(text.height) + pad * 2)
       const bg = new Graphics()
-      bg.roundRect(-CARD_W / 2, -cardH / 2, CARD_W, cardH, 16).fill(THEME.colors.paper).stroke({
+      bg.roundRect(-CARD_W / 2, -cardH / 2, CARD_W, cardH, 16).fill(this.T.colors.paper).stroke({
         width: 1,
-        color: THEME.colors.paperStroke,
+        color: this.T.colors.paperStroke,
       })
       container.addChild(bg)
       container.addChild(text)
@@ -156,7 +162,7 @@ export class FocusScene implements Scene {
       const sprite = new Sprite(Texture.WHITE)
       sprite.anchor.set(0.5)
       sprite.setSize(FOCUS, FOCUS)
-      sprite.tint = THEME.colors.focusLoading
+      sprite.tint = this.T.colors.focusLoading
       container.addChild(sprite)
       this.sprite = sprite
       this.currentKey = `focus-${item.id}`
@@ -171,7 +177,7 @@ export class FocusScene implements Scene {
     if (item.caption && !isText) {
       const cap = new Text({
         text: item.caption,
-        style: { fill: THEME.colors.textSoft, fontSize: 18, fontFamily: THEME.fonts.caption },
+        style: { fill: this.T.colors.textSoft, fontSize: 18, fontFamily: this.T.fonts.caption },
       })
       cap.resolution = 2
       cap.anchor.set(0.5, 0)
@@ -209,7 +215,7 @@ export class FocusScene implements Scene {
     this.frame.clear()
     this.frame
       .roundRect(-w / 2 - PHOTO_BORDER, -h / 2 - PHOTO_BORDER, w + PHOTO_BORDER * 2, h + PHOTO_BORDER * 2, 8)
-      .fill(THEME.colors.frame)
+      .fill(this.T.colors.frame)
   }
 
   /** De doel-zoom voor een gegeven modus (beeldvullend of normaal). */

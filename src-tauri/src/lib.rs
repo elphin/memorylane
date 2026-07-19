@@ -162,6 +162,8 @@ pub fn run() {
             commands::set_event_under_construction,
             commands::set_year_cover,
             commands::set_year_size_factor,
+            commands::set_year_theme,
+            commands::set_event_theme,
             commands::delete_item,
             commands::update_item,
             commands::get_item_metadata,

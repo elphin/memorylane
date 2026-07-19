@@ -14,7 +14,8 @@
 
 import { Container, Graphics, Sprite, Text, Texture } from 'pixi.js'
 import type { Backend, EventSummary, YearDetail } from '../../lib/backend'
-import { THEME } from '../../theme/tokens'
+import { resolveTheme } from '../../theme/resolve'
+import type { ResolvedTheme } from '../../theme/tokens'
 import type { FrameContext, RenderEngine } from '../core/engine'
 import type { DragHandle } from '../core/gestures'
 import type { Scene } from './scene'
@@ -178,8 +179,7 @@ function truncateTitle(s: string, n: number): string {
 // memory deterministisch → ze variëren; contrasterend met de titeltekst-token).
 // Leest het thema op aanroep-moment (scene-bouwtijd), zodat een themawissel
 // via scene-herbouw de nieuwe kleuren oppakt.
-function placeholderColor(id: string): number {
-  const palette = THEME.colors.placeholderPalette
+function placeholderColor(id: string, palette: number[]): number {
   return palette[hashId(id) % palette.length]!
 }
 
@@ -196,6 +196,11 @@ function parseLocalDate(iso: string): number {
 
 export class YearScene implements Scene {
   readonly root = new Container()
+  // Geresolvede tokens van dit jaar (app-thema → jaar-keuze), gezet in de
+  // constructor — een themawissel herbouwt de scene en resolvet opnieuw.
+  private T: ResolvedTheme
+  // De rauwe jaar-keuze, voor per-event accenten (app → jaar → event).
+  private yearChoice: YearDetail['year']['theme']
   private leaders = new Graphics()
   private cardsLayer = new Container()
   private dotsLayer = new Container()
@@ -237,6 +242,8 @@ export class YearScene implements Scene {
       speedMs: 5000,
     },
   ) {
+    this.T = resolveTheme(detail.year.theme)
+    this.yearChoice = detail.year.theme
     this.slideEnabled = opts.enabled
     this.slideMs = Math.max(800, opts.speedMs)
     this.showTitles = opts.showTitles ?? false
@@ -258,10 +265,10 @@ export class YearScene implements Scene {
     axis
       .moveTo(-AXIS_W / 2, 0)
       .lineTo(AXIS_W / 2, 0)
-      .stroke({ width: 1, color: THEME.colors.axis, pixelLine: true })
+      .stroke({ width: 1, color: this.T.colors.axis, pixelLine: true })
     for (let m = 1; m < 12; m++) {
       const mx = dateToX(new Date(year, m, 1).getTime())
-      axis.moveTo(mx, -14).lineTo(mx, 14).stroke({ width: 1, color: THEME.colors.axisTick, pixelLine: true })
+      axis.moveTo(mx, -14).lineTo(mx, 14).stroke({ width: 1, color: this.T.colors.axisTick, pixelLine: true })
     }
     this.root.addChild(axis)
     this.root.addChild(this.rangeBand)
@@ -272,7 +279,7 @@ export class YearScene implements Scene {
       const midX = (dateToX(new Date(year, m, 1).getTime()) + dateToX(new Date(year, m + 1, 1).getTime())) / 2
       const label = new Text({
         text: MONTHS[m],
-        style: { fill: THEME.colors.textMuted, fontSize: 15, fontFamily: THEME.fonts.body },
+        style: { fill: this.T.colors.textMuted, fontSize: 15, fontFamily: this.T.fonts.body },
       })
       label.resolution = 2
       label.anchor.set(0.5, 0)
@@ -285,12 +292,21 @@ export class YearScene implements Scene {
     this.root.addChild(spans)
     const isSpan = (e: EventSummary): boolean =>
       !!e.endAt && dateToX(parseLocalDate(e.endAt)) - dateToX(parseLocalDate(e.startAt)) > 4
-    const spanPalette = THEME.colors.spanPalette.map((c) => opaqueSpan(c, THEME.colors.appBg))
+    const spanPalette = this.T.colors.spanPalette.map((c) => opaqueSpan(c, this.T.colors.appBg))
     const spanColor = new Map<string, number>()
     detail.events
       .filter(isSpan)
       .sort((a, b) => parseLocalDate(a.startAt) - parseLocalDate(b.startAt))
       .forEach((e, k) => spanColor.set(e.id, spanPalette[k % spanPalette.length]!))
+    // Period/event met een eigen KLEUR-keuze (thema-id of accent) kleurt zijn
+    // span-balk met zijn accent-token (zelfde blend als de andere balkjes) —
+    // zo is bijv. "een kerstperiode in rood" daadwerkelijk zichtbaar op de
+    // tijdlijn. Een puur typografische keuze (alleen titleFont) herkleurt niet.
+    for (const e of detail.events) {
+      if (!e.theme?.id && !e.theme?.accent) continue
+      const accent = resolveTheme(detail.year.theme, e.theme).colors.accent
+      spanColor.set(e.id, opaqueSpan(accent, this.T.colors.appBg))
+    }
     for (const e of detail.events) {
       if (!isSpan(e)) continue
       const sX = dateToX(parseLocalDate(e.startAt))
@@ -321,7 +337,7 @@ export class YearScene implements Scene {
     if (detail.events.length === 0) {
       const hint = new Text({
         text: 'Geen memories in dit jaar',
-        style: { fill: THEME.colors.textFaint, fontSize: 20, fontFamily: THEME.fonts.body },
+        style: { fill: this.T.colors.textFaint, fontSize: 20, fontFamily: this.T.fonts.body },
       })
       hint.resolution = 2
       hint.anchor.set(0.5)
@@ -334,7 +350,7 @@ export class YearScene implements Scene {
     this.root.addChild(this.dayLine)
     this.dayLabel = new Text({
       text: '',
-      style: { fill: THEME.colors.textBright, fontSize: 15, fontWeight: '600', fontFamily: THEME.fonts.body },
+      style: { fill: this.T.colors.textBright, fontSize: 15, fontWeight: '600', fontFamily: this.T.fonts.body },
     })
     this.dayLabel.resolution = 2
     this.dayLabel.anchor.set(0.5, 1)
@@ -354,7 +370,7 @@ export class YearScene implements Scene {
   private buildYearLabel(text: string): Text {
     const t = new Text({
       text,
-      style: { fill: THEME.colors.text, fontSize: 64, fontWeight: '700', fontFamily: THEME.fonts.display },
+      style: { fill: this.T.colors.text, fontSize: 64, fontWeight: '700', fontFamily: this.T.fonts.display },
     })
     t.resolution = 2
     t.anchor.set(0.5)
@@ -401,14 +417,14 @@ export class YearScene implements Scene {
     const frame = new Graphics()
     frame
       .rect(-THUMB_W / 2 - BORDER, -THUMB_H / 2 - BORDER, THUMB_W + BORDER * 2, THUMB_H + BORDER * 2)
-      .fill(THEME.colors.frame)
+      .fill(this.T.colors.frame)
     card.addChild(frame)
     if (hasCover) {
       const photoLayer = new Container()
       sprite = new Sprite(Texture.WHITE)
       sprite.anchor.set(0.5)
       sprite.setSize(THUMB_W, THUMB_H)
-      sprite.tint = THEME.colors.thumbLoading
+      sprite.tint = this.T.colors.thumbLoading
       sprite2 = new Sprite(Texture.WHITE)
       sprite2.anchor.set(0.5)
       sprite2.setSize(THUMB_W, THUMB_H)
@@ -424,10 +440,10 @@ export class YearScene implements Scene {
         title = new Text({
           text: truncateTitle(ev.title, TITLE_MAX),
           style: {
-            fill: THEME.colors.cardTitle,
+            fill: this.T.colors.cardTitle,
             fontSize: 18,
             fontWeight: '600',
-            fontFamily: THEME.fonts.title,
+            fontFamily: this.T.fonts.title,
             align: 'center',
             wordWrap: true,
             wordWrapWidth: THUMB_W + BORDER * 2,
@@ -441,15 +457,16 @@ export class YearScene implements Scene {
     } else {
       // Placeholder: gedempte kleurvulling + de titel gecentreerd in de tegel.
       const bg = new Graphics()
-      bg.rect(-THUMB_W / 2, -THUMB_H / 2, THUMB_W, THUMB_H).fill(placeholderColor(ev.id))
+      bg.rect(-THUMB_W / 2, -THUMB_H / 2, THUMB_W, THUMB_H)
+        .fill(placeholderColor(ev.id, this.T.colors.placeholderPalette))
       card.addChild(bg)
       const inner = new Text({
         text: truncateTitle(ev.title ?? 'Memory', 40),
         style: {
-          fill: THEME.colors.placeholderText,
+          fill: this.T.colors.placeholderText,
           fontSize: 15,
           fontWeight: '600',
-          fontFamily: THEME.fonts.title,
+          fontFamily: this.T.fonts.title,
           align: 'center',
           wordWrap: true,
           wordWrapWidth: THUMB_W - 20,
@@ -470,9 +487,15 @@ export class YearScene implements Scene {
     if (!isSpan) {
       dot = new Container()
       const g = new Graphics()
-      g.circle(0, 0, DOT_R)
-        .fill(hasCover ? THEME.colors.textSoft : THEME.colors.textMuted)
-        .stroke({ width: 2, color: THEME.colors.surface })
+      // Event met een eigen KLEUR-keuze (thema-id of accent): de stip toont
+      // zijn accent (zelfde idee als de span-balken), anders de neutrale
+      // jaar-tokens. Alleen-titleFont herkleurt niet.
+      const dotFill = ev.theme?.id || ev.theme?.accent
+        ? resolveTheme(this.yearChoice, ev.theme).colors.accent
+        : hasCover
+          ? this.T.colors.textSoft
+          : this.T.colors.textMuted
+      g.circle(0, 0, DOT_R).fill(dotFill).stroke({ width: 2, color: this.T.colors.surface })
       dot.addChild(g)
       dot.visible = false
       this.dotsLayer.addChild(dot)
@@ -584,7 +607,7 @@ export class YearScene implements Scene {
     } else {
       this.leaders.lineTo(x3, y3)
     }
-    this.leaders.stroke({ width: LEADER_WIDTH, color: THEME.colors.leader, alpha: LEADER_ALPHA * appear })
+    this.leaders.stroke({ width: LEADER_WIDTH, color: this.T.colors.leader, alpha: LEADER_ALPHA * appear })
   }
 
   /** Breedte-dominante fit: het hele jaar past in de breedte; kaarten (constante
@@ -697,7 +720,7 @@ export class YearScene implements Scene {
     const a = Math.min(startWorldX, endWorldX)
     const b = Math.max(startWorldX, endWorldX)
     const h = this.bandHalfH()
-    this.rangeBand.rect(a, -h, b - a, 2 * h).fill({ color: THEME.colors.accent, alpha: 0.14 })
+    this.rangeBand.rect(a, -h, b - a, 2 * h).fill({ color: this.T.colors.accent, alpha: 0.14 })
     this.hoverWX = endWorldX
     this.renderDay()
   }
@@ -710,7 +733,7 @@ export class YearScene implements Scene {
     const x = this.hoverWX
     const h = this.bandHalfH()
     this.dayLine.clear()
-    this.dayLine.moveTo(x, -h).lineTo(x, h).stroke({ width: 1.5, color: THEME.colors.accent, alpha: 0.9 })
+    this.dayLine.moveTo(x, -h).lineTo(x, h).stroke({ width: 1.5, color: this.T.colors.accent, alpha: 0.9 })
     const d = new Date(this.yearStart + Math.min(1, Math.max(0, (x + AXIS_W / 2) / AXIS_W)) * this.span)
     this.dayLabel.text = `${d.getDate()} ${MONTHS[d.getMonth()]}`
     this.dayLabel.position.set(x, -h - 6)
@@ -798,7 +821,7 @@ export class YearScene implements Scene {
             n.frame.clear()
             n.frame
               .rect(-THUMB_W / 2 - b, -THUMB_H / 2 - b, THUMB_W + b * 2, THUMB_H + b * 2)
-              .fill(THEME.colors.frame)
+              .fill(this.T.colors.frame)
           }
           const targetHover = n.eventId === this.hoveredId ? 1.05 : 1
           n.hover += (targetHover - n.hover) * 0.2

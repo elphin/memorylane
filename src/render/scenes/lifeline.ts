@@ -5,7 +5,7 @@
 
 import { Container, Graphics, Sprite, Text, Texture } from 'pixi.js'
 import type { Backend, YearSummary } from '../../lib/backend'
-import { THEME } from '../../theme/tokens'
+import { resolveTheme } from '../../theme/resolve'
 import type { FrameContext, RenderEngine } from '../core/engine'
 import type { Scene } from './scene'
 
@@ -73,6 +73,8 @@ export class LifelineScene implements Scene {
     this.slideMs = Math.max(1500, slideshow.speedMs)
 
     years.forEach((year, i) => {
+      // Per-jaar-thema: elke tegel resolvet zijn eigen tokens (app → jaar).
+      const T = resolveTheme(year.theme)
       const worldX = i * (TILE_W + GAP)
       const tile = new Container()
       // Pivot in het midden zodat hover-schaal netjes vanuit het centrum groeit.
@@ -81,8 +83,8 @@ export class LifelineScene implements Scene {
 
       const bg = new Graphics()
       bg.roundRect(0, 0, TILE_W, TILE_H, 12)
-        .fill(THEME.colors.surface)
-        .stroke({ width: 2, color: THEME.colors.surfaceStroke })
+        .fill(T.colors.surface)
+        .stroke({ width: 2, color: T.colors.surfaceStroke })
       tile.addChild(bg)
 
       // Cover + crossfade-overlay in een geklipte container (afgeronde hoeken).
@@ -91,7 +93,7 @@ export class LifelineScene implements Scene {
       const mask = new Graphics()
       mask.roundRect(0, 0, COVER_W, COVER_H, 8).fill(0xffffff)
       const cover = new Sprite(Texture.WHITE)
-      cover.tint = THEME.colors.coverLoading
+      cover.tint = T.colors.coverLoading
       cover.setSize(COVER_W, COVER_H)
       const cover2 = new Sprite(Texture.WHITE)
       cover2.setSize(COVER_W, COVER_H)
@@ -105,10 +107,10 @@ export class LifelineScene implements Scene {
       const label = new Text({
         text: year.title,
         style: {
-          fill: THEME.colors.text,
+          fill: T.colors.text,
           fontSize: 24,
           fontWeight: '700',
-          fontFamily: THEME.fonts.title,
+          fontFamily: T.fonts.title,
         },
       })
       label.resolution = 2
@@ -121,7 +123,7 @@ export class LifelineScene implements Scene {
       const n = year.eventCount
       const sub = new Text({
         text: `${n} ${n === 1 ? 'herinnering' : 'herinneringen'}`,
-        style: { fill: THEME.colors.textMuted, fontSize: 13, fontFamily: THEME.fonts.body },
+        style: { fill: T.colors.textMuted, fontSize: 13, fontFamily: T.fonts.body },
       })
       sub.resolution = 2
       sub.anchor.set(0.5, 0)
