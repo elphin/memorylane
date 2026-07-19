@@ -302,6 +302,13 @@ export function AppShell() {
   const [editing, setEditing] = useState<null | { id: string; kind: 'text' | 'photo'; value: string }>(null)
   const [eventForm, setEventForm] = useState<null | EventForm>(null)
   const [metaForm, setMetaForm] = useState<null | MetaForm>(null)
+  // Gestylede bevestigings-dialoog voor destructieve acties (i.p.v. het
+  // stijlbrekende native window.confirm).
+  const [confirmBox, setConfirmBox] = useState<null | {
+    message: string
+    confirmLabel: string
+    onConfirm: () => void
+  }>(null)
   const [layoutMode, setLayoutMode] = useState<'custom' | 'grid' | 'scatter'>('custom')
   const [gridSort, setGridSortMode] = useState<'date' | 'name' | 'random'>('date')
   const [settings, setSettings] = useState<Settings>(loadSettings)
@@ -1225,6 +1232,10 @@ export function AppShell() {
         return
       }
       if (e.key === 'Escape' || e.key === 'Backspace') {
+        // Een open dialog (formulier/bevestiging) vangt Escape zelf af — hier
+        // nooit onder de dialog door navigeren (de INPUT-guard hierboven dekt
+        // dit niet als de focus op een knop in de dialog staat).
+        if (dialogOpenRef.current) return
         e.preventDefault()
         // Detail-niveau in content-beeldvullend: eerst één stap terug naar de
         // normale detail-weergave (niet meteen door naar het canvas).
@@ -1676,8 +1687,8 @@ export function AppShell() {
 
   // Houd de gesture-closure op de hoogte of er een blokkerende dialog open staat.
   useEffect(() => {
-    dialogOpenRef.current = !!(modal || editing || eventForm || metaForm)
-  }, [modal, editing, eventForm, metaForm])
+    dialogOpenRef.current = !!(modal || editing || eventForm || metaForm || confirmBox)
+  }, [modal, editing, eventForm, metaForm, confirmBox])
 
   // Haal de asset-URL van de gefocuste video op (pad → convertFileSrc). Async,
   // dus buiten de render; leeg bij geen video of tijdens het laden.
@@ -2035,12 +2046,10 @@ export function AppShell() {
     }
   }
 
-  const deleteCurrent = async (): Promise<void> => {
+  const performDelete = async (id: string): Promise<void> => {
     const backend = backendRef.current
-    const id = sceneRef.current?.currentId?.()
     const eventId = currentEventRef.current
-    if (!backend || !id || mutatingRef.current) return
-    if (!window.confirm('Dit item naar de prullenbak verplaatsen?')) return
+    if (!backend || mutatingRef.current) return
     mutatingRef.current = true
     setBusy(true)
     try {
@@ -2053,6 +2062,17 @@ export function AppShell() {
       mutatingRef.current = false
       setBusy(false)
     }
+  }
+
+  // Vraagt bevestiging via de gestylede dialoog (geen native window.confirm).
+  const deleteCurrent = (): void => {
+    const id = sceneRef.current?.currentId?.()
+    if (!id || mutatingRef.current) return
+    setConfirmBox({
+      message: 'Dit item naar de prullenbak verplaatsen?',
+      confirmLabel: 'Verplaatsen',
+      onConfirm: () => void performDelete(id),
+    })
   }
 
   // Bewerk het huidige item (L3): tekst-notitie → body, foto → caption.
@@ -2187,13 +2207,15 @@ export function AppShell() {
   // themawissel gebeurt via de settings-state).
   const u = ui()
 
+  // Eén afleiding voor "staat er een blokkerende dialog open?" — gebruikt in
+  // alle render-guards én (via dialogOpenRef) in de key-/gesture-closures, zodat
+  // een nieuwe dialog-soort nooit op één plek vergeten kan worden.
+  const anyDialog = !!(modal || editing || eventForm || metaForm || confirmBox)
+
   const backVisible =
     phase === 'ready' &&
     uiLevel !== 'lifeline' &&
-    !modal &&
-    !editing &&
-    !eventForm &&
-    !metaForm &&
+    !anyDialog &&
     !searchOpen &&
     !settingsOpen &&
     !fullscreen &&
@@ -2215,7 +2237,7 @@ export function AppShell() {
         <TitleBar text={header.text} dir={header.dir} mode={sceneUiMode} />
       )}
       {backVisible && <BackButton onClick={() => goBackRef.current()} />}
-      {phase === 'ready' && !modal && !editing && !eventForm && !metaForm && !searchOpen && !settingsOpen && !settings.viewMode && !fullscreen && chromeVisible && settings.showSearchButton && (
+      {phase === 'ready' && !anyDialog && !searchOpen && !settingsOpen && !settings.viewMode && !fullscreen && chromeVisible && settings.showSearchButton && (
         <button
           onClick={() => setSearchOpen(true)}
           style={{ ...searchBtn(u), left: backVisible ? 64 : 16 }}
@@ -2224,7 +2246,7 @@ export function AppShell() {
           Zoeken…
         </button>
       )}
-      {phase === 'ready' && !modal && !editing && !eventForm && !metaForm && !searchOpen && !settingsOpen && !settings.viewMode && !fullscreen && (
+      {phase === 'ready' && !anyDialog && !searchOpen && !settingsOpen && !settings.viewMode && !fullscreen && (
         <button onClick={() => setSettingsOpen(true)} style={gearBtn(u)} title="Instellingen">
           ⚙
         </button>
@@ -2295,10 +2317,7 @@ export function AppShell() {
       {showFps && <FpsOverlay engineRef={engineRef} />}
       {showFit &&
         phase === 'ready' &&
-        !modal &&
-        !editing &&
-        !eventForm &&
-        !metaForm &&
+        !anyDialog &&
         !searchOpen &&
         !settingsOpen &&
         !fullscreen &&
@@ -2322,10 +2341,7 @@ export function AppShell() {
         )}
       {phase === 'ready' &&
         uiLevel === 'lifeline' &&
-        !modal &&
-        !editing &&
-        !eventForm &&
-        !metaForm &&
+        !anyDialog &&
         !searchOpen &&
         !settingsOpen &&
         !fullscreen &&
@@ -2341,7 +2357,7 @@ export function AppShell() {
         )}
       {toast && <div style={toastStyle(u)}>{toast}</div>}
       {matReport && <MaterializationOverlay report={matReport} onClose={() => setMatReport(null)} />}
-      {phase === 'ready' && !modal && !editing && !eventForm && !metaForm && !searchOpen && !settingsOpen && !settings.viewMode && !fullscreen && (
+      {phase === 'ready' && !anyDialog && !searchOpen && !settingsOpen && !settings.viewMode && !fullscreen && (
         <Fab
           uiLevel={uiLevel}
           layoutMode={layoutMode}
@@ -2402,6 +2418,18 @@ export function AppShell() {
           onCancel={() => setMetaForm(null)}
         />
       )}
+      {confirmBox && (
+        <ConfirmDialog
+          message={confirmBox.message}
+          confirmLabel={confirmBox.confirmLabel}
+          onConfirm={() => {
+            const run = confirmBox.onConfirm
+            setConfirmBox(null)
+            run()
+          }}
+          onCancel={() => setConfirmBox(null)}
+        />
+      )}
     </div>
   )
 }
@@ -2420,6 +2448,7 @@ function MetaPanel({
   onCancel: () => void
 }) {
   const u = ui()
+  useEscape(onCancel)
   return (
     <div
       style={{
@@ -3134,6 +3163,85 @@ function SettingsPanel({
   )
 }
 
+/** Zwevende actie-knop (pill) op het canvas, met hover-feedback. Kleur-
+ * semantiek: 'primary' = dé hoofdactie van een rij (max één per rij),
+ * 'neutral' = overige acties, 'ok' = bevestigend opslaan, 'danger' =
+ * destructief. */
+function Pill({
+  kind = 'neutral',
+  small = false,
+  title,
+  onClick,
+  children,
+}: {
+  kind?: 'neutral' | 'primary' | 'ok' | 'danger'
+  small?: boolean
+  title?: string
+  onClick: () => void
+  children: React.ReactNode
+}) {
+  const u = ui()
+  const [hover, setHover] = useState(false)
+  const bg =
+    kind === 'primary' ? u.primary : kind === 'ok' ? u.okDeep : kind === 'danger' ? u.dangerDeep : u.fabNeutralBg
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        ...fabBtn(u),
+        background: bg,
+        ...(small ? { fontSize: 12, padding: '8px 12px' } : null),
+        filter: hover ? 'brightness(1.18)' : 'none',
+        transition: 'filter 120ms',
+      }}
+    >
+      {children}
+    </button>
+  )
+}
+
+/** Segment in de weergave-schakelaar (één afgeronde track): actief = primair
+ * vlak. Een klik op het actíéve segment blijft doorgegeven — Scatter werpt
+ * dan opnieuw en "Willekeurig" schudt opnieuw. */
+function SegBtn({
+  active,
+  title,
+  onClick,
+  children,
+}: {
+  active: boolean
+  title?: string
+  onClick: () => void
+  children: React.ReactNode
+}) {
+  const u = ui()
+  const [hover, setHover] = useState(false)
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        padding: '8px 14px',
+        borderRadius: 18,
+        border: 'none',
+        cursor: 'pointer',
+        font: '13px sans-serif',
+        background: active ? u.primary : hover ? 'rgba(255,255,255,0.10)' : 'transparent',
+        color: active ? u.primaryText : u.floatBtnSoftText,
+        transition: 'background 120ms',
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {children}
+    </button>
+  )
+}
+
 function Fab({
   uiLevel,
   layoutMode,
@@ -3172,90 +3280,118 @@ function Fab({
   onGridSort: (sort: 'date' | 'name' | 'random') => void
 }) {
   const u = ui()
-  const wrap: React.CSSProperties = { position: 'absolute', right: 20, bottom: 20, display: 'flex', gap: 10 }
+  // Rechts verankerd; de eventuele secundaire rij (sortering/opslaan) staat
+  // BOVEN de hoofdrij zodat die nooit langer wordt of botst met de
+  // "Alles passend"-knop linksonder.
+  const wrap: React.CSSProperties = {
+    position: 'absolute',
+    right: 20,
+    bottom: 20,
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'flex-end',
+    gap: 10,
+  }
+  const row: React.CSSProperties = { display: 'flex', gap: 8, alignItems: 'center' }
   if (uiLevel === 'lifeline') {
     return (
       <div style={wrap}>
-        <button onClick={onAddYear} style={fabBtn(u)}>+ Nieuw jaar</button>
+        <Pill kind="primary" onClick={onAddYear}>+ Nieuw jaar</Pill>
       </div>
     )
   }
   if (uiLevel === 'year') {
     return (
       <div style={wrap}>
-        <button onClick={onYearTheme} style={{ ...fabBtn(u), background: u.fabNeutralBg }} title="Thema van dit jaar">
-          Thema
-        </button>
-        <button onClick={onAddEvent} style={fabBtn(u)}>+ Nieuwe memory</button>
+        <div style={row}>
+          <Pill onClick={onYearTheme} title="Thema van dit jaar">Thema</Pill>
+          <Pill kind="primary" onClick={onAddEvent}>+ Nieuwe memory</Pill>
+        </div>
       </div>
     )
   }
   if (uiLevel === 'event') {
-    const seg = (m: 'custom' | 'grid' | 'scatter'): React.CSSProperties => ({
-      ...fabBtn(u),
-      background: layoutMode === m ? u.primary : u.fabNeutralBg,
-    })
-    const sortSeg = (s: 'date' | 'name' | 'random'): React.CSSProperties => ({
-      ...fabBtn(u),
-      fontSize: 12,
-      padding: '8px 12px',
-      background: gridSort === s ? u.primary : u.fabSortBg,
-    })
     return (
       <div style={wrap}>
-        {/* Vooraan (links) zodat het verschijnen de layout-knoppen NIET verschuift
-            — de rij is rechts verankerd, dus een knop links laat de rest op zijn plek. */}
-        {layoutMode === 'grid' && (
-          <>
-            <span style={{ ...fabBtn(u), background: 'transparent', color: u.fabHint, cursor: 'default', paddingRight: 2 }}>
-              Sorteer
-            </span>
-            <button onClick={() => onGridSort('date')} style={sortSeg('date')} title="Sorteer op datum/tijd">
-              Datum
-            </button>
-            <button onClick={() => onGridSort('name')} style={sortSeg('name')} title="Sorteer op naam/bestandsnaam">
-              Naam
-            </button>
-            <button
-              onClick={() => onGridSort('random')}
-              style={sortSeg('random')}
-              title="Willekeurig — klik nogmaals om opnieuw te schudden"
-            >
-              Willekeurig 🎲
-            </button>
-          </>
-        )}
+        {/* Secundaire rij (alleen bij een niet-eigen weergave): sortering (grid)
+            + "Opslaan als Eigen". Boven de hoofdrij, rechts uitgelijnd — de
+            hoofdrij blijft daardoor altijd even lang en op zijn plek. */}
         {layoutMode !== 'custom' && (
-          <button onClick={onSaveLayout} style={{ ...fabBtn(u), background: u.okDeep }} title="Deze opstelling vastleggen als je eigen layout">
-            Opslaan als Eigen
-          </button>
+          <div style={row}>
+            {layoutMode === 'grid' && (
+              <>
+                <span style={{ font: '12px sans-serif', color: u.fabHint, marginRight: 2 }}>Sorteer</span>
+                <Pill small kind={gridSort === 'date' ? 'primary' : 'neutral'} onClick={() => onGridSort('date')} title="Sorteer op datum/tijd">
+                  Datum
+                </Pill>
+                <Pill small kind={gridSort === 'name' ? 'primary' : 'neutral'} onClick={() => onGridSort('name')} title="Sorteer op naam/bestandsnaam">
+                  Naam
+                </Pill>
+                <Pill
+                  small
+                  kind={gridSort === 'random' ? 'primary' : 'neutral'}
+                  onClick={() => onGridSort('random')}
+                  title="Willekeurig — klik nogmaals om opnieuw te schudden"
+                >
+                  Willekeurig 🎲
+                </Pill>
+                <span style={{ width: 6 }} />
+              </>
+            )}
+            <Pill small kind="ok" onClick={onSaveLayout} title="Deze opstelling vastleggen als je eigen layout">
+              Opslaan als Eigen
+            </Pill>
+          </div>
         )}
-        <button onClick={() => onLayout('custom')} style={seg('custom')}>Eigen</button>
-        <button onClick={() => onLayout('grid')} style={seg('grid')}>Grid</button>
-        <button onClick={() => onLayout('scatter')} style={seg('scatter')} title="Elke klik een nieuwe worp">
-          Scatter 🎲
-        </button>
-        <button
-          onClick={onToggleScatterRotate}
-          style={{ ...fabBtn(u), background: scatterRotate ? u.primary : u.fabNeutralBg, width: 42, paddingLeft: 0, paddingRight: 0 }}
-          title={scatterRotate ? 'Scatter legt foto’s scheef (klik = recht)' : 'Scatter legt foto’s recht (klik = scheef)'}
-        >
-          {scatterRotate ? '⟲' : '▭'}
-        </button>
-        <button onClick={onAddPhotos} style={fabBtn(u)}>+ Foto&apos;s</button>
-        <button onClick={onAddNote} style={fabBtn(u)}>+ Notitie</button>
-        <button onClick={onEventTheme} style={{ ...fabBtn(u), background: u.fabNeutralBg }} title="Thema van deze memory">
-          Thema
-        </button>
-        <button onClick={onEditEvent} style={fabBtn(u)}>Bewerk memory</button>
+        <div style={{ ...row, flexWrap: 'wrap-reverse', justifyContent: 'flex-end', maxWidth: 'calc(100vw - 160px)' }}>
+          {/* Weergave-schakelaar: één segmented control (actief = blauw vlak);
+              het ⟲/▭-knopje is een losse toggle achter een divider. */}
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 2,
+              padding: 3,
+              borderRadius: 21,
+              background: u.fabSortBg,
+              boxShadow: '0 4px 14px rgba(0,0,0,0.4)',
+            }}
+          >
+            <SegBtn active={layoutMode === 'custom'} onClick={() => onLayout('custom')}>
+              Eigen
+            </SegBtn>
+            <SegBtn active={layoutMode === 'grid'} onClick={() => onLayout('grid')}>
+              Grid
+            </SegBtn>
+            <SegBtn active={layoutMode === 'scatter'} onClick={() => onLayout('scatter')} title="Elke klik een nieuwe worp">
+              Scatter 🎲
+            </SegBtn>
+            <div style={{ width: 1, height: 20, background: 'rgba(255,255,255,0.22)', margin: '0 4px' }} />
+            <SegBtn
+              active={scatterRotate}
+              onClick={onToggleScatterRotate}
+              title={scatterRotate ? 'Scatter legt foto’s scheef (klik = recht)' : 'Scatter legt foto’s recht (klik = scheef)'}
+            >
+              {scatterRotate ? '⟲' : '▭'}
+            </SegBtn>
+          </div>
+          {/* Ruimte tussen het weergave-cluster en de acties. */}
+          <span style={{ width: 14 }} />
+          <Pill onClick={onAddPhotos}>+ Foto&apos;s</Pill>
+          <Pill onClick={onAddNote}>+ Notitie</Pill>
+          <Pill onClick={onEventTheme} title="Thema van deze memory">Thema</Pill>
+          <Pill kind="primary" onClick={onEditEvent}>Bewerk memory</Pill>
+        </div>
       </div>
     )
   }
   if (uiLevel === 'focus') {
     return (
       <div style={wrap}>
-        <button onClick={onEdit} style={fabBtn(u)}>Bewerk</button>
-        <button onClick={onDelete} style={{ ...fabBtn(u), background: u.dangerDeep }}>Verwijder</button>
+        <div style={row}>
+          <Pill kind="primary" onClick={onEdit}>Bewerk</Pill>
+          <Pill kind="danger" onClick={onDelete}>Verwijder</Pill>
+        </div>
       </div>
     )
   }
@@ -3278,6 +3414,7 @@ function EditPanel({
   onCancel: () => void
 }) {
   const u = ui()
+  useEscape(onCancel)
   return (
     <div
       style={{
@@ -3335,6 +3472,7 @@ function EventDialog({
   onCancel: () => void
 }) {
   const u = ui()
+  useEscape(onCancel)
   const endBeforeStart = form.endAt !== '' && form.endAt < form.startAt
   const invalid = !form.title.trim() || !form.startAt || endBeforeStart
   // Belang-rating: bij bewerken kan de size fijn-afgesteld zijn (Shift-slepen op
@@ -3481,6 +3619,7 @@ function Composer({
   onCancel: () => void
 }) {
   const u = ui()
+  useEscape(onCancel)
   return (
     <div
       style={{
@@ -3645,6 +3784,93 @@ function BackButton({ onClick }: { onClick: () => void }) {
 /** Pixi-hex (0xrrggbb) → CSS-hex ('#rrggbb'), voor de thema-previews. */
 function hexColor(c: number): string {
   return `#${c.toString(16).padStart(6, '0')}`
+}
+
+/** Sluit een dialog op Escape. Capture-fase + stopPropagation, zodat de
+ * globale navigatie-handlers (goBack) stil blijven zolang de dialog open is.
+ * Staat de focus in een invoerveld, dan verlaat de éérste Escape alleen het
+ * veld (blur) — zo gooit een reflex-Escape nooit stil een half ingevuld
+ * formulier weg; de tweede Escape sluit de dialog. */
+function useEscape(onClose: () => void): void {
+  const ref = useRef(onClose)
+  ref.current = onClose
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape') return
+      e.stopPropagation()
+      const el = document.activeElement
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) {
+        ;(el as HTMLElement).blur()
+        return
+      }
+      ref.current()
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [])
+}
+
+/** Gestylede bevestigings-dialoog voor destructieve acties (vervangt het
+ * stijlbrekende native window.confirm). Enter = bevestigen, Escape = annuleren. */
+function ConfirmDialog({
+  message,
+  confirmLabel,
+  onConfirm,
+  onCancel,
+}: {
+  message: string
+  confirmLabel: string
+  onConfirm: () => void
+  onCancel: () => void
+}) {
+  const u = ui()
+  useEscape(onCancel)
+  const confirmRef = useRef(onConfirm)
+  confirmRef.current = onConfirm
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key !== 'Enter') return
+      // Auto-repeat (Enter ingedrukt houden op de trigger-knop) mag nooit
+      // meteen bevestigen, en een gefocuste knop (bijv. "Annuleren" na Tab)
+      // handelt Enter zelf af via zijn eigen click.
+      if (e.repeat) return
+      const t = e.target as HTMLElement | null
+      if (t?.tagName === 'BUTTON') return
+      e.stopPropagation()
+      confirmRef.current()
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [])
+  return (
+    <div
+      onClick={onCancel}
+      style={{
+        position: 'absolute',
+        inset: 0,
+        zIndex: 1200,
+        background: u.backdrop,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{ width: 380, maxWidth: '92%', background: u.card, color: u.text, borderRadius: 12, padding: 20 }}
+      >
+        <div style={{ fontSize: 15, lineHeight: 1.5 }}>{message}</div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 18 }}>
+          <button onClick={onCancel} style={ghostBtn(u)}>
+            Annuleren
+          </button>
+          <button onClick={onConfirm} style={{ ...primaryBtn(u), background: u.danger }}>
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 /** Thema-kiezer voor één niveau (jaar of event). Keuzes worden direct
