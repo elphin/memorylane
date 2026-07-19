@@ -1,6 +1,8 @@
 # Personalisatie-plan — MemoryLane
 
-> Status: concept ter review. Doel: gebruikers laten personaliseren hoe hun
+> Status: fase 1 t/m 5 GEBOUWD (zie de "Fase N personalisatie"-commits van
+> 2026-07-19); alleen fase 6 (decoratie & sfeer-extra's) staat nog open als
+> aparte beslissing. Doel: gebruikers laten personaliseren hoe hun
 > tijdlijn en herinneringen eruitzien — fonts, kleuren, achtergronden, patronen,
 > foto-frames — op app-, jaar-, event- en item-niveau, zonder de 60fps-rendering
 > of het local-first vault-model te breken.
