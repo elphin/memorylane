@@ -16,5 +16,15 @@ export default defineConfig({
   },
   build: {
     target: 'esnext',
+    rollupOptions: {
+      output: {
+        // PixiJS in een eigen chunk: houdt de app-chunk klein en overzichtelijk
+        // (runtime maakt het voor de desktop-app niet uit).
+        manualChunks: { pixi: ['pixi.js'] },
+      },
+    },
+    // PixiJS is als één library nu eenmaal ~545 KB; verder opsplitsen heeft
+    // geen zin — grens er net boven zodat échte groei wel weer waarschuwt.
+    chunkSizeWarningLimit: 600,
   },
 })

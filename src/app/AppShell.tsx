@@ -2580,8 +2580,9 @@ function SettingsPanel({
   onImported: () => void
 }) {
   const [tab, setTab] = useState<
-    'weergave' | 'tijdlijn' | 'dia' | 'beheer' | 'telefoon' | 'sneltoetsen' | 'over'
-  >('weergave')
+    'thema' | 'weergave' | 'navigatie' | 'tijdlijn' | 'dia' | 'beheer' | 'telefoon' | 'sneltoetsen' | 'over'
+  >('thema')
+  useEscape(onClose)
   // Versie runtime uit de app-bundle halen (klopt zo automatisch met de installer);
   // in browser-dev bestaat de Tauri-API niet → val terug op de laatst-bekende versie.
   const [appVersion, setAppVersion] = useState('2.1.2')
@@ -2622,10 +2623,22 @@ function SettingsPanel({
     set: (v: boolean) => void
     label: string
   }): React.ReactElement => (
-    <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
-      <input type="checkbox" checked={on} onChange={(e) => set(e.target.checked)} />
+    <div
+      role="switch"
+      aria-checked={on}
+      tabIndex={0}
+      onClick={() => set(!on)}
+      onKeyDown={(e) => {
+        if (e.key === ' ' || e.key === 'Enter') {
+          e.preventDefault()
+          set(!on)
+        }
+      }}
+      style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', userSelect: 'none' }}
+    >
+      <Switch on={on} u={u} />
       <span style={{ fontSize: 14, color: u.text }}>{label}</span>
-    </label>
+    </div>
   )
   const subhead = (t: string): React.ReactElement => (
     <div style={{ fontSize: 13, color: u.textMuted, margin: '16px 0 6px' }}>{t}</div>
@@ -2642,18 +2655,24 @@ function SettingsPanel({
     boxShadow: `0 1px 0 ${u.kbdShadow}`,
     whiteSpace: 'nowrap',
   }
-  const tabBtn = (id: typeof tab, label: string): React.ReactElement => (
+  // Sidebar-navigatie: verticale sectielijst links (toptabs wrapten bij 7+
+  // secties en boden geen ruimte voor logische groepering).
+  const navBtn = (id: typeof tab, label: string): React.ReactElement => (
     <button
       onClick={() => setTab(id)}
       style={{
-        flex: 1,
-        padding: '10px 8px',
+        display: 'block',
+        width: '100%',
+        textAlign: 'left',
+        padding: '9px 14px',
         border: 'none',
-        borderBottom: tab === id ? `2px solid ${u.primary}` : '2px solid transparent',
-        background: 'transparent',
+        borderRadius: 8,
+        background: tab === id ? u.cardAlt : 'transparent',
         color: tab === id ? u.text : u.textMuted,
-        font: '13px sans-serif',
+        fontSize: 13,
+        fontWeight: tab === id ? 600 : 400,
         cursor: 'pointer',
+        whiteSpace: 'nowrap',
       }}
     >
       {label}
@@ -2674,9 +2693,9 @@ function SettingsPanel({
       <div
         onClick={(e) => e.stopPropagation()}
         style={{
-          width: 640,
+          width: 780,
           maxWidth: '94%',
-          maxHeight: '88vh',
+          height: 'min(660px, 88vh)',
           background: u.card,
           color: u.text,
           borderRadius: 12,
@@ -2685,18 +2704,32 @@ function SettingsPanel({
           overflow: 'hidden',
         }}
       >
-        <div style={{ fontSize: 18, fontWeight: 700, padding: '18px 22px 10px' }}>Instellingen</div>
-        <div style={{ display: 'flex', padding: '0 12px', borderBottom: `1px solid ${u.border}` }}>
-          {tabBtn('weergave', 'Weergave')}
-          {tabBtn('tijdlijn', 'Tijdlijn & canvas')}
-          {tabBtn('dia', 'Diavoorstelling')}
-          {tabBtn('beheer', 'Beheer')}
-          {tabBtn('telefoon', 'Telefoon')}
-          {tabBtn('sneltoetsen', 'Sneltoetsen')}
-          {tabBtn('over', 'Over')}
-        </div>
-        <div style={{ overflowY: 'auto', padding: '14px 22px 6px', flex: '1 1 auto' }}>
-          {tab === 'weergave' && (
+        <div style={{ fontSize: 18, fontWeight: 700, padding: '18px 22px 12px' }}>Instellingen</div>
+        <div style={{ display: 'flex', flex: '1 1 auto', minHeight: 0 }}>
+          <div
+            style={{
+              width: 172,
+              flex: '0 0 auto',
+              padding: '4px 10px 10px 12px',
+              borderRight: `1px solid ${u.border}`,
+              overflowY: 'auto',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 2,
+            }}
+          >
+            {navBtn('thema', 'Thema')}
+            {navBtn('weergave', 'Weergave')}
+            {navBtn('navigatie', 'Navigatie')}
+            {navBtn('tijdlijn', 'Tijdlijn & canvas')}
+            {navBtn('dia', 'Diavoorstelling')}
+            {navBtn('beheer', 'Beheer')}
+            {navBtn('telefoon', 'Telefoon')}
+            {navBtn('sneltoetsen', 'Sneltoetsen')}
+            {navBtn('over', 'Over')}
+          </div>
+          <div style={{ overflowY: 'auto', padding: '14px 22px 6px', flex: '1 1 auto' }}>
+          {tab === 'thema' && (
             <>
               {subhead('Thema')}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8 }}>
@@ -2756,7 +2789,11 @@ function SettingsPanel({
               {desc(
                 'Kleuren, fonts en papier-/linnen-texturen van de tijdlijn en de panelen — direct toegepast. Per jaar of memory kiezen kan met de Thema-knop op dat niveau.',
               )}
-              <div style={{ height: 1, background: u.border, margin: '16px 0' }} />
+            </>
+          )}
+
+          {tab === 'weergave' && (
+            <>
               <Toggle on={settings.showTitle} set={(v) => onChange({ showTitle: v })} label="Titel bovenin tonen" />
               {desc('"Memory Lane" op het overzicht, het jaar in een jaar, de memory-naam in een memory.')}
               {settings.showTitle && (
@@ -2799,8 +2836,11 @@ function SettingsPanel({
                 label="Schuif-animatie bij vorige/volgende (detailweergave)"
               />
               {desc('In de detailweergave schuift de vorige foto/video weg en de nieuwe in beeld. Uit = direct wisselen.')}
+            </>
+          )}
 
-              <div style={{ height: 1, background: u.border, margin: '16px 0' }} />
+          {tab === 'navigatie' && (
+            <>
               {subhead('Terug navigeren')}
               {desc(
                 <>
@@ -3147,6 +3187,7 @@ function SettingsPanel({
               </div>
             </>
           )}
+        </div>
         </div>
         <div
           style={{
@@ -3570,29 +3611,36 @@ function EventDialog({
           </div>
         </div>
         {form.mode === 'edit' && (
-          <label
+          <div
+            role="switch"
+            aria-checked={form.underConstruction ?? false}
+            tabIndex={0}
+            onClick={() => onChange({ underConstruction: !(form.underConstruction ?? false) })}
+            onKeyDown={(e) => {
+              if (e.key === ' ' || e.key === 'Enter') {
+                e.preventDefault()
+                onChange({ underConstruction: !(form.underConstruction ?? false) })
+              }
+            }}
             style={{
               display: 'flex',
               alignItems: 'center',
               gap: 10,
               marginTop: 16,
               cursor: 'pointer',
+              userSelect: 'none',
               color: u.textSoft,
               fontSize: 14,
             }}
           >
-            <input
-              type="checkbox"
-              checked={form.underConstruction ?? false}
-              onChange={(e) => onChange({ underConstruction: e.target.checked })}
-            />
+            <Switch on={form.underConstruction ?? false} u={u} />
             <span>
               🔨 Deze memory is nog <strong>in aanbouw</strong>
               <span style={{ color: u.hintMuted, marginLeft: 6, fontSize: 12 }}>
                 · toont een badge in de jaar-view
               </span>
             </span>
-          </label>
+          </div>
         )}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 14 }}>
           <button onClick={onCancel} style={ghostBtn(u)}>Annuleren</button>
@@ -3665,6 +3713,9 @@ function SearchPanel({
   onClose: () => void
 }) {
   const u = ui()
+  // Zoeken is transient (geen invoer die verloren kan gaan): Escape sluit
+  // altijd direct, ook met de focus buiten (of in) het zoekveld.
+  useEscape(onClose, { blurFirst: false })
   return (
     <div
       onClick={onClose}
@@ -3685,7 +3736,6 @@ function SearchPanel({
           autoFocus
           value={query}
           onChange={(e) => onChange(e.target.value)}
-          onKeyDown={(e) => e.key === 'Escape' && onClose()}
           placeholder="Zoek in je herinneringen…"
           style={field(u)}
         />
@@ -3786,12 +3836,50 @@ function hexColor(c: number): string {
   return `#${c.toString(16).padStart(6, '0')}`
 }
 
+/** Gestylede aan/uit-schakelaar (puur visueel; de klik-afhandeling zit op de
+ * omliggende rij). Vervangt de native checkbox voor een consistente,
+ * thema-volgende look in beide ui-modes. */
+function Switch({ on, u }: { on: boolean; u: UiPalette }) {
+  return (
+    <span
+      aria-hidden
+      style={{
+        width: 34,
+        height: 20,
+        borderRadius: 10,
+        flex: '0 0 auto',
+        background: on ? u.primary : u.border,
+        position: 'relative',
+        display: 'inline-block',
+        transition: 'background 140ms',
+      }}
+    >
+      <span
+        style={{
+          position: 'absolute',
+          top: 2,
+          left: on ? 16 : 2,
+          width: 16,
+          height: 16,
+          borderRadius: 8,
+          background: '#ffffff',
+          transition: 'left 140ms',
+          boxShadow: '0 1px 2px rgba(0,0,0,0.35)',
+        }}
+      />
+    </span>
+  )
+}
+
 /** Sluit een dialog op Escape. Capture-fase + stopPropagation, zodat de
  * globale navigatie-handlers (goBack) stil blijven zolang de dialog open is.
  * Staat de focus in een invoerveld, dan verlaat de éérste Escape alleen het
  * veld (blur) — zo gooit een reflex-Escape nooit stil een half ingevuld
- * formulier weg; de tweede Escape sluit de dialog. */
-function useEscape(onClose: () => void): void {
+ * formulier weg; de tweede Escape sluit de dialog. Met `blurFirst: false`
+ * sluit Escape ook vanuit een invoerveld direct (voor transient panels zoals
+ * zoeken, waar niets verloren kan gaan). */
+function useEscape(onClose: () => void, opts: { blurFirst?: boolean } = {}): void {
+  const { blurFirst = true } = opts
   const ref = useRef(onClose)
   ref.current = onClose
   useEffect(() => {
@@ -3799,7 +3887,7 @@ function useEscape(onClose: () => void): void {
       if (e.key !== 'Escape') return
       e.stopPropagation()
       const el = document.activeElement
-      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) {
+      if (blurFirst && el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) {
         ;(el as HTMLElement).blur()
         return
       }
@@ -3807,6 +3895,7 @@ function useEscape(onClose: () => void): void {
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 }
 
@@ -4142,9 +4231,10 @@ function FpsOverlay({ engineRef }: { engineRef: { current: RenderEngine | null }
   return (
     <div
       style={{
+        // Linksboven onder de terugknop — linksonder botste met de Zoom-pill.
         position: 'fixed',
-        left: 8,
-        bottom: 8,
+        left: 16,
+        top: 64,
         zIndex: 90,
         padding: '3px 8px',
         borderRadius: 6,
