@@ -245,9 +245,128 @@ export const UI_LIGHT: UiPalette = {
   warnText: '#6b5518',
 }
 
-/** Het actieve UI-palet. Aanroepen tijdens render (niet op module-scope
+// ── Thema-tinting van de chrome ──────────────────────────────────────────────
+// De basis-paletten hierboven zijn koud blauwgrijs (dark) of warm beige
+// (light). Om de chrome bij de rest van het thema te laten passen, worden de
+// NEUTRALE tokens (vlakken, randen, invoervelden, gedempte tekst, canvas-pills)
+// ge-herkleurd naar de temperatuur van het actieve thema — afgeleid uit zijn
+// eigen `surfaceStroke` (de border-kleur die het thema zelf al voor de tegels
+// gebruikt). Voor classic-dark/light is die stroke exact de bestaande
+// chrome-rand, dus daar verandert niets; een warm thema (Kodachrome) krijgt
+// warme panelen/randen, een koel thema (Oceaan) koele, Noir puur grijs.
+//
+// Semantische/accent-tokens (primary-blauw, danger-rood, ok-groen, amber,
+// witte tekst, donkere backdrops) blijven vast — die dragen betekenis of
+// contrast en horen niet mee te verkleuren.
+
+const REHUE_KEYS: (keyof UiPalette)[] = [
+  'card', 'cardAlt', 'border', 'borderSoft', 'inputBg', 'inputBorder', 'btnBorder',
+  'choiceBg', 'statusCardBg', 'phoneInputBg', 'fabNeutralBg', 'fabSortBg', 'kbdBg',
+  'kbdBorder', 'floatBtnBorder', 'floatBtnBg', 'toastBg', 'inputBgSoft', 'fitBtnBg',
+  'text', 'textMuted', 'textFaint', 'textSoft', 'textBright', 'textCrisp', 'tileText',
+  'btnText', 'labelMuted', 'hintLabel', 'hintMuted', 'chipText', 'fabHint',
+  'floatBtnSoftText',
+]
+
+interface Rgba {
+  r: number
+  g: number
+  b: number
+  a: number
+}
+
+function parseCss(css: string): Rgba {
+  if (css[0] === '#') {
+    let h = css.slice(1)
+    if (h.length === 3) h = h.split('').map((c) => c + c).join('')
+    const n = parseInt(h, 16)
+    return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255, a: 1 }
+  }
+  const m = css.match(/rgba?\(([^)]+)\)/)
+  if (m) {
+    const p = m[1].split(',').map((s) => parseFloat(s.trim()))
+    return { r: p[0] ?? 0, g: p[1] ?? 0, b: p[2] ?? 0, a: p[3] ?? 1 }
+  }
+  return { r: 0, g: 0, b: 0, a: 1 }
+}
+
+function formatCss({ r, g, b, a }: Rgba): string {
+  const R = Math.round(r)
+  const G = Math.round(g)
+  const B = Math.round(b)
+  if (a >= 1) return `#${((R << 16) | (G << 8) | B).toString(16).padStart(6, '0')}`
+  return `rgba(${R},${G},${B},${a})`
+}
+
+function rgbToHsl(r: number, g: number, b: number): { h: number; s: number; l: number } {
+  r /= 255
+  g /= 255
+  b /= 255
+  const max = Math.max(r, g, b)
+  const min = Math.min(r, g, b)
+  const l = (max + min) / 2
+  let h = 0
+  let s = 0
+  const d = max - min
+  if (d > 0) {
+    s = d / (1 - Math.abs(2 * l - 1))
+    if (max === r) h = ((g - b) / d) % 6
+    else if (max === g) h = (b - r) / d + 2
+    else h = (r - g) / d + 4
+    h /= 6
+    if (h < 0) h += 1
+  }
+  return { h, s, l }
+}
+
+function hslToRgb(h: number, s: number, l: number): Rgba {
+  const c = (1 - Math.abs(2 * l - 1)) * s
+  const hp = h * 6
+  const x = c * (1 - Math.abs((hp % 2) - 1))
+  let r = 0
+  let g = 0
+  let b = 0
+  if (hp < 1) [r, g, b] = [c, x, 0]
+  else if (hp < 2) [r, g, b] = [x, c, 0]
+  else if (hp < 3) [r, g, b] = [0, c, x]
+  else if (hp < 4) [r, g, b] = [0, x, c]
+  else if (hp < 5) [r, g, b] = [x, 0, c]
+  else [r, g, b] = [c, 0, x]
+  const m = l - c / 2
+  return { r: (r + m) * 255, g: (g + m) * 255, b: (b + m) * 255, a: 1 }
+}
+
+/** Herkleur één chrome-token naar de thema-tint: behoud de eigen helderheid
+ * (licht/donker-structuur blijft dus intact), zet de tint op de thema-hue en
+ * de verzadiging op die van het thema. Alpha blijft behouden. */
+function rehue(css: string, h: number, s: number): string {
+  const { r, g, b, a } = parseCss(css)
+  const hsl = rgbToHsl(r, g, b)
+  const out = hslToRgb(h, s, hsl.l)
+  return formatCss({ ...out, a })
+}
+
+function themedUi(base: UiPalette, strokeHex: number): UiPalette {
+  const src = rgbToHsl((strokeHex >> 16) & 255, (strokeHex >> 8) & 255, strokeHex & 255)
+  // Verzadiging aftoppen zodat de chrome "getinte grijs" blijft i.p.v.
+  // uitgesproken gekleurd (Oceaan's stroke is bijv. fors blauw).
+  const sat = Math.min(src.s, 0.3)
+  const out: UiPalette = { ...base }
+  for (const k of REHUE_KEYS) out[k] = rehue(base[k], src.h, sat)
+  return out
+}
+
+// Memo: de chrome verandert alleen bij een app-themawissel (nieuwe uiMode of
+// surfaceStroke). Zonder cache zou elke overlay-render 33 tokens herrekenen.
+let uiCache: { key: string; pal: UiPalette } | null = null
+
+/** Het actieve UI-palet — de basis (dark/light) ge-herkleurd naar de tint van
+ * het actieve app-thema. Aanroepen tijdens render (niet op module-scope
  * cachen): React her-rendert de overlays bij een themawissel omdat de
- * settings-state wijzigt, en leest dan hier de nieuwe mode. */
+ * settings-state wijzigt, en leest dan hier het nieuwe palet. */
 export function ui(): UiPalette {
-  return THEME.uiMode === 'light' ? UI_LIGHT : UI_DARK
+  const base = THEME.uiMode === 'light' ? UI_LIGHT : UI_DARK
+  const key = `${THEME.uiMode}:${THEME.colors.surfaceStroke}`
+  if (!uiCache || uiCache.key !== key) uiCache = { key, pal: themedUi(base, THEME.colors.surfaceStroke) }
+  return uiCache.pal
 }
