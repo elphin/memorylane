@@ -21,7 +21,7 @@ import { ACCENT_SWATCHES, FRAME_STYLES, TITLE_FONTS, resolveTheme, type ThemeCho
 import { BACKGROUNDS, BACKGROUND_NONE, loadBackgroundTexture } from '../theme/textures'
 import { THEME, setActiveTheme, type ResolvedTheme } from '../theme/tokens'
 import { UI_DARK, UI_LIGHT, ui, type UiPalette } from '../theme/ui'
-import { IconEigen, IconGrid, IconScatter, IconImage, IconNote, IconSliders, IconPalette, IconPencil } from './icons'
+import { IconEigen, IconGrid, IconScatter, IconImage, IconNote, IconSliders, IconPalette, IconPencil, IconPlus, IconTrash } from './icons'
 import { EventScene } from '../render/scenes/event'
 import type { NodePosition } from '../render/scenes/scene'
 import { Screensaver } from './Screensaver'
@@ -3635,7 +3635,7 @@ function Fab({
   if (uiLevel === 'lifeline') {
     return (
       <div style={wrap}>
-        <Pill kind="primary" onClick={onAddYear}>+ Nieuw jaar</Pill>
+        <Pill kind="primary" icon={<IconPlus />} onClick={onAddYear}>Nieuw jaar</Pill>
       </div>
     )
   }
@@ -3643,8 +3643,8 @@ function Fab({
     return (
       <div style={wrap}>
         <div style={row}>
-          <Pill onClick={onYearTheme} title="Thema van dit jaar">Thema</Pill>
-          <Pill kind="primary" onClick={onAddEvent}>+ Nieuwe memory</Pill>
+          <Pill icon={<IconPalette size={17} />} onClick={onYearTheme} title="Thema van dit jaar">Thema</Pill>
+          <Pill kind="primary" icon={<IconPlus />} onClick={onAddEvent}>Nieuwe memory</Pill>
         </div>
       </div>
     )
@@ -3711,8 +3711,8 @@ function Fab({
     return (
       <div style={wrap}>
         <div style={row}>
-          <Pill kind="primary" onClick={onEdit}>Bewerk</Pill>
-          <Pill kind="danger" onClick={onDelete}>Verwijder</Pill>
+          <Pill kind="primary" icon={<IconPencil size={16} />} onClick={onEdit}>Bewerk</Pill>
+          <Pill kind="danger" icon={<IconTrash size={16} />} onClick={onDelete}>Verwijder</Pill>
         </div>
       </div>
     )
