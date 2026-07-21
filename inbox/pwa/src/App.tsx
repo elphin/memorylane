@@ -1,40 +1,10 @@
 import { useEffect, useState } from 'react'
 import { getPairing, type Pairing } from './store/db'
-import { b64urlToBytes, bytesToHex } from './util'
+import { parsePairFromLocation, type PairLink } from './pair'
 import { PairScreen } from './screens/Pair'
 import { NewMemoryScreen } from './screens/NewMemory'
 import { OutboxScreen } from './screens/Outbox'
 import { SettingsScreen } from './screens/Settings'
-
-export interface PairLink {
-  mailboxId: string
-  token: string
-  masterKeyHex: string
-}
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-
-function parsePairLink(): PairLink | null {
-  const h = location.hash.startsWith('#') ? location.hash.slice(1) : ''
-  if (!h) return null
-  const p = new URLSearchParams(h)
-  if (p.get('v') !== '1') return null
-  const mb = p.get('mb')
-  const t = p.get('t')
-  const k = p.get('k')
-  if (!mb || !t || !k) return null
-  if (!UUID_RE.test(mb) || t.length < 8) return null
-  try {
-    const key = b64urlToBytes(k)
-    // De masterKey MOET 32 bytes zijn (§7.2). Een verminkt/afgekapt QR-fragment zou
-    // anders stil een niet-te-ontsleutelen upload opleveren — pas thuis bij import
-    // merkbaar. Liever hier al weigeren.
-    if (key.length !== 32) return null
-    return { mailboxId: mb, token: t, masterKeyHex: bytesToHex(key) }
-  } catch {
-    return null
-  }
-}
 
 type View = 'loading' | 'pair' | 'new' | 'outbox' | 'settings'
 
@@ -45,7 +15,7 @@ export function App() {
   const [expired, setExpired] = useState(false)
 
   useEffect(() => {
-    const link = parsePairLink()
+    const link = parsePairFromLocation()
     void (async () => {
       const existing = await getPairing()
       setPairing(existing)
@@ -117,6 +87,7 @@ export function App() {
       <SettingsScreen
         pairing={p}
         onBack={() => setView('new')}
+        onRepair={() => setView('pair')}
         onUnpaired={() => {
           setPairing(null)
           setView('pair')

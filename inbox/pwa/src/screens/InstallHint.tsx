@@ -112,6 +112,10 @@ export function InstallHint() {
             Op beginscherm zetten
           </button>
         )}
+        <div className="muted" style={{ fontSize: 12, marginTop: 8, lineHeight: 1.4 }}>
+          Let op: de app op je beginscherm heeft zijn eigen geheugen. Open 'm de eerste keer en koppel
+          met <b>Scan koppelcode</b> (dezelfde QR op je computer).
+        </div>
       </div>
       <button
         aria-label="Verbergen"

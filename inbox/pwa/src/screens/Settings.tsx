@@ -14,11 +14,13 @@ export function applyTheme(t: Theme): void {
 export function SettingsScreen({
   pairing,
   onBack,
+  onRepair,
   onUnpaired,
   nav,
 }: {
   pairing: Pairing
   onBack: () => void
+  onRepair: () => void
   onUnpaired: () => void
   nav: ReactNode
 }) {
@@ -78,6 +80,13 @@ export function SettingsScreen({
         <button className="btn" onClick={onBack}>
           Terug
         </button>
+        <button className="btn btn-ghost" onClick={onRepair}>
+          Opnieuw koppelen (scan code)
+        </button>
+        <div className="muted" style={{ fontSize: 12, marginTop: -4 }}>
+          Nieuwe koppelcode op de computer gemaakt, of deze app zonder koppeling geopend? Scan hier de
+          QR-code opnieuw — je concepten blijven bewaard.
+        </div>
         <button className="btn btn-ghost" style={{ color: 'var(--danger)' }} onClick={() => void unpair()}>
           Ontkoppelen
         </button>
