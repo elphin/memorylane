@@ -2318,17 +2318,20 @@ export function AppShell() {
       {themePanel && (
         <ThemePanel
           scope={themePanel}
-          title={
-            themePanel === 'year'
-              ? `Thema — ${header.text}`
-              : `Thema — ${currentEventInfoRef.current?.title || 'memory'}`
-          }
+          title={themePanel === 'year' ? header.text : currentEventInfoRef.current?.title || 'memory'}
           inheritedName={
             themePanel === 'event' &&
             currentThemeChoicesRef.current.year?.id &&
             THEMES.some((t) => t.id === currentThemeChoicesRef.current.year?.id)
               ? `${themeById(currentThemeChoicesRef.current.year.id).name} (jaar)`
               : `${themeById(settings.themeId).name} (app)`
+          }
+          inheritedTheme={
+            themePanel === 'event' &&
+            currentThemeChoicesRef.current.year?.id &&
+            THEMES.some((t) => t.id === currentThemeChoicesRef.current.year?.id)
+              ? themeById(currentThemeChoicesRef.current.year.id)
+              : themeById(settings.themeId)
           }
           value={themePanelValue}
           onChange={changeScopeTheme}
@@ -4251,6 +4254,7 @@ function ThemePanel({
   scope,
   title,
   inheritedName,
+  inheritedTheme,
   value,
   onChange,
   onClose,
@@ -4258,6 +4262,7 @@ function ThemePanel({
   scope: 'year' | 'event'
   title: string
   inheritedName: string
+  inheritedTheme: ResolvedTheme
   value: ThemeChoiceLike | null
   onChange: (c: ThemeChoiceLike | null) => void
   onClose: () => void
@@ -4283,22 +4288,97 @@ function ThemePanel({
     }
     onChange(norm(next))
   }
-  const tile: React.CSSProperties = {
-    padding: 0,
-    borderRadius: 8,
-    overflow: 'hidden',
+  // "Fijn afstellen" staat standaard open zodra er al iets is fijngesteld, zodat
+  // bestaande aanpassingen meteen zichtbaar zijn; anders ingeklapt.
+  const [tweakOpen, setTweakOpen] = useState<boolean>(!!(value?.accent || value?.titleFont || value?.background))
+  const serif = 'Georgia, "Times New Roman", serif'
+  const sectionLabel = (mt: number): React.CSSProperties => ({
+    fontSize: 11,
+    letterSpacing: 1.1,
+    textTransform: 'uppercase',
+    color: u.textMuted,
+    margin: `${mt}px 0 10px`,
+  })
+  const preview = (t: ResolvedTheme): React.ReactElement => (
+    <div
+      style={{
+        height: 54,
+        borderRadius: 9,
+        background: hexColor(t.colors.appBg),
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 6,
+      }}
+    >
+      <span
+        style={{
+          width: 20,
+          height: 14,
+          borderRadius: 3,
+          background: hexColor(t.colors.surface),
+          border: `1px solid ${hexColor(t.colors.surfaceStroke)}`,
+        }}
+      />
+      <span style={{ width: 12, height: 12, borderRadius: 6, background: hexColor(t.colors.accent) }} />
+      <span style={{ width: 20, height: 14, borderRadius: 3, background: hexColor(t.colors.frame) }} />
+    </div>
+  )
+  const tileBtn = (selected: boolean): React.CSSProperties => ({
+    padding: 8,
+    borderRadius: 13,
     cursor: 'pointer',
     textAlign: 'left',
-    background: u.cardAlt,
+    background: selected ? u.primaryFaintBg : u.cardAlt,
+    border: `1px solid ${selected ? u.primary : u.border}`,
+    boxShadow: selected ? `0 0 0 3px ${u.primaryFaintBg}` : 'none',
+    transition: 'border 120ms, box-shadow 120ms, background 120ms',
+  })
+  const tileLabelRow: React.CSSProperties = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 8,
+    padding: '0 2px',
   }
-  const chip = (selected: boolean): React.CSSProperties => ({
-    padding: '6px 12px',
-    borderRadius: 8,
-    cursor: 'pointer',
-    background: u.cardAlt,
+  const geerfdBadge: React.CSSProperties = {
+    fontSize: 9,
+    letterSpacing: 0.6,
+    fontWeight: 700,
+    textTransform: 'uppercase',
+    color: u.primarySoft,
+    background: u.primaryFaintBg,
+    border: `1px solid ${u.primarySoft}`,
+    padding: '2px 6px',
+    borderRadius: 6,
+    flex: '0 0 auto',
+  }
+  const nameLabel = (t: ResolvedTheme): React.CSSProperties => ({
+    fontSize: 12.5,
+    fontFamily: t.fonts.title,
     color: u.text,
-    fontSize: 13,
-    border: selected ? `2px solid ${u.primary}` : `2px solid ${u.border}`,
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+  })
+  const swatch = (selected: boolean, c?: string): React.CSSProperties => ({
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    flex: '0 0 auto',
+    cursor: 'pointer',
+    background: c ?? 'transparent',
+    border: c ? `1px solid ${u.border}` : `1px dashed ${u.textMuted}`,
+    boxShadow: selected ? `0 0 0 2px ${u.card}, 0 0 0 4px ${u.primary}` : 'none',
+  })
+  const pill = (selected: boolean): React.CSSProperties => ({
+    padding: '9px 15px',
+    borderRadius: 11,
+    cursor: 'pointer',
+    fontSize: 14,
+    background: selected ? u.primaryFaintBg : u.cardAlt,
+    color: u.text,
+    border: `1px solid ${selected ? u.primary : u.border}`,
   })
   return (
     <div
@@ -4316,169 +4396,176 @@ function ThemePanel({
       <div
         onClick={(e) => e.stopPropagation()}
         style={{
-          width: 560,
+          width: 600,
           maxWidth: '94%',
           maxHeight: '86vh',
           overflowY: 'auto',
           background: u.card,
           color: u.text,
-          borderRadius: 12,
-          padding: '18px 22px',
+          borderRadius: 22,
+          padding: '26px 28px',
+          border: `1px solid ${u.border}`,
+          boxShadow: '0 30px 80px rgba(0,0,0,0.55)',
         }}
       >
-        <div style={{ fontSize: 17, fontWeight: 700, marginBottom: 12 }}>{title}</div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
+          <div>
+            <div style={{ fontFamily: serif, fontStyle: 'italic', fontSize: 24, color: u.text }}>Thema</div>
+            <div style={{ fontSize: 12.5, color: u.textMuted, marginTop: 2 }}>
+              Kies een look voor {title}
+              {scope === 'event' ? ' — fijn afstellen kan onderaan.' : '.'}
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            aria-label="Sluiten"
+            title="Sluiten"
+            style={{
+              width: 34,
+              height: 34,
+              borderRadius: 17,
+              flex: '0 0 auto',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              background: u.cardAlt,
+              border: `1px solid ${u.border}`,
+              color: u.textMuted,
+              cursor: 'pointer',
+              fontSize: 15,
+            }}
+          >
+            ✕
+          </button>
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
           <button
             onClick={() => patch({ id: undefined })}
-            title="Gebruik het thema van het niveau erboven"
-            style={{ ...tile, border: !value?.id ? `2px solid ${u.primary}` : `2px dashed ${u.border}` }}
+            title={`Geërfd: ${inheritedName} — gebruik het thema van het niveau erboven`}
+            style={tileBtn(!value?.id)}
           >
-            <div
-              style={{
-                height: 40,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                color: u.textMuted,
-                fontSize: 12,
-              }}
-            >
-              Geërfd
-            </div>
-            <div
-              style={{
-                padding: '5px 7px',
-                fontSize: 12,
-                color: u.tileText,
-                whiteSpace: 'nowrap',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-              }}
-            >
-              {inheritedName}
+            {preview(inheritedTheme)}
+            <div style={tileLabelRow}>
+              <span style={geerfdBadge}>Geërfd</span>
+              <span style={nameLabel(inheritedTheme)}>{inheritedName}</span>
             </div>
           </button>
           {THEMES.map((t) => (
-            <button
-              key={t.id}
-              onClick={() => patch({ id: t.id })}
-              title={t.name}
-              style={{ ...tile, border: value?.id === t.id ? `2px solid ${u.primary}` : `2px solid ${u.border}` }}
-            >
-              <div
-                style={{
-                  height: 40,
-                  background: hexColor(t.colors.appBg),
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: 5,
-                }}
-              >
-                <span
-                  style={{
-                    width: 16,
-                    height: 12,
-                    borderRadius: 2,
-                    background: hexColor(t.colors.surface),
-                    border: `1px solid ${hexColor(t.colors.surfaceStroke)}`,
-                  }}
-                />
-                <span style={{ width: 11, height: 11, borderRadius: 6, background: hexColor(t.colors.accent) }} />
-                <span style={{ width: 16, height: 12, borderRadius: 2, background: hexColor(t.colors.frame) }} />
-              </div>
-              <div
-                style={{
-                  padding: '5px 7px',
-                  fontSize: 12,
-                  color: value?.id === t.id ? u.text : u.tileText,
-                  fontFamily: t.fonts.title,
-                  whiteSpace: 'nowrap',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                }}
-              >
-                {t.name}
+            <button key={t.id} onClick={() => patch({ id: t.id })} title={t.name} style={tileBtn(value?.id === t.id)}>
+              {preview(t)}
+              <div style={tileLabelRow}>
+                <span style={nameLabel(t)}>{t.name}</span>
               </div>
             </button>
           ))}
         </div>
         {scope === 'event' && (
           <>
-            <div style={{ fontSize: 13, color: u.textMuted, margin: '14px 0 6px' }}>Accentkleur</div>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-              <button
-                onClick={() => patch({ accent: undefined })}
-                title="Geërfd"
-                style={{
-                  width: 28,
-                  height: 28,
-                  borderRadius: 14,
-                  background: u.cardAlt,
-                  color: u.textMuted,
-                  fontSize: 12,
-                  cursor: 'pointer',
-                  border: !value?.accent ? `2px solid ${u.primary}` : `2px solid ${u.border}`,
-                }}
-              >
-                —
-              </button>
-              {ACCENT_SWATCHES.map((c) => (
-                <button
-                  key={c}
-                  onClick={() => patch({ accent: c })}
-                  title={c}
-                  style={{
-                    width: 28,
-                    height: 28,
-                    borderRadius: 14,
-                    background: c,
-                    cursor: 'pointer',
-                    border: value?.accent === c ? `2px solid ${u.primary}` : `2px solid ${u.border}`,
-                  }}
-                />
-              ))}
-            </div>
-            <div style={{ fontSize: 13, color: u.textMuted, margin: '14px 0 6px' }}>Titel-font</div>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <button onClick={() => patch({ titleFont: undefined })} style={chip(!value?.titleFont)}>
-                Geërfd
-              </button>
-              {TITLE_FONTS.map((f) => (
-                <button
-                  key={f.id}
-                  onClick={() => patch({ titleFont: f.id })}
-                  style={{ ...chip(value?.titleFont === f.id), fontFamily: f.stack }}
-                >
-                  {f.name}
-                </button>
-              ))}
-            </div>
-            <div style={{ fontSize: 13, color: u.textMuted, margin: '14px 0 6px' }}>Achtergrond</div>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <button onClick={() => patch({ background: undefined })} style={chip(!value?.background)}>
-                Geërfd
-              </button>
-              <button
-                onClick={() => patch({ background: BACKGROUND_NONE })}
-                style={chip(value?.background === BACKGROUND_NONE)}
-                title="Effen kleur, ook als het thema een textuur heeft"
-              >
-                Effen
-              </button>
-              {BACKGROUNDS.map((b) => (
-                <button key={b.id} onClick={() => patch({ background: b.id })} style={chip(value?.background === b.id)}>
-                  {b.name}
-                </button>
-              ))}
-            </div>
+            <button
+              onClick={() => setTweakOpen((o) => !o)}
+              aria-expanded={tweakOpen}
+              aria-controls="thema-fijn-afstellen"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 7,
+                background: 'transparent',
+                border: 'none',
+                color: u.primarySoft,
+                fontSize: 13,
+                cursor: 'pointer',
+                padding: 0,
+                margin: '18px 0 0',
+              }}
+            >
+              <span style={{ display: 'inline-flex', transition: 'transform 160ms', transform: tweakOpen ? 'rotate(90deg)' : 'none' }}>
+                ▸
+              </span>
+              Fijn afstellen — accent, lettertype & achtergrond
+            </button>
+            {tweakOpen && (
+              <div id="thema-fijn-afstellen" style={{ marginTop: 14 }}>
+                <div style={sectionLabel(0)}>Accentkleur</div>
+                <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+                  <button onClick={() => patch({ accent: undefined })} title="Geërfd" style={swatch(!value?.accent)} />
+                  {ACCENT_SWATCHES.map((c) => (
+                    <button key={c} onClick={() => patch({ accent: c })} title={c} style={swatch(value?.accent === c, c)} />
+                  ))}
+                </div>
+                <div style={sectionLabel(18)}>Titel-lettertype</div>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <button onClick={() => patch({ titleFont: undefined })} style={pill(!value?.titleFont)}>
+                    Geërfd
+                  </button>
+                  {TITLE_FONTS.map((f) => (
+                    <button
+                      key={f.id}
+                      onClick={() => patch({ titleFont: f.id })}
+                      style={{ ...pill(value?.titleFont === f.id), fontFamily: f.stack }}
+                    >
+                      {f.name}
+                    </button>
+                  ))}
+                </div>
+                <div style={sectionLabel(18)}>Achtergrond</div>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <button onClick={() => patch({ background: undefined })} style={pill(!value?.background)}>
+                    Geërfd
+                  </button>
+                  <button
+                    onClick={() => patch({ background: BACKGROUND_NONE })}
+                    style={pill(value?.background === BACKGROUND_NONE)}
+                    title="Effen kleur, ook als het thema een textuur heeft"
+                  >
+                    Effen
+                  </button>
+                  {BACKGROUNDS.map((b) => (
+                    <button key={b.id} onClick={() => patch({ background: b.id })} style={pill(value?.background === b.id)}>
+                      {b.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </>
         )}
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 16 }}>
-          <button onClick={() => onChange(null)} style={ghostBtn(u)}>
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            marginTop: 22,
+            paddingTop: 16,
+            borderTop: `1px solid ${u.border}`,
+          }}
+        >
+          <button
+            onClick={() => onChange(null)}
+            style={{
+              padding: '10px 18px',
+              borderRadius: 12,
+              border: `1px solid ${u.border}`,
+              background: 'transparent',
+              color: u.textSoft,
+              fontSize: 14,
+              cursor: 'pointer',
+            }}
+          >
             Herstel naar geërfd
           </button>
-          <button onClick={onClose} style={primaryBtn(u)}>
+          <button
+            onClick={onClose}
+            style={{
+              padding: '10px 26px',
+              borderRadius: 12,
+              border: 'none',
+              background: u.primary,
+              color: u.primaryText,
+              fontSize: 15,
+              fontWeight: 600,
+              cursor: 'pointer',
+            }}
+          >
             Klaar
           </button>
         </div>
