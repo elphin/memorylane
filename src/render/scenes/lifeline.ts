@@ -82,16 +82,16 @@ export class LifelineScene implements Scene {
       tile.position.set(worldX + TILE_W / 2, 0)
 
       const bg = new Graphics()
-      bg.roundRect(0, 0, TILE_W, TILE_H, 12)
+      bg.rect(0, 0, TILE_W, TILE_H)
         .fill(T.colors.surface)
         .stroke({ width: 2, color: T.colors.surfaceStroke })
       tile.addChild(bg)
 
-      // Cover + crossfade-overlay in een geklipte container (afgeronde hoeken).
+      // Cover + crossfade-overlay in een geklipte container (strakke 90°-hoeken).
       const coverArea = new Container()
       coverArea.position.set(8, 8)
       const mask = new Graphics()
-      mask.roundRect(0, 0, COVER_W, COVER_H, 8).fill(0xffffff)
+      mask.rect(0, 0, COVER_W, COVER_H).fill(0xffffff)
       const cover = new Sprite(Texture.WHITE)
       cover.tint = T.colors.coverLoading
       cover.setSize(COVER_W, COVER_H)
@@ -134,7 +134,7 @@ export class LifelineScene implements Scene {
       // bg-omtrek, net als de jaar-view/canvas hun eigen rand gebruiken). Standaard
       // onzichtbaar; faadt in op de gefocuste tegel.
       const focusRing = new Graphics()
-      focusRing.roundRect(0, 0, TILE_W, TILE_H, 12).stroke({ width: 3, color: 0xffffff })
+      focusRing.rect(0, 0, TILE_W, TILE_H).stroke({ width: 3, color: 0xffffff })
       focusRing.visible = false
       tile.addChild(focusRing)
 

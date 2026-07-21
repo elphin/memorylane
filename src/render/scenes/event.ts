@@ -361,13 +361,13 @@ export class EventScene implements Scene {
       const rw = w / 2 + eb + 3 * k
       const rh = h / 2 + eb + 3 * k
       n.ring.clear()
-      n.ring.roundRect(-rw, -rh, rw * 2, rh * 2, 6).stroke({ width: 4 * k, color: 0xffc24b, alignment: 0 })
+      n.ring.rect(-rw, -rh, rw * 2, rh * 2).stroke({ width: 4 * k, color: 0xffc24b, alignment: 0 })
     }
     if (n.yearRing) {
       const rw = w / 2 + eb + 8 * k
       const rh = h / 2 + eb + 8 * k
       n.yearRing.clear()
-      n.yearRing.roundRect(-rw, -rh, rw * 2, rh * 2, 8).stroke({ width: 4 * k, color: 0x4b9bff, alignment: 0 })
+      n.yearRing.rect(-rw, -rh, rw * 2, rh * 2).stroke({ width: 4 * k, color: 0x4b9bff, alignment: 0 })
     }
   }
 
@@ -375,7 +375,7 @@ export class EventScene implements Scene {
   private buildFeaturedRing(container: Container): Graphics {
     const r = PHOTO / 2 + BORDER + 3
     const ring = new Graphics()
-    ring.roundRect(-r, -r, r * 2, r * 2, 6).stroke({ width: 4, color: 0xffc24b, alignment: 0 })
+    ring.rect(-r, -r, r * 2, r * 2).stroke({ width: 4, color: 0xffc24b, alignment: 0 })
     ring.visible = false
     container.addChild(ring)
     return ring
@@ -398,7 +398,7 @@ export class EventScene implements Scene {
   private buildYearRing(container: Container): Graphics {
     const r = PHOTO / 2 + BORDER + 8
     const ring = new Graphics()
-    ring.roundRect(-r, -r, r * 2, r * 2, 8).stroke({ width: 4, color: 0x4b9bff, alignment: 0 })
+    ring.rect(-r, -r, r * 2, r * 2).stroke({ width: 4, color: 0x4b9bff, alignment: 0 })
     ring.visible = false
     container.addChild(ring)
     return ring
@@ -440,7 +440,7 @@ export class EventScene implements Scene {
     const hw = n.halfW + pad
     const hh = n.halfH + pad
     n.focusRing.clear()
-    n.focusRing.roundRect(-hw, -hh, hw * 2, hh * 2, 8).stroke({ width: 3, color: 0xffffff, alignment: 0 })
+    n.focusRing.rect(-hw, -hh, hw * 2, hh * 2).stroke({ width: 3, color: 0xffffff, alignment: 0 })
   }
 
   // ---- Toetsenbord-navigatie (2D spatial focus, L2) ----
