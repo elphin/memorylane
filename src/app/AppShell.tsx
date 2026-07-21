@@ -21,7 +21,7 @@ import { ACCENT_SWATCHES, FRAME_STYLES, TITLE_FONTS, resolveTheme, type ThemeCho
 import { BACKGROUNDS, BACKGROUND_NONE, loadBackgroundTexture } from '../theme/textures'
 import { THEME, setActiveTheme, type ResolvedTheme } from '../theme/tokens'
 import { UI_DARK, UI_LIGHT, ui, type UiPalette } from '../theme/ui'
-import { IconEigen, IconGrid, IconScatter } from './icons'
+import { IconEigen, IconGrid, IconScatter, IconImage, IconNote, IconSliders, IconPalette, IconPencil } from './icons'
 import { EventScene } from '../render/scenes/event'
 import type { NodePosition } from '../render/scenes/scene'
 import { Screensaver } from './Screensaver'
@@ -312,6 +312,10 @@ export function AppShell() {
   }>(null)
   const [layoutMode, setLayoutMode] = useState<'custom' | 'grid' | 'scatter'>('custom')
   const [gridSort, setGridSortMode] = useState<'date' | 'name' | 'random'>('date')
+  // Weergave-popover (schuifjes-knop in de actie-balk): foto's-bijsnijden +
+  // (in grid) sortering. Als open overlay geregistreerd zodat Escape 'm sluit
+  // i.p.v. uit te zoomen.
+  const [weergaveOpen, setWeergaveOpen] = useState(false)
   const [settings, setSettings] = useState<Settings>(loadSettings)
   const [settingsOpen, setSettingsOpen] = useState(false)
   // Thema-kiezer voor het huidige jaar (L1) of event (L2): klein overlay-paneel,
@@ -1712,8 +1716,45 @@ export function AppShell() {
   // over en navigeert er niets onder de screensaver.
   useEffect(() => {
     overlayOpenRef.current =
-      settingsOpen || searchOpen || screensaverIds !== null || matReport !== null || themePanel !== null
-  }, [settingsOpen, searchOpen, screensaverIds, matReport, themePanel])
+      settingsOpen || searchOpen || screensaverIds !== null || matReport !== null || themePanel !== null || weergaveOpen
+  }, [settingsOpen, searchOpen, screensaverIds, matReport, themePanel, weergaveOpen])
+
+  // Escape sluit de weergave-popover (los van de dialoog-Escape, want de popover
+  // is geen dialog). Capture + stopPropagation zodat de globale navigatie niet
+  // óók uitzoomt op dezelfde toets.
+  useEffect(() => {
+    if (!weergaveOpen) return
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        e.stopPropagation()
+        setWeergaveOpen(false)
+      }
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [weergaveOpen])
+
+  // Klik buiten de weergave-popover (en niet op de schuifjes-knop zelf) sluit 'm.
+  // Een document-listener i.p.v. een vaste backdrop-div, want de gecentreerde
+  // dock gebruikt een CSS-transform — daaronder valt `position:fixed` terug op
+  // de getransformeerde voorouder i.p.v. het volledige scherm.
+  useEffect(() => {
+    if (!weergaveOpen) return
+    const onDown = (e: PointerEvent): void => {
+      const t = e.target as HTMLElement | null
+      if (t && (t.closest('[data-weergave-popover]') || t.closest('#weergave-toggle-btn'))) return
+      setWeergaveOpen(false)
+    }
+    window.addEventListener('pointerdown', onDown, true)
+    return () => window.removeEventListener('pointerdown', onDown, true)
+  }, [weergaveOpen])
+
+  // De popover hoort alleen bij het event-niveau; verlaat je dat, sluit 'm
+  // (anders blijft overlayOpenRef ten onrechte "open" en blokkeert navigatie).
+  useEffect(() => {
+    if (uiLevel !== 'event') setWeergaveOpen(false)
+  }, [uiLevel])
 
   // Korte toast (bijv. "geen foto's gevonden") die vanzelf verdwijnt.
   useEffect(() => {
@@ -2377,6 +2418,10 @@ export function AppShell() {
           onToggleScatterRotate={toggleScatterRotate}
           gridSort={gridSort}
           onGridSort={changeGridSort}
+          squarePhotos={settings.squarePhotos}
+          onToggleSquarePhotos={() => updateSettings({ squarePhotos: !settingsRef.current.squarePhotos })}
+          weergaveOpen={weergaveOpen}
+          onToggleWeergave={() => setWeergaveOpen((v) => !v)}
         />
       )}
       {modal && (
@@ -3321,6 +3366,203 @@ function SegBtn({
   )
 }
 
+/** Kale icoon-knop bínnen een dock-container: transparant met hover-highlight;
+ * `primary` = paars gevuld (hoofdactie), `accent` = paars-getint (bijv.
+ * "Opslaan als Eigen"). De container levert de achtergrond, dus deze knoppen
+ * zijn zelf achtergrondloos (geen pil-in-pil). */
+function DockIconBtn({
+  title,
+  icon,
+  onClick,
+  primary = false,
+  accent = false,
+  active = false,
+  domId,
+}: {
+  title: string
+  icon: React.ReactNode
+  onClick: () => void
+  primary?: boolean
+  accent?: boolean
+  active?: boolean
+  /** Optioneel DOM-id (zodat een buiten-klik-vanger deze knop kan uitsluiten). */
+  domId?: string
+}) {
+  const u = ui()
+  const [hover, setHover] = useState(false)
+  const bg = primary
+    ? u.primary
+    : accent || active
+      ? u.primaryFaintBg
+      : hover
+        ? 'rgba(255,255,255,0.10)'
+        : 'transparent'
+  const color = primary ? u.primaryText : accent || active ? u.primarySoft : u.floatBtnSoftText
+  return (
+    <button
+      id={domId}
+      onClick={onClick}
+      title={title}
+      aria-label={title}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: 46,
+        height: 44,
+        border: accent ? `1px solid ${u.primarySoft}` : 'none',
+        borderRadius: 12,
+        background: bg,
+        color,
+        cursor: 'pointer',
+        transition: 'background 120ms, filter 120ms',
+        filter: hover && primary ? 'brightness(1.12)' : 'none',
+      }}
+    >
+      {icon}
+    </button>
+  )
+}
+
+/** Recht/gedraaid-schakelaar (alleen in Scatter): een schuif-toggle met een
+ * witte knop die naar het actieve glyph glijdt. `on` = gedraaid (scheef),
+ * knop rechts; `off` = recht, knop links. Het actieve glyph staat op de witte
+ * knop en is donker; het inactieve is gedempt. */
+function RotateToggle({ on, onToggle, u }: { on: boolean; onToggle: () => void; u: UiPalette }) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      title={on ? 'Scatter legt foto’s scheef (klik = recht)' : 'Scatter legt foto’s recht (klik = scheef)'}
+      aria-label="Recht of gedraaid"
+      aria-pressed={on}
+      style={{
+        position: 'relative',
+        width: 58,
+        height: 44,
+        borderRadius: 12,
+        border: `1px solid ${u.border}`,
+        background: 'rgba(255,255,255,0.05)',
+        cursor: 'pointer',
+        padding: 5,
+        display: 'flex',
+        alignItems: 'center',
+      }}
+    >
+      <div
+        style={{
+          position: 'absolute',
+          top: 5,
+          left: 5,
+          width: 24,
+          height: 32,
+          borderRadius: 9,
+          background: '#ffffff',
+          boxShadow: '0 2px 8px rgba(0,0,0,0.4)',
+          transform: `translateX(${on ? 24 : 0}px)`,
+          transition: 'transform 0.24s cubic-bezier(0.2,0.8,0.2,1)',
+        }}
+      />
+      <span style={{ position: 'relative', zIndex: 1, width: 24, display: 'flex', justifyContent: 'center', color: on ? u.floatBtnSoftText : '#1a1a1a' }}>
+        <svg width={15} height={15} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.5}>
+          <rect x="4" y="4" width="8" height="8" rx="1.3" />
+        </svg>
+      </span>
+      <span style={{ position: 'relative', zIndex: 1, width: 24, display: 'flex', justifyContent: 'center', color: on ? '#1a1a1a' : u.floatBtnSoftText }}>
+        <svg width={15} height={15} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.5}>
+          <rect x="4" y="4" width="8" height="8" rx="1.3" transform="rotate(14 8 8)" />
+        </svg>
+      </span>
+    </button>
+  )
+}
+
+/** Popover boven de "Weergave aanpassen"-knop: foto's-bijsnijden (altijd) +
+ * sortering (alleen in Grid). Buiten-klik en Escape sluiten 'm via listeners op
+ * AppShell-niveau (geen backdrop-div — die zou door de dock-transform tegen de
+ * verkeerde container vallen). `role="group"` i.p.v. `dialog`: het is een lichte
+ * transient popover, geen modale dialoog. */
+function WeergavePopover({
+  u,
+  squarePhotos,
+  onToggleSquarePhotos,
+  layoutMode,
+  gridSort,
+  onGridSort,
+}: {
+  u: UiPalette
+  squarePhotos: boolean
+  onToggleSquarePhotos: () => void
+  layoutMode: 'custom' | 'grid' | 'scatter'
+  gridSort: 'date' | 'name' | 'random'
+  onGridSort: (sort: 'date' | 'name' | 'random') => void
+}) {
+  return (
+    <div
+      role="group"
+      aria-label="Weergave aanpassen"
+      data-weergave-popover
+      style={{
+          position: 'absolute',
+          bottom: 'calc(100% + 12px)',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          zIndex: 21,
+          minWidth: 250,
+          padding: 14,
+          borderRadius: 14,
+          background: u.card,
+          border: `1px solid ${u.border}`,
+          boxShadow: '0 12px 34px rgba(0,0,0,0.5)',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 12,
+        }}
+      >
+        <div
+          role="switch"
+          aria-checked={squarePhotos}
+          tabIndex={0}
+          onClick={onToggleSquarePhotos}
+          onKeyDown={(e) => {
+            if (e.key === ' ' || e.key === 'Enter') {
+              e.preventDefault()
+              onToggleSquarePhotos()
+            }
+          }}
+          style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', userSelect: 'none' }}
+        >
+          <Switch on={squarePhotos} u={u} />
+          <span style={{ fontSize: 14, color: u.text }}>Foto’s vierkant bijsnijden</span>
+        </div>
+        {layoutMode === 'grid' && (
+          <>
+            <div style={{ height: 1, background: u.border }} />
+            <div style={{ fontSize: 12, color: u.textMuted }}>Sorteren</div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <Pill small kind={gridSort === 'date' ? 'primary' : 'neutral'} onClick={() => onGridSort('date')} title="Sorteer op datum/tijd">
+                Datum
+              </Pill>
+              <Pill small kind={gridSort === 'name' ? 'primary' : 'neutral'} onClick={() => onGridSort('name')} title="Sorteer op naam/bestandsnaam">
+                Naam
+              </Pill>
+              <Pill
+                small
+                kind={gridSort === 'random' ? 'primary' : 'neutral'}
+                onClick={() => onGridSort('random')}
+                title="Willekeurig — klik nogmaals om opnieuw te schudden"
+              >
+                Willekeurig 🎲
+              </Pill>
+            </div>
+          </>
+        )}
+    </div>
+  )
+}
+
 function Fab({
   uiLevel,
   layoutMode,
@@ -3339,6 +3581,10 @@ function Fab({
   onToggleScatterRotate,
   gridSort,
   onGridSort,
+  squarePhotos,
+  onToggleSquarePhotos,
+  weergaveOpen,
+  onToggleWeergave,
 }: {
   uiLevel: 'lifeline' | 'year' | 'event' | 'focus'
   layoutMode: 'custom' | 'grid' | 'scatter'
@@ -3357,21 +3603,35 @@ function Fab({
   onToggleScatterRotate: () => void
   gridSort: 'date' | 'name' | 'random'
   onGridSort: (sort: 'date' | 'name' | 'random') => void
+  squarePhotos: boolean
+  onToggleSquarePhotos: () => void
+  weergaveOpen: boolean
+  onToggleWeergave: () => void
 }) {
   const u = ui()
-  // Rechts verankerd; de eventuele secundaire rij (sortering/opslaan) staat
-  // BOVEN de hoofdrij zodat die nooit langer wordt of botst met de
-  // "Alles passend"-knop linksonder.
+  // Gecentreerd onderaan: alle niveaus delen dezelfde plek en knoppentaal.
   const wrap: React.CSSProperties = {
     position: 'absolute',
-    right: 20,
-    bottom: 20,
+    left: '50%',
+    bottom: 24,
+    transform: 'translateX(-50%)',
     display: 'flex',
     flexDirection: 'column',
-    alignItems: 'flex-end',
-    gap: 10,
+    alignItems: 'center',
+    gap: 8,
   }
   const row: React.CSSProperties = { display: 'flex', gap: 8, alignItems: 'center' }
+  // Gedeelde dock-balk (donker, afgerond, zwevend).
+  const dockBar: React.CSSProperties = {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 4,
+    padding: 5,
+    borderRadius: 18,
+    background: u.fabSortBg,
+    boxShadow: '0 6px 20px rgba(0,0,0,0.45)',
+  }
+  const divider = <div style={{ width: 1, height: 26, background: 'rgba(255,255,255,0.14)', margin: '0 3px' }} />
   if (uiLevel === 'lifeline') {
     return (
       <div style={wrap}>
@@ -3392,79 +3652,57 @@ function Fab({
   if (uiLevel === 'event') {
     return (
       <div style={wrap}>
-        {/* Secundaire rij (alleen bij een niet-eigen weergave): sortering (grid)
-            + "Opslaan als Eigen". Boven de hoofdrij, rechts uitgelijnd — de
-            hoofdrij blijft daardoor altijd even lang en op zijn plek. */}
-        {layoutMode !== 'custom' && (
-          <div style={row}>
-            {layoutMode === 'grid' && (
-              <>
-                <span style={{ font: '12px sans-serif', color: u.fabHint, marginRight: 2 }}>Sorteer</span>
-                <Pill small kind={gridSort === 'date' ? 'primary' : 'neutral'} onClick={() => onGridSort('date')} title="Sorteer op datum/tijd">
-                  Datum
-                </Pill>
-                <Pill small kind={gridSort === 'name' ? 'primary' : 'neutral'} onClick={() => onGridSort('name')} title="Sorteer op naam/bestandsnaam">
-                  Naam
-                </Pill>
-                <Pill
-                  small
-                  kind={gridSort === 'random' ? 'primary' : 'neutral'}
-                  onClick={() => onGridSort('random')}
-                  title="Willekeurig — klik nogmaals om opnieuw te schudden"
-                >
-                  Willekeurig 🎲
-                </Pill>
-                <span style={{ width: 6 }} />
-              </>
-            )}
-            <Pill small kind="ok" onClick={onSaveLayout} title="Deze opstelling vastleggen als je eigen layout">
-              Opslaan als Eigen
-            </Pill>
-          </div>
-        )}
-        <div style={{ ...row, flexWrap: 'wrap-reverse', justifyContent: 'flex-end', maxWidth: 'calc(100vw - 160px)' }}>
-          {/* Weergave-schakelaar: één segmented control (actief = blauw vlak);
-              het ⟲/▭-knopje is een losse toggle achter een divider. */}
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 2,
-              padding: 3,
-              borderRadius: 21,
-              background: u.fabSortBg,
-              boxShadow: '0 4px 14px rgba(0,0,0,0.4)',
-            }}
+        {/* BOVEN: weergave-schakelaar (Eigen/Grid/Scatter). In een niet-eigen
+            weergave verschijnen achter een divider de extra's: recht/gedraaid
+            (alleen Scatter) en "Opslaan als Eigen". */}
+        <div style={dockBar}>
+          <SegBtn active={layoutMode === 'custom'} icon={<IconEigen />} onClick={() => onLayout('custom')}>
+            Eigen
+          </SegBtn>
+          <SegBtn active={layoutMode === 'grid'} icon={<IconGrid />} onClick={() => onLayout('grid')}>
+            Grid
+          </SegBtn>
+          <SegBtn
+            active={layoutMode === 'scatter'}
+            icon={<IconScatter />}
+            onClick={() => onLayout('scatter')}
+            title="Elke klik een nieuwe worp"
           >
-            <SegBtn active={layoutMode === 'custom'} icon={<IconEigen />} onClick={() => onLayout('custom')}>
-              Eigen
-            </SegBtn>
-            <SegBtn active={layoutMode === 'grid'} icon={<IconGrid />} onClick={() => onLayout('grid')}>
-              Grid
-            </SegBtn>
-            <SegBtn
-              active={layoutMode === 'scatter'}
-              icon={<IconScatter />}
-              onClick={() => onLayout('scatter')}
-              title="Elke klik een nieuwe worp"
-            >
-              Scatter
-            </SegBtn>
-            <div style={{ width: 1, height: 20, background: 'rgba(255,255,255,0.22)', margin: '0 4px' }} />
-            <SegBtn
-              active={scatterRotate}
-              onClick={onToggleScatterRotate}
-              title={scatterRotate ? 'Scatter legt foto’s scheef (klik = recht)' : 'Scatter legt foto’s recht (klik = scheef)'}
-            >
-              {scatterRotate ? '⟲' : '▭'}
-            </SegBtn>
-          </div>
-          {/* Ruimte tussen het weergave-cluster en de acties. */}
-          <span style={{ width: 14 }} />
-          <Pill onClick={onAddPhotos}>+ Foto&apos;s</Pill>
-          <Pill onClick={onAddNote}>+ Notitie</Pill>
-          <Pill onClick={onEventTheme} title="Thema van deze memory">Thema</Pill>
-          <Pill kind="primary" onClick={onEditEvent}>Bewerk memory</Pill>
+            Scatter
+          </SegBtn>
+          {layoutMode !== 'custom' && (
+            <>
+              {divider}
+              {layoutMode === 'scatter' && (
+                <RotateToggle on={scatterRotate} onToggle={onToggleScatterRotate} u={u} />
+              )}
+              <DockIconBtn
+                title="Opslaan als 'Eigen'"
+                icon={<IconEigen size={18} />}
+                onClick={onSaveLayout}
+                accent
+              />
+            </>
+          )}
+        </div>
+        {/* ONDER: actie-balk (icoon-knoppen). De potlood-knop is paars = hoofd. */}
+        <div style={{ ...dockBar, position: 'relative' }}>
+          <DockIconBtn title="Foto's toevoegen" icon={<IconImage />} onClick={onAddPhotos} />
+          <DockIconBtn title="Notitie toevoegen" icon={<IconNote />} onClick={onAddNote} />
+          <DockIconBtn title="Weergave aanpassen" icon={<IconSliders />} onClick={onToggleWeergave} active={weergaveOpen} domId="weergave-toggle-btn" />
+          <DockIconBtn title="Thema & sfeer" icon={<IconPalette />} onClick={onEventTheme} />
+          {divider}
+          <DockIconBtn title="Bewerk memory" icon={<IconPencil />} onClick={onEditEvent} primary />
+          {weergaveOpen && (
+            <WeergavePopover
+              u={u}
+              squarePhotos={squarePhotos}
+              onToggleSquarePhotos={onToggleSquarePhotos}
+              layoutMode={layoutMode}
+              gridSort={gridSort}
+              onGridSort={onGridSort}
+            />
+          )}
         </div>
       </div>
     )
@@ -4487,7 +4725,9 @@ const titleStyle = (u: UiPalette): React.CSSProperties => ({
 
 const toastStyle = (u: UiPalette): React.CSSProperties => ({
   position: 'absolute',
-  bottom: 24,
+  // Boven de gecentreerde bediening-dock (die onderaan-midden staat), zodat de
+  // toast er niet overheen valt.
+  bottom: 150,
   left: '50%',
   transform: 'translateX(-50%)',
   padding: '10px 18px',
