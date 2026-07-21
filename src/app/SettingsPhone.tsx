@@ -78,7 +78,22 @@ export function SettingsPhone({ backend, onImported }: { backend: Backend; onImp
   const [importing, setImporting] = useState(false)
   const [progress, setProgress] = useState<ImportProgress | null>(null)
   const [report, setReport] = useState<ImportReport | null>(null)
+  const [copied, setCopied] = useState(false)
   const mounted = useRef(true)
+
+  // De koppelcode (QR-payload) naar het klembord — bron voor de plak-terugval
+  // in de telefoon-app. Clipboard kan falen (geen focus/rechten) → dan een
+  // korte foutmelding i.p.v. stil falen.
+  async function copyCode(): Promise<void> {
+    if (!qr) return
+    try {
+      await navigator.clipboard.writeText(qr)
+      setCopied(true)
+      window.setTimeout(() => mounted.current && setCopied(false), 1800)
+    } catch {
+      setError('Kopiëren naar het klembord lukte niet.')
+    }
+  }
 
   async function refresh(): Promise<void> {
     try {
@@ -223,8 +238,9 @@ export function SettingsPhone({ backend, onImported }: { backend: Backend; onImp
       <div>
         <div style={{ fontSize: 15, fontWeight: 600, color: u.text }}>Scan met je telefoon</div>
         <div style={{ ...desc(u), marginBottom: 12 }}>
-          Open de <b>camera-app</b> van je telefoon en richt 'm op de code. Tik op de melding om de
-          MemoryLane-brievenbus te openen en op je beginscherm te zetten.
+          <b>Nieuw:</b> zet de app eerst op je beginscherm (open de brievenbus één keer in je browser →
+          deel-/menuknop → <b>op beginscherm</b>). Open 'm daar en tik op <b>Scan koppelcode</b> — richt op
+          deze code. Zo koppelt óók de app op je beginscherm (die heeft zijn eigen geheugen).
         </div>
         <div
           style={{
@@ -242,10 +258,16 @@ export function SettingsPhone({ backend, onImported }: { backend: Backend; onImp
         <div style={{ ...desc(u), textAlign: 'center', marginTop: 12 }}>
           De code bevat je geheime sleutel — deel 'm met niemand en maak er geen foto van.
         </div>
-        <div style={{ display: 'flex', justifyContent: 'center', marginTop: 14 }}>
+        <div style={{ display: 'flex', justifyContent: 'center', gap: 8, marginTop: 14 }}>
+          <button style={btn(u)} onClick={() => void copyCode()}>
+            {copied ? '✓ Gekopieerd' : 'Koppelcode kopiëren'}
+          </button>
           <button style={btnPrimary(u)} onClick={() => setQr(null)}>
             Klaar
           </button>
+        </div>
+        <div style={{ ...desc(u), textAlign: 'center', marginTop: 8 }}>
+          Lukt scannen niet? Kopieer de code en plak 'm in de app onder <b>Of plak de code</b>.
         </div>
       </div>
     )
