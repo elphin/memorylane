@@ -21,6 +21,7 @@ import { ACCENT_SWATCHES, FRAME_STYLES, TITLE_FONTS, resolveTheme, type ThemeCho
 import { BACKGROUNDS, BACKGROUND_NONE, loadBackgroundTexture } from '../theme/textures'
 import { THEME, setActiveTheme, type ResolvedTheme } from '../theme/tokens'
 import { UI_DARK, UI_LIGHT, ui, type UiPalette } from '../theme/ui'
+import { IconEigen, IconGrid, IconScatter } from './icons'
 import { EventScene } from '../render/scenes/event'
 import type { NodePosition } from '../render/scenes/scene'
 import { Screensaver } from './Screensaver'
@@ -3212,14 +3213,20 @@ function Pill({
   kind = 'neutral',
   small = false,
   title,
+  icon,
+  iconOnly = false,
   onClick,
   children,
 }: {
   kind?: 'neutral' | 'primary' | 'ok' | 'danger'
   small?: boolean
   title?: string
+  /** Optioneel lijn-icoon vóór de tekst (of alleen het icoon bij iconOnly). */
+  icon?: React.ReactNode
+  /** Ronde icoon-knop zonder tekst — `title` wordt dan de aria-label. */
+  iconOnly?: boolean
   onClick: () => void
-  children: React.ReactNode
+  children?: React.ReactNode
 }) {
   const u = ui()
   const [hover, setHover] = useState(false)
@@ -3229,17 +3236,23 @@ function Pill({
     <button
       onClick={onClick}
       title={title}
+      aria-label={iconOnly ? title : undefined}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       style={{
         ...fabBtn(u),
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 7,
         background: bg,
         ...(small ? { fontSize: 12, padding: '8px 12px' } : null),
+        ...(iconOnly ? { width: 44, padding: 0, justifyContent: 'center' } : null),
         filter: hover ? 'brightness(1.18)' : 'none',
         transition: 'filter 120ms',
       }}
     >
-      {children}
+      {icon}
+      {!iconOnly && children}
     </button>
   )
 }
@@ -3250,11 +3263,14 @@ function Pill({
 function SegBtn({
   active,
   title,
+  icon,
   onClick,
   children,
 }: {
   active: boolean
   title?: string
+  /** Lijn-icoon boven het label (concept-stijl). */
+  icon?: React.ReactNode
   onClick: () => void
   children: React.ReactNode
 }) {
@@ -3266,18 +3282,40 @@ function SegBtn({
       title={title}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
-      style={{
-        padding: '8px 14px',
-        borderRadius: 18,
-        border: 'none',
-        cursor: 'pointer',
-        font: '13px sans-serif',
-        background: active ? u.primary : hover ? 'rgba(255,255,255,0.10)' : 'transparent',
-        color: active ? u.primaryText : u.floatBtnSoftText,
-        transition: 'background 120ms',
-        whiteSpace: 'nowrap',
-      }}
+      style={
+        icon
+          ? {
+              // Icoon-boven-label variant (concept: ~72×54).
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 4,
+              minWidth: 60,
+              padding: '7px 12px',
+              borderRadius: 12,
+              border: 'none',
+              cursor: 'pointer',
+              font: '12px sans-serif',
+              background: active ? u.primary : hover ? 'rgba(255,255,255,0.10)' : 'transparent',
+              color: active ? u.primaryText : u.floatBtnSoftText,
+              transition: 'background 120ms',
+              whiteSpace: 'nowrap',
+            }
+          : {
+              padding: '8px 14px',
+              borderRadius: 18,
+              border: 'none',
+              cursor: 'pointer',
+              font: '13px sans-serif',
+              background: active ? u.primary : hover ? 'rgba(255,255,255,0.10)' : 'transparent',
+              color: active ? u.primaryText : u.floatBtnSoftText,
+              transition: 'background 120ms',
+              whiteSpace: 'nowrap',
+            }
+      }
     >
+      {icon}
       {children}
     </button>
   )
@@ -3398,14 +3436,19 @@ function Fab({
               boxShadow: '0 4px 14px rgba(0,0,0,0.4)',
             }}
           >
-            <SegBtn active={layoutMode === 'custom'} onClick={() => onLayout('custom')}>
+            <SegBtn active={layoutMode === 'custom'} icon={<IconEigen />} onClick={() => onLayout('custom')}>
               Eigen
             </SegBtn>
-            <SegBtn active={layoutMode === 'grid'} onClick={() => onLayout('grid')}>
+            <SegBtn active={layoutMode === 'grid'} icon={<IconGrid />} onClick={() => onLayout('grid')}>
               Grid
             </SegBtn>
-            <SegBtn active={layoutMode === 'scatter'} onClick={() => onLayout('scatter')} title="Elke klik een nieuwe worp">
-              Scatter 🎲
+            <SegBtn
+              active={layoutMode === 'scatter'}
+              icon={<IconScatter />}
+              onClick={() => onLayout('scatter')}
+              title="Elke klik een nieuwe worp"
+            >
+              Scatter
             </SegBtn>
             <div style={{ width: 1, height: 20, background: 'rgba(255,255,255,0.22)', margin: '0 4px' }} />
             <SegBtn
