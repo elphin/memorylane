@@ -321,18 +321,22 @@ export class EventScene implements Scene {
       // rand tekent er daarna overheen, dus de schaduw piept enkel rechtsonder uit.
       // dx ≥ blur zodat geen enkele (ijle) laag links/boven — de lichtkant —
       // buiten het kader uitsteekt; de schaduw valt puur naar rechtsonder.
-      const dx = eb * 1.4
-      const dy = eb * 1.5
-      const blur = eb * 1.4
+      // Zachter/vager (meer lagen, lagere alpha) en iets minder spread (kleinere
+      // offset + blur) dan de eerste versie.
+      const blur = eb * 1.05
+      // dx net iets groter dan blur → veilige marge zodat geen ijle laag aan de
+      // lichtkant (links/boven) buiten het kader piept.
+      const dx = eb * 1.1
+      const dy = eb * 1.15
       const sw = w + eb * 2
       const sh = h + eb * 2 + band
       const cx = -w / 2 - eb + dx
       const cy = -h / 2 - eb + dy
-      const LAYERS = 6
+      const LAYERS = 9
       for (let i = LAYERS - 1; i >= 0; i--) {
         const t = i / (LAYERS - 1)
         const grow = t * blur
-        const alpha = 0.05 * (1 - t * 0.65)
+        const alpha = 0.032 * (1 - t * 0.5)
         n.frame
           .roundRect(cx - grow, cy - grow, sw + grow * 2, sh + grow * 2, r + grow)
           .fill({ color: 0x000000, alpha })

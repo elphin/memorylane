@@ -487,15 +487,23 @@ export class YearScene implements Scene {
     if (!isSpan) {
       dot = new Container()
       const g = new Graphics()
-      // Event met een eigen KLEUR-keuze (thema-id of accent): de stip toont
-      // zijn accent (zelfde idee als de span-balken), anders de neutrale
-      // jaar-tokens. Alleen-titleFont herkleurt niet.
-      const dotFill = ev.theme?.id || ev.theme?.accent
-        ? resolveTheme(this.yearChoice, ev.theme).colors.accent
-        : hasCover
-          ? this.T.colors.textSoft
-          : this.T.colors.textMuted
-      g.circle(0, 0, DOT_R).fill(dotFill).stroke({ width: 2, color: this.T.colors.surface })
+      // Concentrische ring-stip. Belang (size) bepaalt grootte + kleur:
+      // gewoon = klein & grijs, bijzonder = groter & gekleurd, uitzonderlijk =
+      // grootst & gekleurd. Een eigen accent-keuze bepaalt de "gekleurde" tint;
+      // anders het jaar-accent.
+      const size = ev.size ?? 50
+      const tier = size >= 60 ? 2 : size >= 40 ? 1 : 0
+      const customAccent =
+        ev.theme?.id || ev.theme?.accent ? resolveTheme(this.yearChoice, ev.theme).colors.accent : null
+      const colored = customAccent ?? this.T.colors.accent
+      const dotColor = tier === 0 ? this.T.colors.textMuted : colored
+      const outerR = tier === 2 ? DOT_R + 2 : tier === 1 ? DOT_R : DOT_R - 2
+      const ringW = tier === 2 ? 2.2 : tier === 1 ? 1.9 : 1.6
+      const innerR = outerR * 0.42
+      // Achtergrond-schijfje zodat de as-lijn niet door de ring-opening schemert.
+      g.circle(0, 0, outerR + 1).fill(this.T.colors.appBg)
+      g.circle(0, 0, outerR).stroke({ width: ringW, color: dotColor })
+      g.circle(0, 0, innerR).fill(dotColor)
       dot.addChild(g)
       dot.visible = false
       this.dotsLayer.addChild(dot)
@@ -567,26 +575,34 @@ export class YearScene implements Scene {
     return lane.side * (AXIS_CLEAR_PX + CARD_H_MAX / 2 + lane.level * LANE_PITCH)
   }
 
-  /** "In aanbouw"-badge: een amber chip met caution-diagonalen, geplaatst
-   * rechtsboven in de hoek van een memory-kaart. Herkenbaar als "nog niet af". */
+  /** "In aanbouw"-badge: een omgevouwen hoek ("ezelsoor") met een klokje,
+   * rechtsboven op een memory-kaart. Herkenbaar als "nog niet af / werk in
+   * uitvoering". */
   private buildUnderConstructionBadge(): Container {
-    const W = 30
-    const H = 16
-    const R = 4
     const b = new Container()
-    const chip = new Graphics()
-    chip.roundRect(-W / 2, -H / 2, W, H, R).fill(0xe8a54a)
-    const mask = new Graphics()
-    mask.roundRect(-W / 2, -H / 2, W, H, R).fill(0xffffff)
-    const stripes = new Graphics()
-    for (let x = -W; x < W; x += 9) stripes.moveTo(x, H / 2 + 2).lineTo(x + H + 4, -H / 2 - 2)
-    stripes.stroke({ width: 3.5, color: 0x2a2015, alpha: 0.5 })
-    stripes.mask = mask
-    const border = new Graphics()
-    border.roundRect(-W / 2, -H / 2, W, H, R).stroke({ width: 1.5, color: 0x2a2015 })
-    b.addChild(chip, mask, stripes, border)
-    // Net binnen de rechterbovenhoek van het frame (frame reikt tot ±(THUMB/2+BORDER)).
-    b.position.set(THUMB_W / 2 + BORDER - W / 2 + 2, -(THUMB_H / 2 + BORDER) + H / 2 - 1)
+    const S = 34 // beenlengte van de vouw-driehoek
+    const cx = THUMB_W / 2 + BORDER // rechterbovenhoek van het frame
+    const cy = -(THUMB_H / 2 + BORDER)
+    // Zachte slagschaduw langs de vouwlijn (geeft het "opgetilde" gevoel).
+    const shade = new Graphics()
+    shade.poly([cx - S, cy, cx, cy + S, cx - S + 4, cy + 4]).fill({ color: 0x000000, alpha: 0.16 })
+    // De oranje vouw-driehoek zelf (rechte hoek in de kaarthoek).
+    const fold = new Graphics()
+    fold.poly([cx - S, cy, cx, cy, cx, cy + S]).fill(0xf0872e)
+    fold.poly([cx - S, cy, cx, cy + S]).stroke({ width: 1, color: 0xffffff, alpha: 0.35 })
+    // Klokje (wit) in het midden van de vouw.
+    const clock = new Graphics()
+    const ccx = cx - S * 0.4
+    const ccy = cy + S * 0.4
+    const rr = 5.4
+    clock.circle(ccx, ccy, rr).stroke({ width: 1.5, color: 0xffffff })
+    clock
+      .moveTo(ccx, ccy)
+      .lineTo(ccx, ccy - rr * 0.62)
+      .moveTo(ccx, ccy)
+      .lineTo(ccx + rr * 0.5, ccy + rr * 0.12)
+      .stroke({ width: 1.5, color: 0xffffff })
+    b.addChild(shade, fold, clock)
     return b
   }
 
