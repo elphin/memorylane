@@ -12,7 +12,7 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['icon.svg'],
+      includeAssets: ['icon.svg', 'apple-touch-icon.png', 'favicon-48.png'],
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,woff2}'],
         // /api/* en presigned R2-URLs mogen NOOIT uit de cache komen.
@@ -31,7 +31,11 @@ export default defineConfig({
         theme_color: '#B4552D',
         icons: [
           { src: 'icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any' },
-          { src: 'icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'maskable' },
+          { src: 'icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+          { src: 'icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+          // Full-bleed vierkant (geen transparante hoeken) zodat Android/iOS er
+          // hun eigen masker overheen kunnen leggen zonder de content te raken.
+          { src: 'icon-maskable-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
         ],
       },
     }),
