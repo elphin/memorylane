@@ -21,7 +21,7 @@ import { ACCENT_SWATCHES, FRAME_STYLES, TITLE_FONTS, resolveTheme, type ThemeCho
 import { BACKGROUNDS, BACKGROUND_NONE, loadBackgroundTexture } from '../theme/textures'
 import { THEME, setActiveTheme, type ResolvedTheme } from '../theme/tokens'
 import { UI_DARK, UI_LIGHT, ui, type UiPalette } from '../theme/ui'
-import { IconEigen, IconGrid, IconScatter, IconImage, IconNote, IconSliders, IconPalette, IconPencil, IconPlus, IconTrash } from './icons'
+import { IconEigen, IconGrid, IconScatter, IconImage, IconNote, IconSliders, IconPalette, IconPencil, IconPlus, IconTrash, IconCrop } from './icons'
 import { EventScene } from '../render/scenes/event'
 import type { NodePosition } from '../render/scenes/scene'
 import { Screensaver } from './Screensaver'
@@ -1719,9 +1719,8 @@ export function AppShell() {
       settingsOpen || searchOpen || screensaverIds !== null || matReport !== null || themePanel !== null || weergaveOpen
   }, [settingsOpen, searchOpen, screensaverIds, matReport, themePanel, weergaveOpen])
 
-  // Escape sluit de weergave-popover (los van de dialoog-Escape, want de popover
-  // is geen dialog). Capture + stopPropagation zodat de globale navigatie niet
-  // óók uitzoomt op dezelfde toets.
+  // Escape sluit de weergave-balk (los van de dialoog-Escape). Capture +
+  // stopPropagation zodat de globale navigatie niet óók uitzoomt op dezelfde toets.
   useEffect(() => {
     if (!weergaveOpen) return
     const onKey = (e: KeyboardEvent): void => {
@@ -1735,7 +1734,7 @@ export function AppShell() {
     return () => window.removeEventListener('keydown', onKey, true)
   }, [weergaveOpen])
 
-  // Klik buiten de weergave-popover (en niet op de schuifjes-knop zelf) sluit 'm.
+  // Klik buiten de weergave-balk (en niet op de schuifjes-knop zelf) sluit 'm.
   // Een document-listener i.p.v. een vaste backdrop-div, want de gecentreerde
   // dock gebruikt een CSS-transform — daaronder valt `position:fixed` terug op
   // de getransformeerde voorouder i.p.v. het volledige scherm.
@@ -1743,14 +1742,14 @@ export function AppShell() {
     if (!weergaveOpen) return
     const onDown = (e: PointerEvent): void => {
       const t = e.target as HTMLElement | null
-      if (t && (t.closest('[data-weergave-popover]') || t.closest('#weergave-toggle-btn'))) return
+      if (t && (t.closest('[data-layoutbar]') || t.closest('#weergave-toggle-btn'))) return
       setWeergaveOpen(false)
     }
     window.addEventListener('pointerdown', onDown, true)
     return () => window.removeEventListener('pointerdown', onDown, true)
   }, [weergaveOpen])
 
-  // De popover hoort alleen bij het event-niveau; verlaat je dat, sluit 'm
+  // De weergave-balk hoort alleen bij het event-niveau; verlaat je dat, sluit 'm
   // (anders blijft overlayOpenRef ten onrechte "open" en blokkeert navigatie).
   useEffect(() => {
     if (uiLevel !== 'event') setWeergaveOpen(false)
@@ -3482,90 +3481,6 @@ function RotateToggle({ on, onToggle, u }: { on: boolean; onToggle: () => void; 
   )
 }
 
-/** Popover boven de "Weergave aanpassen"-knop: foto's-bijsnijden (altijd) +
- * sortering (alleen in Grid). Buiten-klik en Escape sluiten 'm via listeners op
- * AppShell-niveau (geen backdrop-div — die zou door de dock-transform tegen de
- * verkeerde container vallen). `role="group"` i.p.v. `dialog`: het is een lichte
- * transient popover, geen modale dialoog. */
-function WeergavePopover({
-  u,
-  squarePhotos,
-  onToggleSquarePhotos,
-  layoutMode,
-  gridSort,
-  onGridSort,
-}: {
-  u: UiPalette
-  squarePhotos: boolean
-  onToggleSquarePhotos: () => void
-  layoutMode: 'custom' | 'grid' | 'scatter'
-  gridSort: 'date' | 'name' | 'random'
-  onGridSort: (sort: 'date' | 'name' | 'random') => void
-}) {
-  return (
-    <div
-      role="group"
-      aria-label="Weergave aanpassen"
-      data-weergave-popover
-      style={{
-          position: 'absolute',
-          bottom: 'calc(100% + 12px)',
-          left: '50%',
-          transform: 'translateX(-50%)',
-          zIndex: 21,
-          minWidth: 250,
-          padding: 14,
-          borderRadius: 14,
-          background: u.card,
-          border: `1px solid ${u.border}`,
-          boxShadow: '0 12px 34px rgba(0,0,0,0.5)',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 12,
-        }}
-      >
-        <div
-          role="switch"
-          aria-checked={squarePhotos}
-          tabIndex={0}
-          onClick={onToggleSquarePhotos}
-          onKeyDown={(e) => {
-            if (e.key === ' ' || e.key === 'Enter') {
-              e.preventDefault()
-              onToggleSquarePhotos()
-            }
-          }}
-          style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', userSelect: 'none' }}
-        >
-          <Switch on={squarePhotos} u={u} />
-          <span style={{ fontSize: 14, color: u.text }}>Foto’s vierkant bijsnijden</span>
-        </div>
-        {layoutMode === 'grid' && (
-          <>
-            <div style={{ height: 1, background: u.border }} />
-            <div style={{ fontSize: 12, color: u.textMuted }}>Sorteren</div>
-            <div style={{ display: 'flex', gap: 8 }}>
-              <Pill small kind={gridSort === 'date' ? 'primary' : 'neutral'} onClick={() => onGridSort('date')} title="Sorteer op datum/tijd">
-                Datum
-              </Pill>
-              <Pill small kind={gridSort === 'name' ? 'primary' : 'neutral'} onClick={() => onGridSort('name')} title="Sorteer op naam/bestandsnaam">
-                Naam
-              </Pill>
-              <Pill
-                small
-                kind={gridSort === 'random' ? 'primary' : 'neutral'}
-                onClick={() => onGridSort('random')}
-                title="Willekeurig — klik nogmaals om opnieuw te schudden"
-              >
-                Willekeurig 🎲
-              </Pill>
-            </div>
-          </>
-        )}
-    </div>
-  )
-}
-
 function Fab({
   uiLevel,
   layoutMode,
@@ -3655,57 +3570,72 @@ function Fab({
   if (uiLevel === 'event') {
     return (
       <div style={wrap}>
-        {/* BOVEN: weergave-schakelaar (Eigen/Grid/Scatter). In een niet-eigen
-            weergave verschijnen achter een divider de extra's: recht/gedraaid
-            (alleen Scatter) en "Opslaan als Eigen". */}
+        {/* BOVEN: de weergave-balk. Standaard verborgen; verschijnt pas als je op
+            de schuifjes-knop ("Weergave aanpassen") klikt. Bevat de layout-
+            schakelaar (Eigen/Grid/Scatter), "Vierkant bijsnijden", en context-
+            afhankelijk: recht/gedraaid (Scatter), "Opslaan als Eigen" (niet-eigen)
+            en sortering (Grid). */}
+        {weergaveOpen && (
+          <div data-layoutbar style={{ ...dockBar, flexWrap: 'wrap', justifyContent: 'center', maxWidth: 'min(96vw, 760px)' }}>
+            <SegBtn active={layoutMode === 'custom'} icon={<IconEigen />} onClick={() => onLayout('custom')}>
+              Eigen
+            </SegBtn>
+            <SegBtn active={layoutMode === 'grid'} icon={<IconGrid />} onClick={() => onLayout('grid')}>
+              Grid
+            </SegBtn>
+            <SegBtn
+              active={layoutMode === 'scatter'}
+              icon={<IconScatter />}
+              onClick={() => onLayout('scatter')}
+              title="Elke klik een nieuwe worp"
+            >
+              Scatter
+            </SegBtn>
+            {divider}
+            <SegBtn
+              active={squarePhotos}
+              icon={<IconCrop />}
+              onClick={onToggleSquarePhotos}
+              title="Foto's vierkant bijsnijden (aan/uit)"
+            >
+              Vierkant
+            </SegBtn>
+            {layoutMode === 'scatter' && (
+              <RotateToggle on={scatterRotate} onToggle={onToggleScatterRotate} u={u} />
+            )}
+            {layoutMode !== 'custom' && (
+              <DockIconBtn title="Opslaan als 'Eigen'" icon={<IconEigen size={18} />} onClick={onSaveLayout} accent />
+            )}
+            {layoutMode === 'grid' && (
+              <>
+                {divider}
+                <Pill small kind={gridSort === 'date' ? 'primary' : 'neutral'} onClick={() => onGridSort('date')} title="Sorteer op datum/tijd">
+                  Datum
+                </Pill>
+                <Pill small kind={gridSort === 'name' ? 'primary' : 'neutral'} onClick={() => onGridSort('name')} title="Sorteer op naam/bestandsnaam">
+                  Naam
+                </Pill>
+                <Pill
+                  small
+                  kind={gridSort === 'random' ? 'primary' : 'neutral'}
+                  onClick={() => onGridSort('random')}
+                  title="Willekeurig — klik nogmaals om opnieuw te schudden"
+                >
+                  Willekeurig 🎲
+                </Pill>
+              </>
+            )}
+          </div>
+        )}
+        {/* ONDER: actie-balk (icoon-knoppen), altijd zichtbaar. De schuifjes-knop
+            toont/verbergt de weergave-balk; de potlood-knop is paars = hoofd. */}
         <div style={dockBar}>
-          <SegBtn active={layoutMode === 'custom'} icon={<IconEigen />} onClick={() => onLayout('custom')}>
-            Eigen
-          </SegBtn>
-          <SegBtn active={layoutMode === 'grid'} icon={<IconGrid />} onClick={() => onLayout('grid')}>
-            Grid
-          </SegBtn>
-          <SegBtn
-            active={layoutMode === 'scatter'}
-            icon={<IconScatter />}
-            onClick={() => onLayout('scatter')}
-            title="Elke klik een nieuwe worp"
-          >
-            Scatter
-          </SegBtn>
-          {layoutMode !== 'custom' && (
-            <>
-              {divider}
-              {layoutMode === 'scatter' && (
-                <RotateToggle on={scatterRotate} onToggle={onToggleScatterRotate} u={u} />
-              )}
-              <DockIconBtn
-                title="Opslaan als 'Eigen'"
-                icon={<IconEigen size={18} />}
-                onClick={onSaveLayout}
-                accent
-              />
-            </>
-          )}
-        </div>
-        {/* ONDER: actie-balk (icoon-knoppen). De potlood-knop is paars = hoofd. */}
-        <div style={{ ...dockBar, position: 'relative' }}>
           <DockIconBtn title="Foto's toevoegen" icon={<IconImage />} onClick={onAddPhotos} />
           <DockIconBtn title="Notitie toevoegen" icon={<IconNote />} onClick={onAddNote} />
           <DockIconBtn title="Weergave aanpassen" icon={<IconSliders />} onClick={onToggleWeergave} active={weergaveOpen} domId="weergave-toggle-btn" />
           <DockIconBtn title="Thema & sfeer" icon={<IconPalette />} onClick={onEventTheme} />
           {divider}
           <DockIconBtn title="Bewerk memory" icon={<IconPencil />} onClick={onEditEvent} primary />
-          {weergaveOpen && (
-            <WeergavePopover
-              u={u}
-              squarePhotos={squarePhotos}
-              onToggleSquarePhotos={onToggleSquarePhotos}
-              layoutMode={layoutMode}
-              gridSort={gridSort}
-              onGridSort={onGridSort}
-            />
-          )}
         </div>
       </div>
     )

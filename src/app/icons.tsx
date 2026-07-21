@@ -122,6 +122,16 @@ export function IconPencil({ size = 18, style }: IconProps) {
   )
 }
 
+/** Vierkant bijsnijden: crop-hoeken. */
+export function IconCrop({ size = 18, style }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" style={svgBase(style)}>
+      <path d="M6 2v14a2 2 0 0 0 2 2h14" />
+      <path d="M2 6h14a2 2 0 0 1 2 2v14" />
+    </svg>
+  )
+}
+
 /** Plus (voor toevoeg-knoppen). */
 export function IconPlus({ size = 15, style }: IconProps) {
   return (
