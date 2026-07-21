@@ -3724,7 +3724,7 @@ function Fab({
           <DockIconBtn title="Weergave aanpassen" icon={<IconSliders />} onClick={onToggleWeergave} active={weergaveOpen} domId="weergave-toggle-btn" />
           <DockIconBtn title="Thema & sfeer" icon={<IconPalette />} onClick={onEventTheme} />
           {divider}
-          <DockIconBtn title="Bewerk memory" icon={<IconPencil />} onClick={onEditEvent} primary />
+          <DockIconBtn title="Bewerk memory" icon={<IconPencil />} onClick={onEditEvent} />
         </motion.div>
       </motion.div>
       </div>
