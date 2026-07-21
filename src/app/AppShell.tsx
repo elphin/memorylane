@@ -4,6 +4,7 @@
 // DOM wordt alleen gebruikt voor overlays (loading, first-run, leeg).
 
 import { useEffect, useRef, useState } from 'react'
+import { AnimatePresence, motion } from 'motion/react'
 import type {
   Backend,
   EventInfo,
@@ -2314,10 +2315,12 @@ export function AppShell() {
           onImported={() => void rebuildLifeline()}
         />
       )}
-      {themePanel && (
-        <ThemePanel
-          scope={themePanel}
-          title={themePanel === 'year' ? header.text : currentEventInfoRef.current?.title || 'memory'}
+      <AnimatePresence>
+        {themePanel && (
+          <ThemePanel
+            key="themepanel"
+            scope={themePanel}
+            title={themePanel === 'year' ? header.text : currentEventInfoRef.current?.title || 'memory'}
           inheritedName={
             themePanel === 'event' &&
             currentThemeChoicesRef.current.year?.id &&
@@ -2332,11 +2335,12 @@ export function AppShell() {
               ? themeById(currentThemeChoicesRef.current.year.id)
               : themeById(settings.themeId)
           }
-          value={themePanelValue}
-          onChange={changeScopeTheme}
-          onClose={() => setThemePanel(null)}
-        />
-      )}
+            value={themePanelValue}
+            onChange={changeScopeTheme}
+            onClose={() => setThemePanel(null)}
+          />
+        )}
+      </AnimatePresence>
       {screensaverIds && (
         <Screensaver
           photoIds={screensaverIds}
@@ -2426,59 +2430,123 @@ export function AppShell() {
           onToggleWeergave={() => setWeergaveOpen((v) => !v)}
         />
       )}
-      {modal && (
-        <Composer
-          value={draft}
-          busy={busy}
-          onChange={setDraft}
-          onSubmit={() => void submitNote()}
-          onCancel={() => {
-            setModal(null)
-            setDraft('')
-          }}
-        />
-      )}
-      {editing && (
-        <EditPanel
-          kind={editing.kind}
-          value={editing.value}
-          busy={busy}
-          onChange={(v) => setEditing({ ...editing, value: v })}
-          onSubmit={() => void submitEdit()}
-          onCancel={() => setEditing(null)}
-        />
-      )}
-      {eventForm && (
-        <EventDialog
-          form={eventForm}
-          busy={busy}
-          onChange={(patch) => setEventForm({ ...eventForm, ...patch })}
-          onSubmit={() => void submitEventForm()}
-          onCancel={() => setEventForm(null)}
-        />
-      )}
-      {metaForm && (
-        <MetaPanel
-          form={metaForm}
-          busy={busy}
-          onChange={(patch) => setMetaForm({ ...metaForm, ...patch })}
-          onSubmit={() => void submitMeta()}
-          onCancel={() => setMetaForm(null)}
-        />
-      )}
-      {confirmBox && (
-        <ConfirmDialog
-          message={confirmBox.message}
-          confirmLabel={confirmBox.confirmLabel}
-          onConfirm={() => {
-            const run = confirmBox.onConfirm
-            setConfirmBox(null)
-            run()
-          }}
-          onCancel={() => setConfirmBox(null)}
-        />
-      )}
+      <AnimatePresence>
+        {modal && (
+          <Composer
+            key="composer"
+            value={draft}
+            busy={busy}
+            onChange={setDraft}
+            onSubmit={() => void submitNote()}
+            onCancel={() => {
+              setModal(null)
+              setDraft('')
+            }}
+          />
+        )}
+      </AnimatePresence>
+      <AnimatePresence>
+        {editing && (
+          <EditPanel
+            key="editpanel"
+            kind={editing.kind}
+            value={editing.value}
+            busy={busy}
+            onChange={(v) => setEditing({ ...editing, value: v })}
+            onSubmit={() => void submitEdit()}
+            onCancel={() => setEditing(null)}
+          />
+        )}
+      </AnimatePresence>
+      <AnimatePresence>
+        {eventForm && (
+          <EventDialog
+            key="eventdialog"
+            form={eventForm}
+            busy={busy}
+            onChange={(patch) => setEventForm({ ...eventForm, ...patch })}
+            onSubmit={() => void submitEventForm()}
+            onCancel={() => setEventForm(null)}
+          />
+        )}
+      </AnimatePresence>
+      <AnimatePresence>
+        {metaForm && (
+          <MetaPanel
+            key="metapanel"
+            form={metaForm}
+            busy={busy}
+            onChange={(patch) => setMetaForm({ ...metaForm, ...patch })}
+            onSubmit={() => void submitMeta()}
+            onCancel={() => setMetaForm(null)}
+          />
+        )}
+      </AnimatePresence>
+      <AnimatePresence>
+        {confirmBox && (
+          <ConfirmDialog
+            key="confirmdialog"
+            message={confirmBox.message}
+            confirmLabel={confirmBox.confirmLabel}
+            onConfirm={() => {
+              const run = confirmBox.onConfirm
+              setConfirmBox(null)
+              run()
+            }}
+            onCancel={() => setConfirmBox(null)}
+          />
+        )}
+      </AnimatePresence>
     </div>
+  )
+}
+
+/** Gedeelde modal-schil met in-/uitfade-animatie (motion). De achtergrond fa't
+ * in; het paneel schaalt + glijdt zacht omhoog. Klik op de achtergrond sluit
+ * (via `onBackdrop`); klikken binnen het paneel niet. Wordt op de aanroep-plek
+ * in een <AnimatePresence> gezet zodat ook de uit-animatie speelt. */
+function AnimatedModal({
+  onBackdrop,
+  panelStyle,
+  backdrop,
+  zIndex,
+  children,
+}: {
+  onBackdrop?: () => void
+  panelStyle: React.CSSProperties
+  backdrop?: string
+  zIndex?: number
+  children: React.ReactNode
+}) {
+  const u = ui()
+  return (
+    <motion.div
+      onClick={onBackdrop}
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.16, ease: 'easeOut' }}
+      style={{
+        position: 'absolute',
+        inset: 0,
+        zIndex,
+        background: backdrop ?? u.backdrop,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+      }}
+    >
+      <motion.div
+        onClick={(e) => e.stopPropagation()}
+        initial={{ opacity: 0, scale: 0.965, y: 10 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.975, y: 6 }}
+        transition={{ duration: 0.2, ease: [0.2, 0.8, 0.2, 1] }}
+        style={panelStyle}
+      >
+        {children}
+      </motion.div>
+    </motion.div>
   )
 }
 
@@ -2498,17 +2566,10 @@ function MetaPanel({
   const u = ui()
   useEscape(onCancel)
   return (
-    <div
-      style={{
-        position: 'absolute',
-        inset: 0,
-        background: u.backdrop,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-      }}
+    <AnimatedModal
+      onBackdrop={onCancel}
+      panelStyle={{ width: 520, maxWidth: '92%', background: u.card, color: u.text, borderRadius: 12, padding: 20 }}
     >
-      <div style={{ width: 520, maxWidth: '92%', background: u.card, color: u.text, borderRadius: 12, padding: 20 }}>
         <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 12 }}>Foto-gegevens</div>
         <label style={metaLabel(u)}>
           Bijschrift
@@ -2601,8 +2662,7 @@ function MetaPanel({
             {busy ? 'Bezig…' : 'Opslaan'}
           </button>
         </div>
-      </div>
-    </div>
+    </AnimatedModal>
   )
 }
 
@@ -3527,12 +3587,17 @@ function Fab({
   onToggleWeergave: () => void
 }) {
   const u = ui()
-  // Gecentreerd onderaan: alle niveaus delen dezelfde plek en knoppentaal.
+  // Gecentreerd onderaan: alle niveaus delen dezelfde plek en knoppentaal. De
+  // centrering (translateX -50%) zit op een STATISCHE buiten-div; de entree-
+  // animatie (motion, die `y` beweegt) draait op de binnen-kolom. Zo klobbert
+  // motion de translateX niet (het herschrijft anders de hele transform).
   const wrap: React.CSSProperties = {
     position: 'absolute',
     left: '50%',
     bottom: 24,
     transform: 'translateX(-50%)',
+  }
+  const wrapCol: React.CSSProperties = {
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
@@ -3550,103 +3615,142 @@ function Fab({
     boxShadow: '0 6px 20px rgba(0,0,0,0.45)',
   }
   const divider = <div style={{ width: 1, height: 26, background: 'rgba(255,255,255,0.14)', margin: '0 3px' }} />
+  // Zachte entree per niveau: de dock fa't/glijdt omhoog in beeld (key = niveau,
+  // dus opnieuw bij elke niveauwissel).
+  const dockEnter = {
+    initial: { opacity: 0, y: 12 },
+    animate: { opacity: 1, y: 0 },
+    transition: { duration: 0.22, ease: [0.2, 0.8, 0.2, 1] as const },
+  }
   if (uiLevel === 'lifeline') {
     return (
       <div style={wrap}>
-        <Pill kind="primary" icon={<IconPlus />} onClick={onAddYear}>Nieuw jaar</Pill>
+        <motion.div key="lifeline" style={wrapCol} {...dockEnter}>
+          <Pill kind="primary" icon={<IconPlus />} onClick={onAddYear}>Nieuw jaar</Pill>
+        </motion.div>
       </div>
     )
   }
   if (uiLevel === 'year') {
     return (
       <div style={wrap}>
-        <div style={row}>
-          <Pill icon={<IconPalette size={17} />} onClick={onYearTheme} title="Thema van dit jaar">Thema</Pill>
-          <Pill kind="primary" icon={<IconPlus />} onClick={onAddEvent}>Nieuwe memory</Pill>
-        </div>
+        <motion.div key="year" style={wrapCol} {...dockEnter}>
+          <div style={row}>
+            <Pill icon={<IconPalette size={17} />} onClick={onYearTheme} title="Thema van dit jaar">Thema</Pill>
+            <Pill kind="primary" icon={<IconPlus />} onClick={onAddEvent}>Nieuwe memory</Pill>
+          </div>
+        </motion.div>
       </div>
     )
+  }
+  const extraEnter = {
+    layout: true,
+    initial: { opacity: 0, scale: 0.55, width: 0 },
+    animate: { opacity: 1, scale: 1, width: 'auto' as const },
+    exit: { opacity: 0, scale: 0.55, width: 0 },
+    transition: { type: 'spring' as const, stiffness: 520, damping: 32 },
+    style: { display: 'flex', alignItems: 'center', gap: 4, overflow: 'hidden' } as React.CSSProperties,
   }
   if (uiLevel === 'event') {
     return (
       <div style={wrap}>
+      <motion.div key="event" style={wrapCol} {...dockEnter}>
         {/* BOVEN: de weergave-balk. Standaard verborgen; verschijnt pas als je op
-            de schuifjes-knop ("Weergave aanpassen") klikt. Bevat de layout-
-            schakelaar (Eigen/Grid/Scatter), "Vierkant bijsnijden", en context-
-            afhankelijk: recht/gedraaid (Scatter), "Opslaan als Eigen" (niet-eigen)
-            en sortering (Grid). */}
-        {weergaveOpen && (
-          <div data-layoutbar style={{ ...dockBar, flexWrap: 'wrap', justifyContent: 'center', maxWidth: 'min(96vw, 760px)' }}>
-            <SegBtn active={layoutMode === 'custom'} icon={<IconEigen />} onClick={() => onLayout('custom')}>
-              Eigen
-            </SegBtn>
-            <SegBtn active={layoutMode === 'grid'} icon={<IconGrid />} onClick={() => onLayout('grid')}>
-              Grid
-            </SegBtn>
-            <SegBtn
-              active={layoutMode === 'scatter'}
-              icon={<IconScatter />}
-              onClick={() => onLayout('scatter')}
-              title="Elke klik een nieuwe worp"
+            de schuifjes-knop ("Weergave aanpassen") klikt. Groeit geanimeerd in
+            beeld; de context-knoppen (recht/gedraaid, opslaan, sortering) poppen
+            mee in/uit terwijl de balk soepel meeschaalt. */}
+        <AnimatePresence>
+          {weergaveOpen && (
+            <motion.div
+              key="layoutbar"
+              data-layoutbar
+              layout
+              initial={{ opacity: 0, scale: 0.85, y: 14 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.88, y: 10 }}
+              transition={{ type: 'spring', stiffness: 480, damping: 34 }}
+              style={{ ...dockBar, flexWrap: 'wrap', justifyContent: 'center', maxWidth: 'min(96vw, 760px)' }}
             >
-              Scatter
-            </SegBtn>
-            {divider}
-            <SegBtn
-              active={squarePhotos}
-              icon={<IconCrop />}
-              onClick={onToggleSquarePhotos}
-              title="Foto's vierkant bijsnijden (aan/uit)"
-            >
-              Vierkant
-            </SegBtn>
-            {layoutMode === 'scatter' && (
-              <RotateToggle on={scatterRotate} onToggle={onToggleScatterRotate} u={u} />
-            )}
-            {layoutMode !== 'custom' && (
-              <DockIconBtn title="Opslaan als 'Eigen'" icon={<IconEigen size={18} />} onClick={onSaveLayout} accent />
-            )}
-            {layoutMode === 'grid' && (
-              <>
-                {divider}
-                <Pill small kind={gridSort === 'date' ? 'primary' : 'neutral'} onClick={() => onGridSort('date')} title="Sorteer op datum/tijd">
-                  Datum
-                </Pill>
-                <Pill small kind={gridSort === 'name' ? 'primary' : 'neutral'} onClick={() => onGridSort('name')} title="Sorteer op naam/bestandsnaam">
-                  Naam
-                </Pill>
-                <Pill
-                  small
-                  kind={gridSort === 'random' ? 'primary' : 'neutral'}
-                  onClick={() => onGridSort('random')}
-                  title="Willekeurig — klik nogmaals om opnieuw te schudden"
-                >
-                  Willekeurig 🎲
-                </Pill>
-              </>
-            )}
-          </div>
-        )}
+              <SegBtn active={layoutMode === 'custom'} icon={<IconEigen />} onClick={() => onLayout('custom')}>
+                Eigen
+              </SegBtn>
+              <SegBtn active={layoutMode === 'grid'} icon={<IconGrid />} onClick={() => onLayout('grid')}>
+                Grid
+              </SegBtn>
+              <SegBtn
+                active={layoutMode === 'scatter'}
+                icon={<IconScatter />}
+                onClick={() => onLayout('scatter')}
+                title="Elke klik een nieuwe worp"
+              >
+                Scatter
+              </SegBtn>
+              {divider}
+              <SegBtn
+                active={squarePhotos}
+                icon={<IconCrop />}
+                onClick={onToggleSquarePhotos}
+                title="Foto's vierkant bijsnijden (aan/uit)"
+              >
+                Vierkant
+              </SegBtn>
+              <AnimatePresence>
+                {layoutMode === 'scatter' && (
+                  <motion.div key="rotate" {...extraEnter}>
+                    <RotateToggle on={scatterRotate} onToggle={onToggleScatterRotate} u={u} />
+                  </motion.div>
+                )}
+                {layoutMode !== 'custom' && (
+                  <motion.div key="save" {...extraEnter}>
+                    <DockIconBtn title="Opslaan als 'Eigen'" icon={<IconEigen size={18} />} onClick={onSaveLayout} accent />
+                  </motion.div>
+                )}
+                {layoutMode === 'grid' && (
+                  <motion.div key="sort" {...extraEnter}>
+                    {divider}
+                    <Pill small kind={gridSort === 'date' ? 'primary' : 'neutral'} onClick={() => onGridSort('date')} title="Sorteer op datum/tijd">
+                      Datum
+                    </Pill>
+                    <Pill small kind={gridSort === 'name' ? 'primary' : 'neutral'} onClick={() => onGridSort('name')} title="Sorteer op naam/bestandsnaam">
+                      Naam
+                    </Pill>
+                    <Pill
+                      small
+                      kind={gridSort === 'random' ? 'primary' : 'neutral'}
+                      onClick={() => onGridSort('random')}
+                      title="Willekeurig — klik nogmaals om opnieuw te schudden"
+                    >
+                      Willekeurig 🎲
+                    </Pill>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </motion.div>
+          )}
+        </AnimatePresence>
         {/* ONDER: actie-balk (icoon-knoppen), altijd zichtbaar. De schuifjes-knop
             toont/verbergt de weergave-balk; de potlood-knop is paars = hoofd. */}
-        <div style={dockBar}>
+        <motion.div layout style={dockBar}>
           <DockIconBtn title="Foto's toevoegen" icon={<IconImage />} onClick={onAddPhotos} />
           <DockIconBtn title="Notitie toevoegen" icon={<IconNote />} onClick={onAddNote} />
           <DockIconBtn title="Weergave aanpassen" icon={<IconSliders />} onClick={onToggleWeergave} active={weergaveOpen} domId="weergave-toggle-btn" />
           <DockIconBtn title="Thema & sfeer" icon={<IconPalette />} onClick={onEventTheme} />
           {divider}
           <DockIconBtn title="Bewerk memory" icon={<IconPencil />} onClick={onEditEvent} primary />
-        </div>
+        </motion.div>
+      </motion.div>
       </div>
     )
   }
   if (uiLevel === 'focus') {
     return (
       <div style={wrap}>
-        <div style={row}>
-          <Pill kind="primary" icon={<IconPencil size={16} />} onClick={onEdit}>Bewerk</Pill>
-          <Pill kind="danger" icon={<IconTrash size={16} />} onClick={onDelete}>Verwijder</Pill>
-        </div>
+        <motion.div key="focus" style={wrapCol} {...dockEnter}>
+          <div style={row}>
+            <Pill kind="primary" icon={<IconPencil size={16} />} onClick={onEdit}>Bewerk</Pill>
+            <Pill kind="danger" icon={<IconTrash size={16} />} onClick={onDelete}>Verwijder</Pill>
+          </div>
+        </motion.div>
       </div>
     )
   }
@@ -3671,45 +3775,37 @@ function EditPanel({
   const u = ui()
   useEscape(onCancel)
   return (
-    <div
-      style={{
-        position: 'absolute',
-        inset: 0,
-        background: u.backdrop,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-      }}
+    <AnimatedModal
+      onBackdrop={onCancel}
+      panelStyle={{ width: 480, maxWidth: '90%', background: u.card, color: u.text, borderRadius: 12, padding: 20 }}
     >
-      <div style={{ width: 480, maxWidth: '90%', background: u.card, color: u.text, borderRadius: 12, padding: 20 }}>
-        <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 12 }}>
-          {kind === 'text' ? 'Notitie bewerken' : 'Bijschrift bewerken'}
-        </div>
-        {kind === 'text' ? (
-          <textarea
-            autoFocus
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
-            placeholder="Schrijf een herinnering…"
-            style={{ ...field(u), height: 200, resize: 'vertical' }}
-          />
-        ) : (
-          <input
-            autoFocus
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
-            placeholder="Bijschrift bij de foto"
-            style={field(u)}
-          />
-        )}
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 14 }}>
-          <button onClick={onCancel} style={ghostBtn(u)}>Annuleren</button>
-          <button onClick={onSubmit} disabled={busy} style={primaryBtn(u)}>
-            {busy ? 'Bezig…' : 'Opslaan'}
-          </button>
-        </div>
+      <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 12 }}>
+        {kind === 'text' ? 'Notitie bewerken' : 'Bijschrift bewerken'}
       </div>
-    </div>
+      {kind === 'text' ? (
+        <textarea
+          autoFocus
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="Schrijf een herinnering…"
+          style={{ ...field(u), height: 200, resize: 'vertical' }}
+        />
+      ) : (
+        <input
+          autoFocus
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="Bijschrift bij de foto"
+          style={field(u)}
+        />
+      )}
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 14 }}>
+        <button onClick={onCancel} style={ghostBtn(u)}>Annuleren</button>
+        <button onClick={onSubmit} disabled={busy} style={primaryBtn(u)}>
+          {busy ? 'Bezig…' : 'Opslaan'}
+        </button>
+      </div>
+    </AnimatedModal>
   )
 }
 
@@ -3748,33 +3844,22 @@ function EventDialog({
     marginBottom: 7,
   }
   return (
-    <div
-      onClick={onCancel}
-      style={{
-        position: 'absolute',
-        inset: 0,
-        background: u.backdrop,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
+    <AnimatedModal
+      onBackdrop={onCancel}
+      panelStyle={{
+        width: 520,
+        maxWidth: '92%',
+        maxHeight: '90vh',
+        overflowY: 'auto',
+        background: u.card,
+        color: u.text,
+        borderRadius: 22,
+        padding: '26px 28px',
+        border: `1px solid ${u.border}`,
+        boxShadow: '0 30px 80px rgba(0,0,0,0.55)',
       }}
     >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          width: 520,
-          maxWidth: '92%',
-          maxHeight: '90vh',
-          overflowY: 'auto',
-          background: u.card,
-          color: u.text,
-          borderRadius: 22,
-          padding: '26px 28px',
-          border: `1px solid ${u.border}`,
-          boxShadow: '0 30px 80px rgba(0,0,0,0.55)',
-        }}
-      >
-        <div style={{ fontFamily: serif, fontStyle: 'italic', fontSize: 24, marginBottom: 18 }}>
+      <div style={{ fontFamily: serif, fontStyle: 'italic', fontSize: 24, marginBottom: 18 }}>
           {form.mode === 'create' ? (form.atDate ? 'Nieuw jaar — eerste memory' : 'Nieuwe memory') : 'Memory bewerken'}
         </div>
         <label style={{ display: 'block' }}>
@@ -3927,8 +4012,7 @@ function EventDialog({
             {busy ? 'Bezig…' : 'Opslaan'}
           </button>
         </div>
-      </div>
-    </div>
+    </AnimatedModal>
   )
 }
 
@@ -3948,33 +4032,25 @@ function Composer({
   const u = ui()
   useEscape(onCancel)
   return (
-    <div
-      style={{
-        position: 'absolute',
-        inset: 0,
-        background: u.backdrop,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-      }}
+    <AnimatedModal
+      onBackdrop={onCancel}
+      panelStyle={{ width: 480, maxWidth: '90%', background: u.card, color: u.text, borderRadius: 12, padding: 20 }}
     >
-      <div style={{ width: 480, maxWidth: '90%', background: u.card, color: u.text, borderRadius: 12, padding: 20 }}>
-        <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 12 }}>Nieuwe notitie</div>
-        <textarea
-          autoFocus
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          placeholder="Schrijf een herinnering…"
-          style={{ ...field(u), height: 140, resize: 'vertical' }}
-        />
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 14 }}>
-          <button onClick={onCancel} style={ghostBtn(u)}>Annuleren</button>
-          <button onClick={onSubmit} disabled={busy || !value.trim()} style={primaryBtn(u)}>
-            {busy ? 'Bezig…' : 'Opslaan'}
-          </button>
-        </div>
+      <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 12 }}>Nieuwe notitie</div>
+      <textarea
+        autoFocus
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder="Schrijf een herinnering…"
+        style={{ ...field(u), height: 140, resize: 'vertical' }}
+      />
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 14 }}>
+        <button onClick={onCancel} style={ghostBtn(u)}>Annuleren</button>
+        <button onClick={onSubmit} disabled={busy || !value.trim()} style={primaryBtn(u)}>
+          {busy ? 'Bezig…' : 'Opslaan'}
+        </button>
       </div>
-    </div>
+    </AnimatedModal>
   )
 }
 
@@ -4211,33 +4287,21 @@ function ConfirmDialog({
     return () => window.removeEventListener('keydown', onKey, true)
   }, [])
   return (
-    <div
-      onClick={onCancel}
-      style={{
-        position: 'absolute',
-        inset: 0,
-        zIndex: 1200,
-        background: u.backdrop,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-      }}
+    <AnimatedModal
+      onBackdrop={onCancel}
+      zIndex={1200}
+      panelStyle={{ width: 380, maxWidth: '92%', background: u.card, color: u.text, borderRadius: 12, padding: 20 }}
     >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        style={{ width: 380, maxWidth: '92%', background: u.card, color: u.text, borderRadius: 12, padding: 20 }}
-      >
-        <div style={{ fontSize: 15, lineHeight: 1.5 }}>{message}</div>
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 18 }}>
-          <button onClick={onCancel} style={ghostBtn(u)}>
-            Annuleren
-          </button>
-          <button onClick={onConfirm} style={{ ...primaryBtn(u), background: u.danger }}>
-            {confirmLabel}
-          </button>
-        </div>
+      <div style={{ fontSize: 15, lineHeight: 1.5 }}>{message}</div>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 18 }}>
+        <button onClick={onCancel} style={ghostBtn(u)}>
+          Annuleren
+        </button>
+        <button onClick={onConfirm} style={{ ...primaryBtn(u), background: u.danger }}>
+          {confirmLabel}
+        </button>
       </div>
-    </div>
+    </AnimatedModal>
   )
 }
 
@@ -4376,33 +4440,23 @@ function ThemePanel({
     border: `1px solid ${selected ? u.primary : u.border}`,
   })
   return (
-    <div
-      onClick={onClose}
-      style={{
-        position: 'absolute',
-        inset: 0,
-        zIndex: 1200, // boven de Fab/zoomknop (zelfde laag als de andere overlays)
-        background: u.backdropSoft,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
+    <AnimatedModal
+      onBackdrop={onClose}
+      backdrop={u.backdropSoft}
+      zIndex={1200}
+      panelStyle={{
+        width: 600,
+        maxWidth: '94%',
+        maxHeight: '86vh',
+        overflowY: 'auto',
+        background: u.card,
+        color: u.text,
+        borderRadius: 22,
+        padding: '26px 28px',
+        border: `1px solid ${u.border}`,
+        boxShadow: '0 30px 80px rgba(0,0,0,0.55)',
       }}
     >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          width: 600,
-          maxWidth: '94%',
-          maxHeight: '86vh',
-          overflowY: 'auto',
-          background: u.card,
-          color: u.text,
-          borderRadius: 22,
-          padding: '26px 28px',
-          border: `1px solid ${u.border}`,
-          boxShadow: '0 30px 80px rgba(0,0,0,0.55)',
-        }}
-      >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
           <div>
             <div style={{ fontFamily: serif, fontStyle: 'italic', fontSize: 24, color: u.text }}>Thema</div>
@@ -4564,8 +4618,7 @@ function ThemePanel({
             Klaar
           </button>
         </div>
-      </div>
-    </div>
+    </AnimatedModal>
   )
 }
 
