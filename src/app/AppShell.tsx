@@ -3643,16 +3643,6 @@ function Fab({
       </div>
     )
   }
-  // Context-knoppen (recht/gedraaid, opslaan, sortering) faden + schalen in/uit.
-  // Bewust GEEN `width: auto`/`layout`-animatie: die hapert en liet de opslaan-knop
-  // in Scatter soms op breedte 0 (onzichtbaar) staan.
-  const extraEnter = {
-    initial: { opacity: 0, scale: 0.6 },
-    animate: { opacity: 1, scale: 1 },
-    exit: { opacity: 0, scale: 0.6 },
-    transition: { duration: 0.18, ease: [0.2, 0.8, 0.2, 1] as const },
-    style: { display: 'flex', alignItems: 'center', gap: 4 } as React.CSSProperties,
-  }
   if (uiLevel === 'event') {
     return (
       <div style={wrap}>
@@ -3695,37 +3685,34 @@ function Fab({
               >
                 Vierkant
               </SegBtn>
-              <AnimatePresence>
-                {layoutMode === 'scatter' && (
-                  <motion.div key="rotate" {...extraEnter}>
-                    <RotateToggle on={scatterRotate} onToggle={onToggleScatterRotate} u={u} />
-                  </motion.div>
-                )}
-                {layoutMode !== 'custom' && (
-                  <motion.div key="save" {...extraEnter}>
-                    <DockIconBtn title="Opslaan als 'Eigen'" icon={<IconEigen size={18} />} onClick={onSaveLayout} accent />
-                  </motion.div>
-                )}
-                {layoutMode === 'grid' && (
-                  <motion.div key="sort" {...extraEnter}>
-                    {divider}
-                    <Pill small kind={gridSort === 'date' ? 'primary' : 'neutral'} onClick={() => onGridSort('date')} title="Sorteer op datum/tijd">
-                      Datum
-                    </Pill>
-                    <Pill small kind={gridSort === 'name' ? 'primary' : 'neutral'} onClick={() => onGridSort('name')} title="Sorteer op naam/bestandsnaam">
-                      Naam
-                    </Pill>
-                    <Pill
-                      small
-                      kind={gridSort === 'random' ? 'primary' : 'neutral'}
-                      onClick={() => onGridSort('random')}
-                      title="Willekeurig — klik nogmaals om opnieuw te schudden"
-                    >
-                      Willekeurig 🎲
-                    </Pill>
-                  </motion.div>
-                )}
-              </AnimatePresence>
+              {/* Context-knoppen: gewoon voorwaardelijk (géén animatie) — dat is
+                  stabiel en hapert niet bij een layout-wissel, en "Opslaan als
+                  Eigen" is zo altijd zichtbaar in zowel Grid als Scatter. */}
+              {layoutMode === 'scatter' && (
+                <RotateToggle on={scatterRotate} onToggle={onToggleScatterRotate} u={u} />
+              )}
+              {layoutMode !== 'custom' && (
+                <DockIconBtn title="Opslaan als 'Eigen'" icon={<IconEigen size={18} />} onClick={onSaveLayout} accent />
+              )}
+              {layoutMode === 'grid' && (
+                <>
+                  {divider}
+                  <Pill small kind={gridSort === 'date' ? 'primary' : 'neutral'} onClick={() => onGridSort('date')} title="Sorteer op datum/tijd">
+                    Datum
+                  </Pill>
+                  <Pill small kind={gridSort === 'name' ? 'primary' : 'neutral'} onClick={() => onGridSort('name')} title="Sorteer op naam/bestandsnaam">
+                    Naam
+                  </Pill>
+                  <Pill
+                    small
+                    kind={gridSort === 'random' ? 'primary' : 'neutral'}
+                    onClick={() => onGridSort('random')}
+                    title="Willekeurig — klik nogmaals om opnieuw te schudden"
+                  >
+                    Willekeurig 🎲
+                  </Pill>
+                </>
+              )}
             </motion.div>
           )}
         </AnimatePresence>

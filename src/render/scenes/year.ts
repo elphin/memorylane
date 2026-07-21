@@ -203,6 +203,7 @@ export class YearScene implements Scene {
   // De rauwe jaar-keuze, voor per-event accenten (app → jaar → event).
   private yearChoice: YearDetail['year']['theme']
   private leaders = new Graphics()
+  private spans: Graphics | null = null // periode-balken; hoogte counter-scaled zodat die bij inzoomen constant blijft
   private cardsLayer = new Container()
   private dotsLayer = new Container()
   private nodes: Node[] = []
@@ -292,6 +293,7 @@ export class YearScene implements Scene {
     // NB: `spans` wordt hieronder (bij de lagen) BOVEN de leaders gehangen, zodat
     // een leader-lijn achter het blok verdwijnt i.p.v. er dwars doorheen te lopen.
     const spans = new Graphics()
+    this.spans = spans
     const isSpan = (e: EventSummary): boolean =>
       !!e.endAt && dateToX(parseLocalDate(e.endAt)) - dateToX(parseLocalDate(e.startAt)) > 4
     const spanPalette = this.T.colors.spanPalette.map((c) => opaqueSpan(c, this.T.colors.appBg))
@@ -818,6 +820,11 @@ export class YearScene implements Scene {
     // teken in wereld×z-coördinaten (zie drawLeader).
     this.leaders.clear()
     this.leaders.scale.set(invZ)
+
+    // Periode-balken: alleen de HOOGTE counter-scalen (1/zoom) zodat de balk bij
+    // inzoomen zijn oorspronkelijke schermhoogte houdt; de breedte blijft
+    // meeschalen met de as (die vertegenwoordigt immers de tijdsduur).
+    if (this.spans) this.spans.scale.set(1, invZ)
 
     for (const n of this.nodes) {
       const screenX = (n.anchorX - camX) * z + halfW
