@@ -3808,6 +3808,15 @@ function EventDialog({
     Math.abs(b.size - curSize) < Math.abs(a.size - curSize) ? b : a,
   )
   const isCustomSize = !IMPORTANCE_CHOICES.some((c) => c.size === curSize)
+  const serif = 'Georgia, "Times New Roman", serif'
+  const fieldLabel: React.CSSProperties = {
+    display: 'block',
+    fontSize: 11,
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+    color: u.textMuted,
+    marginBottom: 7,
+  }
   return (
     <div
       onClick={onCancel}
@@ -3822,36 +3831,52 @@ function EventDialog({
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        style={{ width: 480, maxWidth: '90%', background: u.card, color: u.text, borderRadius: 12, padding: 20 }}
+        style={{
+          width: 520,
+          maxWidth: '92%',
+          maxHeight: '90vh',
+          overflowY: 'auto',
+          background: u.card,
+          color: u.text,
+          borderRadius: 22,
+          padding: '26px 28px',
+          border: `1px solid ${u.border}`,
+          boxShadow: '0 30px 80px rgba(0,0,0,0.55)',
+        }}
       >
-        <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 12 }}>
+        <div style={{ fontFamily: serif, fontStyle: 'italic', fontSize: 24, marginBottom: 18 }}>
           {form.mode === 'create' ? (form.atDate ? 'Nieuw jaar — eerste memory' : 'Nieuwe memory') : 'Memory bewerken'}
         </div>
-        <input
-          autoFocus
-          value={form.title}
-          onChange={(e) => onChange({ title: e.target.value })}
-          placeholder="Titel van de memory"
-          style={field(u)}
-        />
-        <div style={{ display: 'flex', gap: 12, marginTop: 12 }}>
+        <label style={{ display: 'block' }}>
+          <span style={fieldLabel}>Titel</span>
+          <input
+            autoFocus
+            value={form.title}
+            onChange={(e) => onChange({ title: e.target.value })}
+            placeholder="Titel van de memory"
+            style={field(u)}
+          />
+        </label>
+        <div style={{ display: 'flex', gap: 12, marginTop: 14 }}>
           <label style={dateLabel(u)}>
-            Begindatum
+            <span style={fieldLabel}>Begindatum</span>
             <input
               type="date"
               value={form.startAt}
               onChange={(e) => onChange({ startAt: e.target.value })}
-              style={{ ...field(u), marginTop: 4 }}
+              style={{ ...field(u), marginTop: 0 }}
             />
           </label>
           <label style={dateLabel(u)}>
-            Einddatum (optioneel)
+            <span style={fieldLabel}>
+              Einddatum <span style={{ textTransform: 'none', letterSpacing: 0 }}>(optioneel)</span>
+            </span>
             <input
               type="date"
               value={form.endAt}
               min={form.startAt || undefined}
               onChange={(e) => onChange({ endAt: e.target.value })}
-              style={{ ...field(u), marginTop: 4 }}
+              style={{ ...field(u), marginTop: 0 }}
             />
           </label>
         </div>
@@ -3860,11 +3885,13 @@ function EventDialog({
             De einddatum ligt vóór de begindatum.
           </div>
         )}
-        <div style={{ marginTop: 14 }}>
-          <div style={{ fontSize: 13, color: u.hintLabel, marginBottom: 6 }}>
+        <div style={{ marginTop: 18 }}>
+          <div style={fieldLabel}>
             Hoe bijzonder?
             {isCustomSize && (
-              <span style={{ color: u.hintMuted, marginLeft: 8 }}>· aangepast ({curSize})</span>
+              <span style={{ textTransform: 'none', letterSpacing: 0, color: u.hintMuted, marginLeft: 6 }}>
+                · aangepast ({curSize})
+              </span>
             )}
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
@@ -3878,17 +3905,19 @@ function EventDialog({
                   title={c.hint}
                   style={{
                     flex: 1,
-                    padding: '10px 8px',
-                    borderRadius: 8,
+                    padding: '12px 13px',
+                    borderRadius: 12,
                     cursor: 'pointer',
-                    textAlign: 'center',
-                    border: active ? `1px solid ${u.primarySoft}` : `1px solid ${u.borderSoft}`,
+                    textAlign: 'left',
+                    border: `1px solid ${active ? u.primary : u.borderSoft}`,
                     background: active ? u.primaryFaintBg : u.choiceBg,
+                    boxShadow: active ? `0 0 0 3px ${u.primaryFaintBg}` : 'none',
                     color: active ? u.btnText : u.chipText,
+                    transition: 'border 120ms, box-shadow 120ms, background 120ms',
                   }}
                 >
                   <div style={{ fontWeight: 600, fontSize: 14 }}>{c.label}</div>
-                  <div style={{ fontSize: 11, color: u.hintMuted, marginTop: 2 }}>{c.hint}</div>
+                  <div style={{ fontSize: 11, color: u.hintMuted, marginTop: 3, lineHeight: 1.3 }}>{c.hint}</div>
                 </button>
               )
             })}
@@ -3896,39 +3925,75 @@ function EventDialog({
         </div>
         {form.mode === 'edit' && (
           <div
-            role="switch"
-            aria-checked={form.underConstruction ?? false}
-            tabIndex={0}
-            onClick={() => onChange({ underConstruction: !(form.underConstruction ?? false) })}
-            onKeyDown={(e) => {
-              if (e.key === ' ' || e.key === 'Enter') {
-                e.preventDefault()
-                onChange({ underConstruction: !(form.underConstruction ?? false) })
-              }
-            }}
             style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 10,
               marginTop: 16,
-              cursor: 'pointer',
-              userSelect: 'none',
-              color: u.textSoft,
-              fontSize: 14,
+              padding: '12px 14px',
+              borderRadius: 13,
+              border: `1px solid ${u.borderSoft}`,
+              background: u.choiceBg,
             }}
           >
-            <Switch on={form.underConstruction ?? false} u={u} />
-            <span>
-              🔨 Deze memory is nog <strong>in aanbouw</strong>
-              <span style={{ color: u.hintMuted, marginLeft: 6, fontSize: 12 }}>
-                · toont een badge in de jaar-view
+            <div
+              role="switch"
+              aria-checked={form.underConstruction ?? false}
+              tabIndex={0}
+              onClick={() => onChange({ underConstruction: !(form.underConstruction ?? false) })}
+              onKeyDown={(e) => {
+                if (e.key === ' ' || e.key === 'Enter') {
+                  e.preventDefault()
+                  onChange({ underConstruction: !(form.underConstruction ?? false) })
+                }
+              }}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                cursor: 'pointer',
+                userSelect: 'none',
+                color: u.textSoft,
+                fontSize: 14,
+              }}
+            >
+              <Switch on={form.underConstruction ?? false} u={u} />
+              <span>
+                🔨 Deze memory is nog <strong>in aanbouw</strong>
+                <span style={{ color: u.hintMuted, marginLeft: 6, fontSize: 12 }}>
+                  · toont een badge in de jaar-view
+                </span>
               </span>
-            </span>
+            </div>
           </div>
         )}
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 14 }}>
-          <button onClick={onCancel} style={ghostBtn(u)}>Annuleren</button>
-          <button onClick={onSubmit} disabled={busy || invalid} style={primaryBtn(u)}>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 22 }}>
+          <button
+            onClick={onCancel}
+            style={{
+              padding: '10px 22px',
+              borderRadius: 12,
+              border: `1px solid ${u.border}`,
+              background: 'transparent',
+              color: u.textSoft,
+              fontSize: 14,
+              cursor: 'pointer',
+            }}
+          >
+            Annuleren
+          </button>
+          <button
+            onClick={onSubmit}
+            disabled={busy || invalid}
+            style={{
+              padding: '10px 26px',
+              borderRadius: 12,
+              border: 'none',
+              background: u.primary,
+              color: u.primaryText,
+              fontSize: 15,
+              fontWeight: 600,
+              cursor: busy || invalid ? 'not-allowed' : 'pointer',
+              opacity: busy || invalid ? 0.5 : 1,
+            }}
+          >
             {busy ? 'Bezig…' : 'Opslaan'}
           </button>
         </div>
