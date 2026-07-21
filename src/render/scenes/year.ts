@@ -289,8 +289,9 @@ export class YearScene implements Scene {
     }
 
     // ---- Meerdaagse (span) balken op de as (de balk is hun marker) -----------
+    // NB: `spans` wordt hieronder (bij de lagen) BOVEN de leaders gehangen, zodat
+    // een leader-lijn achter het blok verdwijnt i.p.v. er dwars doorheen te lopen.
     const spans = new Graphics()
-    this.root.addChild(spans)
     const isSpan = (e: EventSummary): boolean =>
       !!e.endAt && dateToX(parseLocalDate(e.endAt)) - dateToX(parseLocalDate(e.startAt)) > 4
     const spanPalette = this.T.colors.spanPalette.map((c) => opaqueSpan(c, this.T.colors.appBg))
@@ -320,8 +321,11 @@ export class YearScene implements Scene {
       return startX
     }
 
-    // ---- Lagen (achter→voor: leaders < stippen < kaarten) -------------------
+    // ---- Lagen (achter→voor: leaders < spans < stippen < kaarten) -----------
+    // Leaders onderaan, dan de span-blokken (zodat een leader áchter zijn blok
+    // verdwijnt), dan de stippen, dan de kaarten bovenop.
     this.root.addChild(this.leaders)
+    this.root.addChild(spans)
     this.root.addChild(this.dotsLayer)
     this.root.addChild(this.cardsLayer)
 
@@ -497,16 +501,16 @@ export class YearScene implements Scene {
     if (!isSpan) {
       dot = new Container()
       const g = new Graphics()
-      // Concentrische ring-stip. Belang (size) bepaalt grootte + kleur:
-      // gewoon = klein & grijs, bijzonder = groter & gekleurd, uitzonderlijk =
-      // grootst & gekleurd. Een eigen accent-keuze bepaalt de "gekleurde" tint;
-      // anders het jaar-accent.
+      // Concentrische ring-stip. Belang (size) bepaalt grootte + vorm:
+      // gewoon = klein & massief, bijzonder = ring, uitzonderlijk = grotere ring.
+      // Kleur: een eigen accent-keuze wint altijd (dus ook een "gewone" memory
+      // toont zijn gekozen accent); anders is gewoon grijs en belangrijk het
+      // jaar-accent.
       const size = ev.size ?? 50
       const tier = size >= 60 ? 2 : size >= 40 ? 1 : 0
       const customAccent =
         ev.theme?.id || ev.theme?.accent ? resolveTheme(this.yearChoice, ev.theme).colors.accent : null
-      const colored = customAccent ?? this.T.colors.accent
-      const dotColor = tier === 0 ? this.T.colors.textMuted : colored
+      const dotColor = customAccent ?? (tier === 0 ? this.T.colors.textMuted : this.T.colors.accent)
       if (tier === 0) {
         // Gewoon: compacte massieve stip (géén ring) — blijft rustig als er veel
         // memories dicht op elkaar staan. Alleen belangrijke memories krijgen een
@@ -915,13 +919,18 @@ export class YearScene implements Scene {
         }
       }
 
-      // --- Stip (non-cover altijd; cover-overflow terwijl appear<1) ----------
+      // --- Stip: vol zichtbaar bij de as (waar de kaart uit opstijgt) en daarna
+      // een blijvende, subtiele markering op de jaarlijn — precies waar de
+      // leader-lijn aankomt (schuift bij het opstijgen naar die basis toe). ----
       if (n.dot) {
-        const dotAlpha = 1 - n.appear
+        const SUBTLE = 0.5 // rest-alpha van de stip zodra de kaart volledig boven staat
+        const dotAlpha = 1 - n.appear + SUBTLE * n.appear
         const showDot = inView && dotAlpha > 0.01
         n.dot.visible = showDot
         if (showDot) {
-          n.dot.position.set(n.anchorX + off * invZ, 0)
+          // Bij het opstijgen glijdt de stip van zijn spreid-offset naar de
+          // leader-basis (anchorX) zodat 'ie netjes onder de lijn eindigt.
+          n.dot.position.set(n.anchorX + off * invZ * (1 - n.appear), 0)
           n.dot.scale.set(invZ)
           n.dot.alpha = dotAlpha
         }

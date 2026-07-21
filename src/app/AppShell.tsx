@@ -3643,13 +3643,15 @@ function Fab({
       </div>
     )
   }
+  // Context-knoppen (recht/gedraaid, opslaan, sortering) faden + schalen in/uit.
+  // Bewust GEEN `width: auto`/`layout`-animatie: die hapert en liet de opslaan-knop
+  // in Scatter soms op breedte 0 (onzichtbaar) staan.
   const extraEnter = {
-    layout: true,
-    initial: { opacity: 0, scale: 0.55, width: 0 },
-    animate: { opacity: 1, scale: 1, width: 'auto' as const },
-    exit: { opacity: 0, scale: 0.55, width: 0 },
-    transition: { type: 'spring' as const, stiffness: 520, damping: 32 },
-    style: { display: 'flex', alignItems: 'center', gap: 4, overflow: 'hidden' } as React.CSSProperties,
+    initial: { opacity: 0, scale: 0.6 },
+    animate: { opacity: 1, scale: 1 },
+    exit: { opacity: 0, scale: 0.6 },
+    transition: { duration: 0.18, ease: [0.2, 0.8, 0.2, 1] as const },
+    style: { display: 'flex', alignItems: 'center', gap: 4 } as React.CSSProperties,
   }
   if (uiLevel === 'event') {
     return (
@@ -3664,11 +3666,10 @@ function Fab({
             <motion.div
               key="layoutbar"
               data-layoutbar
-              layout
-              initial={{ opacity: 0, scale: 0.85, y: 14 }}
+              initial={{ opacity: 0, scale: 0.9, y: 12 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.88, y: 10 }}
-              transition={{ type: 'spring', stiffness: 480, damping: 34 }}
+              exit={{ opacity: 0, scale: 0.92, y: 8 }}
+              transition={{ duration: 0.2, ease: [0.2, 0.8, 0.2, 1] }}
               style={{ ...dockBar, flexWrap: 'wrap', justifyContent: 'center', maxWidth: 'min(96vw, 760px)' }}
             >
               <SegBtn active={layoutMode === 'custom'} icon={<IconEigen />} onClick={() => onLayout('custom')}>
@@ -4349,7 +4350,8 @@ function ThemePanel({
   }
   // "Fijn afstellen" staat standaard open zodra er al iets is fijngesteld, zodat
   // bestaande aanpassingen meteen zichtbaar zijn; anders ingeklapt.
-  const [tweakOpen, setTweakOpen] = useState<boolean>(!!(value?.accent || value?.titleFont || value?.background))
+  // Standaard uitgeklapt: alle opties (accent/lettertype/achtergrond) meteen zichtbaar.
+  const [tweakOpen, setTweakOpen] = useState<boolean>(true)
   const serif = 'Georgia, "Times New Roman", serif'
   const sectionLabel = (mt: number): React.CSSProperties => ({
     fontSize: 11,
@@ -4535,6 +4537,9 @@ function ThemePanel({
             {tweakOpen && (
               <div id="thema-fijn-afstellen" style={{ marginTop: 14 }}>
                 <div style={sectionLabel(0)}>Accentkleur</div>
+                <div style={{ fontSize: 12, color: u.textMuted, margin: '-4px 0 10px', lineHeight: 1.4 }}>
+                  Kleurt de tijdlijn-stip en de periode-balk van deze memory in het jaar-overzicht.
+                </div>
                 <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
                   <button onClick={() => patch({ accent: undefined })} title="Geërfd" style={swatch(!value?.accent)} />
                   {ACCENT_SWATCHES.map((c) => (

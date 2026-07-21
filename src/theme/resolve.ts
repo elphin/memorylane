@@ -31,8 +31,28 @@ export const TITLE_FONTS: { id: string; name: string; stack: string }[] = [
 ]
 
 /** Gecureerde accent-swatches voor de override-kiezer ('#rrggbb'). */
+// Gecureerd accent-palet: warm → koel → warm, met genoeg variatie (rood, oranje,
+// amber/goud, groen, groenblauw, blauw, paars, roze, bruin). Iets gedempt zodat
+// ze bij de fotoalbum-sfeer passen maar toch duidelijk als accent leesbaar zijn.
 export const ACCENT_SWATCHES: string[] = [
-  '#c47b4f', '#c26d84', '#39b8a6', '#3b82c4', '#d98e32', '#8c3b2e', '#6ea8ff', '#7fa05e',
+  '#c0392b', // baksteenrood
+  '#d1553f', // terracotta
+  '#e07b39', // oranje
+  '#d98e32', // amber
+  '#d4a13a', // goud
+  '#b8a24a', // mosterd
+  '#7fa05e', // olijf
+  '#4a9e6f', // groen
+  '#2fa88f', // smaragd
+  '#39b8a6', // groenblauw
+  '#3b82c4', // blauw
+  '#6ea8ff', // lavendelblauw
+  '#7c66f0', // paars
+  '#9b6dd4', // lavendel
+  '#b45fa8', // orchidee
+  '#c26d84', // roze
+  '#d1637a', // framboos
+  '#a0664a', // bruin
 ]
 
 /** '#rrggbb' → Pixi-hex, of null bij een ongeldige waarde (stil negeren). */
