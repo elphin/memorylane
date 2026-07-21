@@ -312,12 +312,31 @@ export class EventScene implements Scene {
     if (fs !== 'none') {
       // Polaroid: brede onderrand (de klassieke instant-band) voor de caption.
       const band = fs === 'polaroid' ? eb * 3.5 : 0
-      const r = fs === 'rounded' ? 16 : fs === 'polaroid' ? 3 : 4
-      // Subtiele slagschaduw als onderdeel van het kader (goedkoop: één extra
-      // licht verschoven donkere fill, geen filter).
-      n.frame
-        .roundRect(-w / 2 - eb + 2, -h / 2 - eb + 5, w + eb * 2, h + eb * 2 + band, r + 2)
-        .fill({ color: 0x000000, alpha: 0.16 })
+      // Strakke hoeken: klassiek kader is nu een echte 90°-hoek (0 i.p.v. 4);
+      // alleen 'rounded'/'polaroid' zijn bewust afgerond.
+      const r = fs === 'rounded' ? 16 : fs === 'polaroid' ? 3 : 0
+      // Zachte, "HD" slagschaduw naar rechtsonder (lichtbron linksboven): een
+      // stapeltje gestapelde fills — van groot+ijl naar klein+dicht — bootst een
+      // gauss-blur na zonder een dure filter (past bij de perf-eisen). De witte
+      // rand tekent er daarna overheen, dus de schaduw piept enkel rechtsonder uit.
+      // dx ≥ blur zodat geen enkele (ijle) laag links/boven — de lichtkant —
+      // buiten het kader uitsteekt; de schaduw valt puur naar rechtsonder.
+      const dx = eb * 1.4
+      const dy = eb * 1.5
+      const blur = eb * 1.4
+      const sw = w + eb * 2
+      const sh = h + eb * 2 + band
+      const cx = -w / 2 - eb + dx
+      const cy = -h / 2 - eb + dy
+      const LAYERS = 6
+      for (let i = LAYERS - 1; i >= 0; i--) {
+        const t = i / (LAYERS - 1)
+        const grow = t * blur
+        const alpha = 0.05 * (1 - t * 0.65)
+        n.frame
+          .roundRect(cx - grow, cy - grow, sw + grow * 2, sh + grow * 2, r + grow)
+          .fill({ color: 0x000000, alpha })
+      }
       n.frame.roundRect(-w / 2 - eb, -h / 2 - eb, w + eb * 2, h + eb * 2 + band, r).fill(this.T.colors.frame)
     }
     // Polaroid-caption gecentreerd in de onderrand (schaalt mee met de band en

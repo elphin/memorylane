@@ -100,9 +100,10 @@ export class RenderEngine {
     if (this.destroyed) return
     await this.app.init({
       resizeTo: container,
-      // Foto-sprites zijn axis-aligned quads; MSAA kost frame-tijd zonder
-      // zichtbare winst. Uit = flink sneller.
-      antialias: false,
+      // MSAA aan: in scatter staan de foto-kaarten schuin (niet axis-aligned) en
+      // de tijdlijn heeft gebogen verbindingslijnen — daar geeft antialiasing een
+      // duidelijk gladdere rand. Combineert met resolution=devicePixelRatio.
+      antialias: true,
       background: THEME.colors.appBg,
       preference: 'webgl',
       powerPreference: 'high-performance',
