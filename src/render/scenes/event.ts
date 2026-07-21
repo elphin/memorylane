@@ -269,11 +269,11 @@ export class EventScene implements Scene {
     return { sprite, frame, mask }
   }
 
-  /** (Her)teken het foto-masker: afgeronde hoeken bij 'rounded', anders strak. */
-  private drawPhotoMask(mask: Graphics, style: FrameStyle, w: number, h: number): void {
+  /** (Her)teken het foto-masker: altijd strakke 90°-hoeken (vaste voorkeur voor
+   * vierkante randen, en consistent met de jaar-view). */
+  private drawPhotoMask(mask: Graphics, _style: FrameStyle, w: number, h: number): void {
     mask.clear()
-    if (style === 'rounded') mask.roundRect(-w / 2, -h / 2, w, h, 12).fill(0xffffff)
-    else mask.rect(-w / 2, -h / 2, w, h).fill(0xffffff)
+    mask.rect(-w / 2, -h / 2, w, h).fill(0xffffff)
   }
 
   /** Zet een foto-kaart op afmeting `w`×`h` (foto-inhoud): hertekent de witte
@@ -312,9 +312,9 @@ export class EventScene implements Scene {
     if (fs !== 'none') {
       // Polaroid: brede onderrand (de klassieke instant-band) voor de caption.
       const band = fs === 'polaroid' ? eb * 3.5 : 0
-      // Strakke hoeken: klassiek kader is nu een echte 90°-hoek (0 i.p.v. 4);
-      // alleen 'rounded'/'polaroid' zijn bewust afgerond.
-      const r = fs === 'rounded' ? 16 : fs === 'polaroid' ? 3 : 0
+      // Altijd rechte 90°-hoeken — consistent met de jaar-view (die tekent de
+      // thumbnails ook strak) en met de vaste voorkeur voor vierkante randen.
+      const r = 0
       // Zachte, "HD" slagschaduw naar rechtsonder (lichtbron linksboven): een
       // stapeltje gestapelde fills — van groot+ijl naar klein+dicht — bootst een
       // gauss-blur na zonder een dure filter (past bij de perf-eisen). De witte
@@ -323,20 +323,22 @@ export class EventScene implements Scene {
       // buiten het kader uitsteekt; de schaduw valt puur naar rechtsonder.
       // Zachter/vager (meer lagen, lagere alpha) en iets minder spread (kleinere
       // offset + blur) dan de eerste versie.
-      const blur = eb * 1.05
+      const blur = eb * 1.15
       // dx net iets groter dan blur → veilige marge zodat geen ijle laag aan de
-      // lichtkant (links/boven) buiten het kader piept.
-      const dx = eb * 1.1
-      const dy = eb * 1.15
+      // lichtkant (links/boven) buiten het kader piept. dy iets groter = "opgetild".
+      const dx = eb * 1.2
+      const dy = eb * 1.35
       const sw = w + eb * 2
       const sh = h + eb * 2 + band
       const cx = -w / 2 - eb + dx
       const cy = -h / 2 - eb + dy
-      const LAYERS = 9
+      // Premium/gauss-achtige val: kwadratische groei clustert veel lagen dicht bij
+      // de kaart (dichte, warme kern) en waaiert uit in een heel ijle, brede halo.
+      const LAYERS = 11
       for (let i = LAYERS - 1; i >= 0; i--) {
         const t = i / (LAYERS - 1)
-        const grow = t * blur
-        const alpha = 0.032 * (1 - t * 0.5)
+        const grow = t * t * blur
+        const alpha = 0.03 * (1 - t * 0.55)
         n.frame
           .roundRect(cx - grow, cy - grow, sw + grow * 2, sh + grow * 2, r + grow)
           .fill({ color: 0x000000, alpha })
@@ -909,7 +911,7 @@ export class EventScene implements Scene {
 
   private buildTextCard(container: Container, item: Item): { bg: Graphics; text: Text; clip: Graphics } {
     const bg = new Graphics()
-    bg.roundRect(-TEXT_W / 2, -TEXT_H / 2, TEXT_W, TEXT_H, 10).fill(this.T.colors.paper).stroke({
+    bg.rect(-TEXT_W / 2, -TEXT_H / 2, TEXT_W, TEXT_H).fill(this.T.colors.paper).stroke({
       width: 1,
       color: this.T.colors.paperStroke,
     })
@@ -934,7 +936,7 @@ export class EventScene implements Scene {
     text.position.set(0, -TEXT_H / 2 + 14)
     container.addChild(text)
     const clip = new Graphics()
-    clip.roundRect(-TEXT_W / 2, -TEXT_H / 2, TEXT_W, TEXT_H, 10).fill(0xffffff)
+    clip.rect(-TEXT_W / 2, -TEXT_H / 2, TEXT_W, TEXT_H).fill(0xffffff)
     container.addChild(clip)
     text.mask = clip
     return { bg, text, clip }
@@ -951,13 +953,13 @@ export class EventScene implements Scene {
     if (n.textBg) {
       n.textBg.clear()
       n.textBg
-        .roundRect(-w / 2, -h / 2, w, h, 10)
+        .rect(-w / 2, -h / 2, w, h)
         .fill(this.T.colors.paper)
         .stroke({ width: 1, color: this.T.colors.paperStroke })
     }
     if (n.textClip) {
       n.textClip.clear()
-      n.textClip.roundRect(-w / 2, -h / 2, w, h, 10).fill(0xffffff)
+      n.textClip.rect(-w / 2, -h / 2, w, h).fill(0xffffff)
     }
     if (n.textEl) {
       n.textEl.style.wordWrapWidth = w - 32

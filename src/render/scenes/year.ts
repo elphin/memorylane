@@ -121,6 +121,7 @@ interface Node {
   // Pixi-objecten.
   card: Container | null // cover-events
   frame: Graphics | null // de witte rand (dient als toetsenbord-focus-indicator)
+  badge: Container | null // "in aanbouw"-ezelsoor (herplaatsen bij resize)
   borderAlpha: number // huidige rand-alpha (animeert weg voor niet-gefocuste tegels)
   frameDrawnScale: number // baseScreenScale waarvoor de frame laatst getekend is (-1 = nog niet)
   title: Text | null
@@ -477,8 +478,17 @@ export class YearScene implements Scene {
       inner.position.set(0, 0)
       card.addChild(inner)
     }
-    // "In aanbouw"-badge: amber caution-chip rechtsboven in de hoek.
-    if (ev.underConstruction) card.addChild(this.buildUnderConstructionBadge())
+    // "In aanbouw"-badge (ezelsoor + klok) exact op de rechterbovenhoek van het
+    // frame. Het frame krijgt een constante schérm-randdikte (BORDER_PX /
+    // baseScreenScale) — dus de hoek zit in kaart-coördinaten op ±(THUMB/2 + bpx),
+    // niet op de vaste BORDER. Zo blijft de badge kloppen bij vergrote tegels.
+    let badge: Container | null = null
+    if (ev.underConstruction) {
+      badge = this.buildUnderConstructionBadge()
+      const bpx = BORDER_PX / (cardH / THUMB_H)
+      badge.position.set(THUMB_W / 2 + bpx, -(THUMB_H / 2 + bpx))
+      card.addChild(badge)
+    }
     card.visible = false
     this.cardsLayer.addChild(card)
 
@@ -497,13 +507,20 @@ export class YearScene implements Scene {
         ev.theme?.id || ev.theme?.accent ? resolveTheme(this.yearChoice, ev.theme).colors.accent : null
       const colored = customAccent ?? this.T.colors.accent
       const dotColor = tier === 0 ? this.T.colors.textMuted : colored
-      const outerR = tier === 2 ? DOT_R + 2 : tier === 1 ? DOT_R : DOT_R - 2
-      const ringW = tier === 2 ? 2.2 : tier === 1 ? 1.9 : 1.6
-      const innerR = outerR * 0.42
-      // Achtergrond-schijfje zodat de as-lijn niet door de ring-opening schemert.
-      g.circle(0, 0, outerR + 1).fill(this.T.colors.appBg)
-      g.circle(0, 0, outerR).stroke({ width: ringW, color: dotColor })
-      g.circle(0, 0, innerR).fill(dotColor)
+      if (tier === 0) {
+        // Gewoon: compacte massieve stip (géén ring) — blijft rustig als er veel
+        // memories dicht op elkaar staan. Alleen belangrijke memories krijgen een
+        // opvallende ring-stip.
+        g.circle(0, 0, 3.2).fill(dotColor)
+      } else {
+        // Bijzonder/uitzonderlijk: concentrische ring-stip. Geen achtergrond-
+        // schijfje → overlappende ringen mogen door elkaar heen vallen i.p.v.
+        // elkaar hard weg te knippen.
+        const outerR = tier === 2 ? DOT_R + 1 : DOT_R - 1
+        const ringW = tier === 2 ? 2.1 : 1.8
+        g.circle(0, 0, outerR).stroke({ width: ringW, color: dotColor })
+        g.circle(0, 0, outerR * 0.4).fill(dotColor)
+      }
       dot.addChild(g)
       dot.visible = false
       this.dotsLayer.addChild(dot)
@@ -534,6 +551,7 @@ export class YearScene implements Scene {
       curY: 0,
       card,
       frame,
+      badge,
       borderAlpha: 1,
       frameDrawnScale: -1,
       title,
@@ -581,19 +599,18 @@ export class YearScene implements Scene {
   private buildUnderConstructionBadge(): Container {
     const b = new Container()
     const S = 34 // beenlengte van de vouw-driehoek
-    const cx = THUMB_W / 2 + BORDER // rechterbovenhoek van het frame
-    const cy = -(THUMB_H / 2 + BORDER)
-    // Zachte slagschaduw langs de vouwlijn (geeft het "opgetilde" gevoel).
+    // Rechte hoek in de LOKALE oorsprong (0,0); de aanroeper plaatst de hele
+    // badge op de exacte frame-hoek. De vouw loopt naar links en omlaag = de
+    // kaart in.
     const shade = new Graphics()
-    shade.poly([cx - S, cy, cx, cy + S, cx - S + 4, cy + 4]).fill({ color: 0x000000, alpha: 0.16 })
-    // De oranje vouw-driehoek zelf (rechte hoek in de kaarthoek).
+    shade.poly([-S, 0, 0, S, -S + 4, 4]).fill({ color: 0x000000, alpha: 0.16 })
     const fold = new Graphics()
-    fold.poly([cx - S, cy, cx, cy, cx, cy + S]).fill(0xf0872e)
-    fold.poly([cx - S, cy, cx, cy + S]).stroke({ width: 1, color: 0xffffff, alpha: 0.35 })
+    fold.poly([-S, 0, 0, 0, 0, S]).fill(0xf0872e)
+    fold.poly([-S, 0, 0, S]).stroke({ width: 1, color: 0xffffff, alpha: 0.35 })
     // Klokje (wit) in het midden van de vouw.
     const clock = new Graphics()
-    const ccx = cx - S * 0.4
-    const ccy = cy + S * 0.4
+    const ccx = -S * 0.4
+    const ccy = S * 0.4
     const rr = 5.4
     clock.circle(ccx, ccy, rr).stroke({ width: 1.5, color: 0xffffff })
     clock
@@ -838,6 +855,8 @@ export class YearScene implements Scene {
             n.frame
               .rect(-THUMB_W / 2 - b, -THUMB_H / 2 - b, THUMB_W + b * 2, THUMB_H + b * 2)
               .fill(this.T.colors.frame)
+            // Badge volgt de (nu mogelijk andere) frame-hoek na een resize.
+            if (n.badge) n.badge.position.set(THUMB_W / 2 + b, -(THUMB_H / 2 + b))
           }
           const targetHover = n.eventId === this.hoveredId ? 1.05 : 1
           n.hover += (targetHover - n.hover) * 0.2
