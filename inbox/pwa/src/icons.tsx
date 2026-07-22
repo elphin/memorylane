@@ -147,6 +147,16 @@ export function IconShare(p: IconProps) {
   )
 }
 
+/** Vernieuwen (cirkelpijl). */
+export function IconRefresh(p: IconProps) {
+  return (
+    <Svg {...p}>
+      <path d="M20 11.5A8 8 0 1 0 18.4 16" />
+      <path d="M20 5.5V11h-5.5" />
+    </Svg>
+  )
+}
+
 /** Prullenbak (verwijderen). */
 export function IconTrash(p: IconProps) {
   return (

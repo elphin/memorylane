@@ -11,13 +11,19 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
-      registerType: 'autoUpdate',
+      // 'prompt': een nieuwe versie wacht (skipWaiting NIET geforceerd) totdat de
+      // gebruiker op de "Vernieuwen"-balk tikt — geen verrassende auto-herlaad
+      // midden in het schrijven van een memory. De update-afhandeling zit in pwa.ts.
+      registerType: 'prompt',
       includeAssets: ['icon.svg', 'apple-touch-icon.png', 'favicon-48.png'],
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,woff2}'],
         // /api/* en presigned R2-URLs mogen NOOIT uit de cache komen.
         navigateFallbackDenylist: [/^\/api\//],
         runtimeCaching: [],
+        // Expliciet: NIET skipWaiten — de gebruiker beslist wanneer 'ie vernieuwt.
+        skipWaiting: false,
+        clientsClaim: false,
       },
       manifest: {
         name: 'MemoryLane',

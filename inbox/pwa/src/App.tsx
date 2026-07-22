@@ -5,7 +5,8 @@ import { PairScreen } from './screens/Pair'
 import { NewMemoryScreen } from './screens/NewMemory'
 import { DashboardScreen } from './screens/Dashboard'
 import { SettingsScreen } from './screens/Settings'
-import { IconGear, IconPlus } from './icons'
+import { IconGear, IconPlus, IconRefresh } from './icons'
+import { applyUpdate, onNeedRefresh } from './pwa'
 
 type View = 'loading' | 'pair' | 'new' | 'dashboard' | 'settings'
 
@@ -14,6 +15,11 @@ export function App() {
   const [view, setView] = useState<View>('loading')
   const [pairLink, setPairLink] = useState<PairLink | null>(null)
   const [expired, setExpired] = useState(false)
+  const [updateReady, setUpdateReady] = useState(false)
+
+  // "Nieuwe versie beschikbaar" — de service-worker heeft nieuwe app-bestanden
+  // klaarstaan; een tik op de balk past ze toe en herlaadt.
+  useEffect(() => onNeedRefresh(() => setUpdateReady(true)), [])
 
   useEffect(() => {
     const link = parsePairFromLocation()
@@ -68,10 +74,19 @@ export function App() {
   }
 
   const p = pairing!
+  const updateToast = updateReady ? (
+    <button className="update-toast" onClick={applyUpdate}>
+      <IconRefresh size={18} />
+      <span>Nieuwe versie beschikbaar</span>
+      <span className="update-toast-cta">Vernieuwen</span>
+    </button>
+  ) : null
   // Header: instellingen LINKS (zelden nodig), merk in het MIDDEN (→ overzicht),
   // en de meest gebruikte actie — nieuwe memory — RECHTSBOVEN (best bereikbaar).
   const nav = (
-    <header className="topbar">
+    <>
+      {updateToast}
+      <header className="topbar">
       <button className="link" onClick={() => setView('settings')} aria-label="Instellingen">
         <IconGear />
       </button>
@@ -92,7 +107,8 @@ export function App() {
       <button className="link accent" onClick={() => setView('new')} aria-label="Nieuwe memory">
         <IconPlus />
       </button>
-    </header>
+      </header>
+    </>
   )
 
   if (view === 'settings')

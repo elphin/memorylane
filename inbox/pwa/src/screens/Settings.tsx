@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { Pairing } from '../store/db'
 import { clearPairing, getKv, setKv } from '../store/db'
+import { refreshNow } from '../pwa'
+import { IconRefresh } from '../icons'
 
 type Theme = 'system' | 'light' | 'dark'
 
@@ -25,6 +27,7 @@ export function SettingsScreen({
   nav: ReactNode
 }) {
   const [theme, setTheme] = useState<Theme>('system')
+  const [refreshing, setRefreshing] = useState(false)
 
   useEffect(() => {
     void getKv<Theme>('theme').then((t) => {
@@ -74,6 +77,16 @@ export function SettingsScreen({
                 {t === 'system' ? 'Systeem' : t === 'light' ? 'Licht' : 'Donker'}
               </button>
             ))}
+          </div>
+        </div>
+
+        <div className="card stack">
+          <div className="label">App-versie</div>
+          <button className="btn btn-icon" disabled={refreshing} onClick={() => { setRefreshing(true); void refreshNow() }}>
+            <IconRefresh size={19} /> {refreshing ? 'Vernieuwen…' : 'App vernieuwen'}
+          </button>
+          <div className="muted" style={{ fontSize: 12 }}>
+            Zie je nog een oude versie? Dit haalt de nieuwste op en herlaadt de app.
           </div>
         </div>
 
