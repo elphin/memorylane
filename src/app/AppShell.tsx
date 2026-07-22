@@ -150,6 +150,9 @@ const DEFAULT_SETTINGS: Settings = {
   backOnRightClick: true,
 }
 const SETTINGS_KEY = 'memorylane-settings'
+// Scherm-px die de titel ("2024") bovenaan inneemt (top 18 + ~30px teksthoogte +
+// gaatje). De dag-gids (Ctrl) start hieronder als de titel aan staat.
+const TITLE_INSET_PX = 60
 
 function loadSettings(): Settings {
   try {
@@ -259,8 +262,8 @@ function removeEventView(eventId: string): void {
   }
 }
 
-/** Schakel echte fullscreen (borderloos, hele monitor). In Tauri via de venster-API,
- * in de browser-dev via de Fullscreen-API. */
+/** Schakel echte fullscreen (borderloos, hele monitor — geen OS-titelbalk). In Tauri
+ * via de venster-API, in de browser-dev via de Fullscreen-API. Voor F11. */
 async function toggleFullscreen(): Promise<void> {
   try {
     if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
@@ -274,6 +277,20 @@ async function toggleFullscreen(): Promise<void> {
     }
   } catch {
     /* fullscreen niet beschikbaar → negeren */
+  }
+}
+
+/** Maximaliseer/herstel het OS-venster (zoals het maximaliseer-knopje in de
+ * titelbalk): beeldvullend mét vensterrand. Voor F. Alleen in Tauri; in de browser
+ * bestaat maximaliseren niet los van fullscreen → geen-op. */
+async function toggleMaximize(): Promise<void> {
+  try {
+    if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
+      const { getCurrentWindow } = await import('@tauri-apps/api/window')
+      await getCurrentWindow().toggleMaximize()
+    }
+  } catch {
+    /* niet beschikbaar → negeren */
   }
 }
 
@@ -342,14 +359,11 @@ export function AppShell() {
   // Screensaver: null = dicht, anders de (context-afhankelijke) foto-ids.
   const [screensaverIds, setScreensaverIds] = useState<string[] | null>(null)
   const [toast, setToast] = useState<string | null>(null)
-  // App-fullscreen (chromeless): OS-venster fullscreen + alle app-chrome weg
-  // (titel/tandwiel/knoppen). Los van de content-beeldvullend hieronder.
-  const [fullscreen, setFullscreen] = useState(false)
-  const fullscreenRef = useRef(false)
+  // Vensterstand-toetsen. Beide raken ALLEEN het OS-venster, nooit de app-knoppen —
+  // die staan puur op de kijkmodus (E) + instellingen. F11 = chromeless volledig
+  // scherm (borderloos, geen OS-titelbalk); F = venster maximaliseren (mét rand).
   const toggleFsRef = useRef<() => void>(() => {})
-  // F11 = "gewone" volledig scherm: alleen het OS-venster beeldvullend, de knoppen
-  // blijven zichtbaar. Los van de chromeless-modus hierboven (die zit op kale F).
-  const toggleWindowFsRef = useRef<() => void>(() => {})
+  const toggleMaxRef = useRef<() => void>(() => {})
   // Content-beeldvullend (alleen L3): het item vult het scherm + geblurde
   // achtergrond-vulling. Een voorkeur (ref) die bij het openen van een item wordt
   // toegepast; geen chrome-effect, dus geen React-state nodig.
@@ -478,32 +492,20 @@ export function AppShell() {
     })
   }
 
-  // App-fullscreen aan/uit: OS-venster fullscreen + alle chrome weg. Raakt de
-  // content-fit NIET (dat is Shift+F). Herfit een paar frames zodat de normale
-  // L3-fit na de viewport-wijziging klopt. We volgen de staat zelf.
+  // F11 = chromeless volledig scherm (borderloos). F = venster maximaliseren.
+  // Beide raken ALLEEN het OS-venster — de app-knoppen blijven staan zoals ze staan
+  // (die volgen puur de kijkmodus E + instellingen). Raakt de content-fit NIET (dat
+  // is Shift+F). Herfit een paar frames zodat de L3-fit na de viewport-wijziging klopt.
   const doToggleFullscreen = (): void => {
     void toggleFullscreen()
-    const on = !fullscreenRef.current
-    fullscreenRef.current = on
-    setFullscreen(on)
     refitFramesRef.current = 8
   }
   toggleFsRef.current = doToggleFullscreen
-
-  // F11 = gewone volledig scherm: alleen het OS-venster beeldvullend maken, de app-
-  // chrome (titel/knoppen/dock) blijft gewoon zichtbaar. Stond eerder gelijk aan de
-  // chromeless-modus, waardoor álle knoppen verdwenen — dat is nu losgekoppeld.
-  // Zit er nog een chromeless-modus aan (kale F)? Dan die opheffen, zodat F11 altijd
-  // de knoppen terugbrengt.
-  const doToggleWindowFullscreen = (): void => {
-    void toggleFullscreen()
-    if (fullscreenRef.current) {
-      fullscreenRef.current = false
-      setFullscreen(false)
-    }
+  const doToggleMaximize = (): void => {
+    void toggleMaximize()
     refitFramesRef.current = 8
   }
-  toggleWindowFsRef.current = doToggleWindowFullscreen
+  toggleMaxRef.current = doToggleMaximize
 
   // Content-beeldvullend aan/uit (Shift+F). Alleen zinvol op L3: dan vult het item
   // het scherm (langste zijde) met geblurde achtergrond-vulling. Buiten focus
@@ -523,11 +525,11 @@ export function AppShell() {
   // onder een open dialog/overlay.)
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      // F11: gewone volledig scherm (venster beeldvullend, knoppen blijven) —
-      // werkt overal (ook in invoervelden). Kale F blijft de chromeless-modus.
+      // F11: chromeless volledig scherm (borderloos, geen OS-titelbalk) — werkt
+      // overal (ook in invoervelden). De app-knoppen blijven staan zoals ze staan.
       if (e.key === 'F11') {
         e.preventDefault()
-        toggleWindowFsRef.current()
+        toggleFsRef.current()
         return
       }
       // F9: fps-overlay (debug) aan/uit — werkt overal.
@@ -550,16 +552,25 @@ export function AppShell() {
         e.preventDefault()
         startScreensaverRef.current()
       } else if (e.key === 'f' || e.key === 'F') {
-        // Kale f = app-fullscreen (chromeless); Shift+F = content-beeldvullend (L3).
+        // Kale f = venster maximaliseren; Shift+F = content-beeldvullend (L3).
         e.preventDefault()
         if (e.shiftKey) toggleContentFillRef.current()
-        else toggleFsRef.current()
+        else toggleMaxRef.current()
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Titel aan/uit (T of instellingen) → de dag-gids in het jaar-overzicht laten
+  // beginnen onder of vanaf de bovenrand. Alleen zinvol op L1; andere scenes hebben
+  // geen setTitleInset (optional chaining vangt dat af).
+  useEffect(() => {
+    if (levelRef.current === 'year') {
+      sceneRef.current?.setTitleInset?.(settings.showTitle ? TITLE_INSET_PX : 0)
+    }
+  }, [settings.showTitle])
 
   // Viewport-wijziging (venster-resize / fullscreen) → focus-scene herfitten. De
   // frame-lus voert het uit ná Pixi's eigen resize (vlag i.p.v. direct).
@@ -869,6 +880,8 @@ export function AppShell() {
         engine.camera.boundsX = null
         engine.syncElastic()
         if (ctrlDown) scene.setDayPicker(true)
+        // Dag-gids onder de titel laten beginnen als die aan staat.
+        scene.setTitleInset(settingsRef.current.showTitle ? TITLE_INSET_PX : 0)
         // Gecentreerde reveal (geen tap-coördinaten → schermmidden): spiegelt de
         // gecentreerde exit hierboven, zodat een jaar in-/uitzoomen altijd vanuit
         // het midden gebeurt i.p.v. vanaf de aangeklikte tegel (zie comment boven).
@@ -2279,7 +2292,6 @@ export function AppShell() {
     !anyDialog &&
     !searchOpen &&
     !settingsOpen &&
-    !fullscreen &&
     !screensaverIds &&
     !settings.viewMode
 
@@ -2299,11 +2311,11 @@ export function AppShell() {
           onCreateFirst={openNewEvent}
         />
       )}
-      {phase === 'ready' && settings.showTitle && !screensaverIds && !fullscreen && (
+      {phase === 'ready' && settings.showTitle && !screensaverIds && (
         <TitleBar text={header.text} dir={header.dir} mode={sceneUiMode} />
       )}
       {backVisible && <BackButton onClick={() => goBackRef.current()} />}
-      {phase === 'ready' && !anyDialog && !searchOpen && !settingsOpen && !settings.viewMode && !fullscreen && chromeVisible && settings.showSearchButton && (
+      {phase === 'ready' && !anyDialog && !searchOpen && !settingsOpen && !settings.viewMode && chromeVisible && settings.showSearchButton && (
         <button
           onClick={() => setSearchOpen(true)}
           style={{ ...searchBtn(u), left: backVisible ? 64 : 16 }}
@@ -2312,7 +2324,7 @@ export function AppShell() {
           Zoeken…
         </button>
       )}
-      {phase === 'ready' && !anyDialog && !searchOpen && !settingsOpen && !settings.viewMode && !fullscreen && (
+      {phase === 'ready' && !anyDialog && !searchOpen && !settingsOpen && !settings.viewMode && (
         <button onClick={() => setSettingsOpen(true)} style={gearBtn(u)} title="Instellingen">
           ⚙
         </button>
@@ -2392,7 +2404,6 @@ export function AppShell() {
         !anyDialog &&
         !searchOpen &&
         !settingsOpen &&
-        !fullscreen &&
         !screensaverIds && (
           <button
             onClick={() => {
@@ -2416,7 +2427,6 @@ export function AppShell() {
         !anyDialog &&
         !searchOpen &&
         !settingsOpen &&
-        !fullscreen &&
         !screensaverIds &&
         !settings.viewMode && (
           <button
@@ -2429,7 +2439,7 @@ export function AppShell() {
         )}
       {toast && <div style={toastStyle(u)}>{toast}</div>}
       {matReport && <MaterializationOverlay report={matReport} onClose={() => setMatReport(null)} />}
-      {phase === 'ready' && !anyDialog && !searchOpen && !settingsOpen && !settings.viewMode && !fullscreen && (
+      {phase === 'ready' && !anyDialog && !searchOpen && !settingsOpen && !settings.viewMode && (
         <Fab
           uiLevel={uiLevel}
           layoutMode={layoutMode}
@@ -3212,8 +3222,8 @@ function SettingsPanel({
                     { k: ['E'], d: 'Kijkmodus (bewerkknoppen tonen/verbergen)' },
                     { k: ['T'], d: 'Titel bovenin tonen/verbergen' },
                     { k: ['Esc'], d: 'Sluiten — dialoog, zoeken of diavoorstelling' },
-                    { k: ['F11'], d: 'Volledig scherm — venster beeldvullend (knoppen blijven)' },
-                    { k: ['F'], d: 'Volledig scherm — chromeless (alle knoppen weg) aan/uit' },
+                    { k: ['F11'], d: 'Volledig scherm — chromeless (geen OS-titelbalk) aan/uit' },
+                    { k: ['F'], d: 'Venster maximaliseren (mét vensterrand) aan/uit' },
                     { k: ['Shift', 'F'], d: 'Foto/video beeldvullend in focus (met blur-vulling)' },
                   ],
                 },
@@ -3299,9 +3309,9 @@ function SettingsPanel({
                 memory → detailfoto. <b>Uitzoomen</b> of <b>Esc</b> gaat terug.
                 <br />• <b>Pijltjes</b> verplaatsen de focus (witte rand), <b>Enter</b> dieper,{' '}
                 <b>Esc</b> terug — je kunt puur op het toetsenbord door alles heen.
-                <br />• <b>F11</b> = volledig scherm (knoppen blijven); <b>F</b> = chromeless
-                (alle knoppen weg); <b>Shift+F</b> (of Enter op een foto) = beeldvullend met een
-                geblurde achtergrond.
+                <br />• <b>F11</b> = volledig scherm (chromeless); <b>F</b> = venster maximaliseren;{' '}
+                <b>E</b> verbergt/toont de knoppen (werkt in elke vensterstand); <b>Shift+F</b> (of
+                Enter op een foto) = beeldvullend met een geblurde achtergrond.
                 <br />• <b>S</b> diavoorstelling · <b>Ctrl+K</b> zoeken · <b>T</b> titel aan/uit ·{' '}
                 <b>E</b> kijkmodus.
                 <br />• Je telefoon koppel je onder de tab <b>Telefoon</b>; de volledige toetsenlijst

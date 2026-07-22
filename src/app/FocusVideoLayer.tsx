@@ -179,7 +179,7 @@ export const FocusVideoLayer = forwardRef<
           <button onClick={toggleMute} style={iconBtn} aria-label="Geluid">
             {muted ? <VolOff /> : <VolOn />}
           </button>
-          <button onClick={onFullscreen} style={iconBtn} aria-label="Volledig scherm (f)">
+          <button onClick={onFullscreen} style={iconBtn} aria-label="Volledig scherm (F11)">
             <Full />
           </button>
         </div>

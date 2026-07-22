@@ -39,6 +39,9 @@ export interface Scene {
   refresh?(items: Item[]): void
   /** Toon/verberg de Ctrl-dag-indicator (alleen L1-jaar). */
   setDayPicker?(active: boolean): void
+  /** Reserveer bovenaan ruimte (scherm-px) voor de titel zodat de dag-gids eronder
+   * begint (alleen L1-jaar). */
+  setTitleInset?(px: number): void
   /** Datum (`YYYY-MM-DD`) onder een wereld-x op de as (alleen L1-jaar). */
   dateAt?(worldX: number): string
   /** Toon/verberg de Ctrl-sleep-selectie (begin→eind) op de as (alleen L1-jaar). */

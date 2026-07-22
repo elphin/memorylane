@@ -220,6 +220,9 @@ export class YearScene implements Scene {
   private hoverWX: number | null = null
   private dayLine = new Graphics()
   private dayLabel: Text
+  // Scherm-px bovenaan gereserveerd voor de titel ("2024"): staat die aan, dan
+  // begint de dag-gids eronder i.p.v. erlangs. 0 = geen titel.
+  private titleInset = 0
   private rangeBand = new Graphics()
   private slideEnabled: boolean
   private slideMs: number
@@ -744,6 +747,15 @@ export class YearScene implements Scene {
     this.renderDay()
   }
 
+  /** Reserveer bovenaan ruimte voor de titel, zodat de dag-gids eronder begint.
+   * `px` = scherm-pixels (0 als er geen titel staat). */
+  setTitleInset(px: number): void {
+    this.titleInset = Math.max(0, px)
+    if (this.dayPicker && this.hoverWX !== null) {
+      this.drawDayIndicator(this.engine.viewport(), 1 / this.engine.camera.zoom)
+    }
+  }
+
   private bandHalfH(): number {
     const b = this.engine.camera.worldBounds(this.engine.viewport())
     return (b.maxY - b.minY) / 2 + 20
@@ -786,7 +798,9 @@ export class YearScene implements Scene {
   private drawDayIndicator(vp: { width: number; height: number }, invZ: number): void {
     if (!this.dayPicker || this.hoverWX === null) return
     const halfH = vp.height / 2
-    const topPad = 12 // afstand van het label tot de bovenrand
+    // Staat de titel aan, dan begint alles eronder (titleInset); anders een klein
+    // gaatje vanaf de bovenrand.
+    const topPad = Math.max(12, this.titleInset) // label-top t.o.v. de bovenrand
     const botPad = 12 // afstand van de lijn tot de onderrand
     const labelGap = 22 // ruimte tussen label en lijn-top (geen overlap)
     // camera.y = 0 ⇒ lokale y = 0 valt op het verticale midden; met scale = invZ
