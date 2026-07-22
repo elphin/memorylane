@@ -347,6 +347,9 @@ export function AppShell() {
   const [fullscreen, setFullscreen] = useState(false)
   const fullscreenRef = useRef(false)
   const toggleFsRef = useRef<() => void>(() => {})
+  // F11 = "gewone" volledig scherm: alleen het OS-venster beeldvullend, de knoppen
+  // blijven zichtbaar. Los van de chromeless-modus hierboven (die zit op kale F).
+  const toggleWindowFsRef = useRef<() => void>(() => {})
   // Content-beeldvullend (alleen L3): het item vult het scherm + geblurde
   // achtergrond-vulling. Een voorkeur (ref) die bij het openen van een item wordt
   // toegepast; geen chrome-effect, dus geen React-state nodig.
@@ -487,6 +490,21 @@ export function AppShell() {
   }
   toggleFsRef.current = doToggleFullscreen
 
+  // F11 = gewone volledig scherm: alleen het OS-venster beeldvullend maken, de app-
+  // chrome (titel/knoppen/dock) blijft gewoon zichtbaar. Stond eerder gelijk aan de
+  // chromeless-modus, waardoor álle knoppen verdwenen — dat is nu losgekoppeld.
+  // Zit er nog een chromeless-modus aan (kale F)? Dan die opheffen, zodat F11 altijd
+  // de knoppen terugbrengt.
+  const doToggleWindowFullscreen = (): void => {
+    void toggleFullscreen()
+    if (fullscreenRef.current) {
+      fullscreenRef.current = false
+      setFullscreen(false)
+    }
+    refitFramesRef.current = 8
+  }
+  toggleWindowFsRef.current = doToggleWindowFullscreen
+
   // Content-beeldvullend aan/uit (Shift+F). Alleen zinvol op L3: dan vult het item
   // het scherm (langste zijde) met geblurde achtergrond-vulling. Buiten focus
   // onthouden we alleen de voorkeur (toegepast bij het openen van een item).
@@ -505,10 +523,11 @@ export function AppShell() {
   // onder een open dialog/overlay.)
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      // F11: echte fullscreen aan/uit — werkt overal (ook in invoervelden).
+      // F11: gewone volledig scherm (venster beeldvullend, knoppen blijven) —
+      // werkt overal (ook in invoervelden). Kale F blijft de chromeless-modus.
       if (e.key === 'F11') {
         e.preventDefault()
-        toggleFsRef.current()
+        toggleWindowFsRef.current()
         return
       }
       // F9: fps-overlay (debug) aan/uit — werkt overal.
@@ -3193,8 +3212,8 @@ function SettingsPanel({
                     { k: ['E'], d: 'Kijkmodus (bewerkknoppen tonen/verbergen)' },
                     { k: ['T'], d: 'Titel bovenin tonen/verbergen' },
                     { k: ['Esc'], d: 'Sluiten — dialoog, zoeken of diavoorstelling' },
-                    { k: ['F11'], d: 'Volledig scherm — app (chromeless) aan/uit' },
-                    { k: ['F'], d: 'Volledig scherm — app (chromeless) aan/uit' },
+                    { k: ['F11'], d: 'Volledig scherm — venster beeldvullend (knoppen blijven)' },
+                    { k: ['F'], d: 'Volledig scherm — chromeless (alle knoppen weg) aan/uit' },
                     { k: ['Shift', 'F'], d: 'Foto/video beeldvullend in focus (met blur-vulling)' },
                   ],
                 },
@@ -3280,8 +3299,9 @@ function SettingsPanel({
                 memory → detailfoto. <b>Uitzoomen</b> of <b>Esc</b> gaat terug.
                 <br />• <b>Pijltjes</b> verplaatsen de focus (witte rand), <b>Enter</b> dieper,{' '}
                 <b>Esc</b> terug — je kunt puur op het toetsenbord door alles heen.
-                <br />• <b>F</b> = volledig scherm; <b>Shift+F</b> (of Enter op een foto) ={' '}
-                beeldvullend met een geblurde achtergrond.
+                <br />• <b>F11</b> = volledig scherm (knoppen blijven); <b>F</b> = chromeless
+                (alle knoppen weg); <b>Shift+F</b> (of Enter op een foto) = beeldvullend met een
+                geblurde achtergrond.
                 <br />• <b>S</b> diavoorstelling · <b>Ctrl+K</b> zoeken · <b>T</b> titel aan/uit ·{' '}
                 <b>E</b> kijkmodus.
                 <br />• Je telefoon koppel je onder de tab <b>Telefoon</b>; de volledige toetsenlijst
