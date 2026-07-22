@@ -3,12 +3,14 @@ import type { Draft, Pairing } from '../store/db'
 import { runUpload, type Progress } from '../upload/queue'
 import { ApiError } from '../api/client'
 import { formatBytes, uuid } from '../util'
+import { IconCheckCircle } from '../icons'
 
 export function UploadView({
   draft,
   pairing,
   onExpired,
   onUploaded,
+  onDashboard,
   onDone,
   onKeepDraft,
 }: {
@@ -18,6 +20,8 @@ export function UploadView({
   /** Vuurt zodra de upload IS geslaagd — ruim het concept hier op zodat het na
    * een herlaad niet opnieuw als bewerkbaar/verstuurbaar concept opduikt. */
   onUploaded: () => void | Promise<void>
+  /** Naar het overzicht (dashboard). */
+  onDashboard: () => void
   onDone: () => void
   onKeepDraft: () => void
 }) {
@@ -60,12 +64,17 @@ export function UploadView({
     <div className="screen stack" style={{ paddingTop: 32 }}>
       {state === 'done' ? (
         <div className="card stack" style={{ textAlign: 'center' }}>
-          <div style={{ fontSize: 48 }}>✓</div>
+          <div className="upload-done-icon" aria-hidden>
+            <IconCheckCircle size={52} />
+          </div>
           <h2 className="serif" style={{ margin: 0 }}>
             Staat klaar voor je thuis-import
           </h2>
           <p className="muted">Je hoeft niets meer te doen. Thuis haal je 'm binnen in MemoryLane.</p>
-          <button className="btn btn-primary" onClick={onDone}>
+          <button className="btn btn-primary" onClick={onDashboard}>
+            Naar overzicht
+          </button>
+          <button className="btn btn-ghost" onClick={onDone}>
             Nog een memory
           </button>
         </div>

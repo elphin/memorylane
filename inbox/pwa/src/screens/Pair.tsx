@@ -4,6 +4,7 @@ import { parsePairText } from '../pair'
 import { setPairing, type Pairing } from '../store/db'
 import { verifyPairing } from '../api/client'
 import { ScanQr } from './ScanQr'
+import { IconCamera } from '../icons'
 
 export function PairScreen({
   link,
@@ -71,10 +72,21 @@ export function PairScreen({
         />
       )}
 
-      <img src="/icon.svg" width={72} height={72} alt="" style={{ borderRadius: 18 }} />
-      <h1 className="serif" style={{ margin: 0 }}>
-        MemoryLane Onderweg
-      </h1>
+      <div style={{ textAlign: 'center' }}>
+        <img
+          src="/icon.svg"
+          width={84}
+          height={84}
+          alt=""
+          style={{ display: 'inline-block', filter: 'drop-shadow(0 6px 16px rgba(0,0,0,0.16))' }}
+        />
+        <h1 className="serif" style={{ margin: '14px 0 0', fontSize: 30 }}>
+          MemoryLane Onderweg
+        </h1>
+        <p className="muted" style={{ marginTop: 4 }}>
+          Leg onderweg een herinnering vast en stuur 'm naar je MemoryLane thuis.
+        </p>
+      </div>
 
       {expiredNotice && (
         <div className="card" style={{ borderColor: 'var(--accent)' }}>
@@ -114,8 +126,8 @@ export function PairScreen({
 
           {error && <div className="err">{error}</div>}
 
-          <button className="btn btn-primary" onClick={() => setScanning(true)} disabled={busy}>
-            {busy ? 'Koppelen…' : '📷 Scan koppelcode'}
+          <button className="btn btn-primary btn-icon" onClick={() => setScanning(true)} disabled={busy}>
+            {busy ? 'Koppelen…' : (<><IconCamera size={20} /> Scan koppelcode</>)}
           </button>
 
           {!pasteOpen ? (

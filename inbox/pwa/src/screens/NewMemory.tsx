@@ -6,6 +6,7 @@ import { formatBytes, formatDateShort, todayISO, uuid } from '../util'
 import { DatePicker } from './DatePicker'
 import { InstallHint } from './InstallHint'
 import { UploadView } from './UploadView'
+import { IconCalendar, IconFile, IconPlay } from '../icons'
 
 const MAX_FILE_BYTES = 500 * 1024 * 1024 // 500 MB praktische PWA-limiet (§6.5)
 
@@ -17,10 +18,13 @@ function emptyDraft(): Draft {
 export function NewMemoryScreen({
   pairing,
   onExpired,
+  onFinished,
   nav,
 }: {
   pairing: Pairing
   onExpired: () => void
+  /** Naar het overzicht na een geslaagde verzending. */
+  onFinished: () => void
   nav: ReactNode
 }) {
   const [draft, setDraft] = useState<Draft>(emptyDraft)
@@ -158,6 +162,7 @@ export function NewMemoryScreen({
             for (const url of Object.values(thumbs)) URL.revokeObjectURL(url)
             setThumbs({})
           }}
+          onDashboard={onFinished}
           onDone={() => {
             setDraft(emptyDraft())
             setPhase('form')
@@ -196,7 +201,7 @@ export function NewMemoryScreen({
           <label className="label">Wanneer</label>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             <button className="chip" onClick={() => setPicker('start')}>
-              📅 {formatDateShort(draft.startAt)}
+              <IconCalendar size={18} /> {formatDateShort(draft.startAt)}
             </button>
             {draft.endAt ? (
               <button className="chip" onClick={() => setPicker('end')}>
@@ -240,8 +245,8 @@ export function NewMemoryScreen({
                 {m.mime.startsWith('image/') && thumbs[m.fileId] ? (
                   <img src={thumbs[m.fileId]} alt={m.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                 ) : (
-                  <div style={{ width: '100%', height: '100%', display: 'grid', placeItems: 'center', background: 'var(--accent-soft)' }}>
-                    {m.mime.startsWith('video/') ? '▶' : '📄'}
+                  <div style={{ width: '100%', height: '100%', display: 'grid', placeItems: 'center', background: 'var(--accent-soft)', color: 'var(--accent)' }}>
+                    {m.mime.startsWith('video/') ? <IconPlay size={26} /> : <IconFile size={24} />}
                   </div>
                 )}
                 <button

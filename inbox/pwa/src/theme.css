@@ -105,8 +105,16 @@ button { cursor: pointer; }
   backdrop-filter: blur(8px);
   border-bottom: 1px solid var(--line);
 }
-.topbar .brand { font-size: 20px; font-weight: 600; }
-.topbar .link { background: none; border: none; font-size: 22px; padding: 6px 10px; min-width: 44px; min-height: 44px; }
+.topbar .brand { font-size: 20px; font-weight: 600; cursor: pointer; }
+.topbar .link {
+  display: inline-flex; align-items: center; justify-content: center;
+  background: none; border: none; color: var(--ink-2);
+  width: 44px; height: 44px; border-radius: 12px; padding: 0;
+  transition: background 0.15s, color 0.15s;
+}
+.topbar .link:hover, .topbar .link:active { background: color-mix(in srgb, var(--ink) 9%, transparent); color: var(--ink); }
+.topbar .link.accent { color: var(--accent); }
+.topbar .link.accent:hover, .topbar .link.accent:active { background: var(--accent-soft); }
 .screen { max-width: 560px; margin: 0 auto; padding: 16px 16px calc(24px + env(safe-area-inset-bottom)); }
 .stack > * + * { margin-top: 16px; }
 .muted { color: var(--ink-2); font-size: 14px; }
@@ -116,3 +124,55 @@ button { cursor: pointer; }
 .sheet-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: 20; display: flex; align-items: flex-end; }
 .sheet { background: var(--surface); width: 100%; max-width: 560px; margin: 0 auto; border-radius: 20px 20px 0 0; padding: 16px 16px calc(16px + env(safe-area-inset-bottom)); max-height: 88vh; overflow-y: auto; }
 .offline-banner { background: var(--accent-soft); color: var(--ink); padding: 10px 16px; text-align: center; font-size: 14px; }
+
+/* ---- Dashboard / overzicht ---- */
+.dash-title { margin: 0; font-size: 26px; }
+.section-label {
+  font-size: 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--ink-2); margin: 0 0 2px 2px;
+}
+.memory-card {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  text-align: left; width: 100%; font: inherit; color: var(--ink);
+  transition: border-color 0.15s, transform 0.06s;
+}
+.memory-main { min-width: 0; }
+.memory-title { font-weight: 600; font-size: 17px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.memory-cta { color: var(--accent); font-weight: 600; font-size: 14px; flex: 0 0 auto; }
+.draft-card { cursor: pointer; border-style: dashed; }
+.draft-card:active { transform: scale(0.99); }
+.status {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 13px; margin-top: 6px; font-weight: 500;
+}
+.status svg { flex: 0 0 auto; }
+.status-pending { color: var(--accent); }
+.status-done { color: var(--success); }
+.status-fail { color: var(--danger); }
+.status .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; display: inline-block; }
+
+.icon-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 40px; height: 40px; border-radius: 10px; flex: 0 0 auto;
+  background: none; border: none; color: var(--ink-2);
+  transition: background 0.15s, color 0.15s;
+}
+.icon-btn:hover, .icon-btn:active { background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--danger); }
+
+/* ---- Lege staat ---- */
+.empty-state { text-align: center; align-items: center; padding: 28px 20px; }
+.empty-plus {
+  display: grid; place-items: center; width: 60px; height: 60px; border-radius: 50%;
+  color: var(--accent); background: var(--accent-soft);
+}
+
+/* ---- Knop met icoon + tekst ---- */
+.btn-icon { display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
+.btn-icon svg { flex: 0 0 auto; }
+
+/* ---- Upload-gelukt-icoon ---- */
+.upload-done-icon { display: grid; place-items: center; color: var(--success); margin: 4px 0; }
+.upload-done-icon svg { width: 52px; height: 52px; }
+
+/* Chips met icoon netjes uitlijnen. */
+.chip svg { flex: 0 0 auto; color: var(--accent); }

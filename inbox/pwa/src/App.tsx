@@ -3,10 +3,11 @@ import { getPairing, type Pairing } from './store/db'
 import { parsePairFromLocation, type PairLink } from './pair'
 import { PairScreen } from './screens/Pair'
 import { NewMemoryScreen } from './screens/NewMemory'
-import { OutboxScreen } from './screens/Outbox'
+import { DashboardScreen } from './screens/Dashboard'
 import { SettingsScreen } from './screens/Settings'
+import { IconGear, IconPlus } from './icons'
 
-type View = 'loading' | 'pair' | 'new' | 'outbox' | 'settings'
+type View = 'loading' | 'pair' | 'new' | 'dashboard' | 'settings'
 
 export function App() {
   const [pairing, setPairing] = useState<Pairing | null>(null)
@@ -23,7 +24,7 @@ export function App() {
         setPairLink(link)
         setView('pair')
       } else {
-        setView(existing ? 'new' : 'pair')
+        setView(existing ? 'dashboard' : 'pair')
       }
     })()
   }, [])
@@ -42,9 +43,9 @@ export function App() {
           setPairLink(null)
           setExpired(false)
           history.replaceState(null, '', location.pathname) // fragment uit de adresbalk
-          setView('new')
+          setView('dashboard')
         }}
-        onCancel={() => setView(pairing ? 'new' : 'pair')}
+        onCancel={() => setView(pairing ? 'dashboard' : 'pair')}
       />
     )
   }
@@ -59,7 +60,7 @@ export function App() {
           setPairing(p)
           setExpired(false)
           history.replaceState(null, '', location.pathname)
-          setView('new')
+          setView('dashboard')
         }}
         onCancel={() => setExpired(false)}
       />
@@ -67,26 +68,38 @@ export function App() {
   }
 
   const p = pairing!
+  // Header: instellingen LINKS (zelden nodig), merk in het MIDDEN (→ overzicht),
+  // en de meest gebruikte actie — nieuwe memory — RECHTSBOVEN (best bereikbaar).
   const nav = (
     <header className="topbar">
       <button className="link" onClick={() => setView('settings')} aria-label="Instellingen">
-        ⚙
+        <IconGear />
       </button>
-      <div className="serif brand" onClick={() => setView('new')}>
+      <div
+        className="serif brand"
+        role="button"
+        tabIndex={0}
+        onClick={() => setView('dashboard')}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            setView('dashboard')
+          }
+        }}
+      >
         MemoryLane
       </div>
-      <button className="link" onClick={() => setView('outbox')} aria-label="Onderweg">
-        📤
+      <button className="link accent" onClick={() => setView('new')} aria-label="Nieuwe memory">
+        <IconPlus />
       </button>
     </header>
   )
 
-  if (view === 'outbox') return <OutboxScreen pairing={p} onBack={() => setView('new')} onExpired={onExpired} nav={nav} />
   if (view === 'settings')
     return (
       <SettingsScreen
         pairing={p}
-        onBack={() => setView('new')}
+        onBack={() => setView('dashboard')}
         onRepair={() => setView('pair')}
         onUnpaired={() => {
           setPairing(null)
@@ -95,5 +108,14 @@ export function App() {
         nav={nav}
       />
     )
-  return <NewMemoryScreen pairing={p} onExpired={onExpired} nav={nav} />
+  if (view === 'new')
+    return (
+      <NewMemoryScreen
+        pairing={p}
+        onExpired={onExpired}
+        onFinished={() => setView('dashboard')}
+        nav={nav}
+      />
+    )
+  return <DashboardScreen pairing={p} onNew={() => setView('new')} onExpired={onExpired} nav={nav} />
 }

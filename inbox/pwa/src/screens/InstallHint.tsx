@@ -5,6 +5,7 @@
 // - Weggeklikt wordt onthouden, zodat het niet blijft zeuren.
 
 import { useEffect, useState } from 'react'
+import { IconShare } from '../icons'
 
 const DISMISS_KEY = 'ml-install-hint-dismissed'
 
@@ -88,10 +89,13 @@ export function InstallHint() {
       }}
     >
       <div style={{ flex: 1 }}>
-        <div style={{ fontWeight: 600 }}>📲 Zet MemoryLane op je beginscherm</div>
+        <div style={{ fontWeight: 600, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <IconShare size={18} style={{ color: 'var(--accent)' }} /> Zet MemoryLane op je beginscherm
+        </div>
         {ios ? (
           <div className="muted" style={{ fontSize: 13, marginTop: 4, lineHeight: 1.45 }}>
-            1. Tik onderin op het <b>deel-knopje</b> (een vierkantje met een pijltje omhoog ⬆︎).
+            1. Tik onderin op het <b>deel-knopje</b> (een vierkantje met een pijltje omhoog{' '}
+            <IconShare size={13} style={{ display: 'inline', verticalAlign: '-2px' }} />).
             <br />
             2. Kies <b>‘Zet op beginscherm’</b> en tik op <b>Voeg toe</b>.
             <br />
