@@ -1,13 +1,25 @@
 /// <reference types="vitest/config" />
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
+
+// Eén bron voor het versienummer: package.json. We injecteren 'm als __PWA_VERSION__
+// zodat de "over"-regel in Instellingen automatisch meeloopt bij een release.
+const pkg = JSON.parse(
+  readFileSync(fileURLToPath(new URL('./package.json', import.meta.url)), 'utf-8'),
+) as { version?: string }
+const PWA_VERSION = pkg.version ?? '0.0.0'
 
 // MemoryLane Onderweg — de telefoon-PWA.
 // - Service worker: app-shell precache (opent ook zonder bereik → concepten
 //   blijven), maar NOOIT /api/* of R2-URLs cachen (network-only).
 // - Manifest: installeerbaar, standalone, terracotta thema.
 export default defineConfig({
+  define: {
+    __PWA_VERSION__: JSON.stringify(PWA_VERSION),
+  },
   plugins: [
     react(),
     VitePWA({

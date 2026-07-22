@@ -4,7 +4,7 @@
 // DOM wordt alleen gebruikt voor overlays (loading, first-run, leeg).
 
 import { useEffect, useRef, useState } from 'react'
-import { AnimatePresence, motion } from 'motion/react'
+import { AnimatePresence, domAnimation, LazyMotion, m } from 'motion/react'
 import type {
   Backend,
   EventInfo,
@@ -2265,6 +2265,11 @@ export function AppShell() {
     !settings.viewMode
 
   return (
+    // LazyMotion + lichte `m`-componenten: laadt alleen de benodigde animatie-
+    // features (domAnimation: fade/scale/slide + AnimatePresence-exit) in plaats van
+    // de volledige `motion`-bundel. ~40 KB kleiner, exact hetzelfde gedrag — er wordt
+    // nergens een `layout`/drag-animatie gebruikt (die zouden domMax vereisen).
+    <LazyMotion features={domAnimation}>
     <div style={{ position: 'fixed', inset: 0 }}>
       <div ref={hostRef} style={{ position: 'absolute', inset: 0 }} />
       {phase !== 'ready' && (
@@ -2498,6 +2503,7 @@ export function AppShell() {
         )}
       </AnimatePresence>
     </div>
+    </LazyMotion>
   )
 }
 
@@ -2520,7 +2526,7 @@ function AnimatedModal({
 }) {
   const u = ui()
   return (
-    <motion.div
+    <m.div
       onClick={onBackdrop}
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
@@ -2536,7 +2542,7 @@ function AnimatedModal({
         justifyContent: 'center',
       }}
     >
-      <motion.div
+      <m.div
         onClick={(e) => e.stopPropagation()}
         initial={{ opacity: 0, scale: 0.965, y: 10 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -2545,8 +2551,8 @@ function AnimatedModal({
         style={panelStyle}
       >
         {children}
-      </motion.div>
-    </motion.div>
+      </m.div>
+    </m.div>
   )
 }
 
@@ -2692,8 +2698,9 @@ function SettingsPanel({
   >('thema')
   useEscape(onClose)
   // Versie runtime uit de app-bundle halen (klopt zo automatisch met de installer);
-  // in browser-dev bestaat de Tauri-API niet → val terug op de laatst-bekende versie.
-  const [appVersion, setAppVersion] = useState('2.1.2')
+  // in browser-dev bestaat de Tauri-API niet → val terug op de build-time versie die
+  // vite.config.ts uit tauri.conf.json injecteert (loopt dus vanzelf mee).
+  const [appVersion, setAppVersion] = useState(__APP_VERSION__)
   useEffect(() => {
     let alive = true
     void import('@tauri-apps/api/app')
@@ -3625,35 +3632,35 @@ function Fab({
   if (uiLevel === 'lifeline') {
     return (
       <div style={wrap}>
-        <motion.div key="lifeline" style={wrapCol} {...dockEnter}>
+        <m.div key="lifeline" style={wrapCol} {...dockEnter}>
           <Pill kind="primary" icon={<IconPlus />} onClick={onAddYear}>Nieuw jaar</Pill>
-        </motion.div>
+        </m.div>
       </div>
     )
   }
   if (uiLevel === 'year') {
     return (
       <div style={wrap}>
-        <motion.div key="year" style={wrapCol} {...dockEnter}>
+        <m.div key="year" style={wrapCol} {...dockEnter}>
           <div style={row}>
             <Pill icon={<IconPalette size={17} />} onClick={onYearTheme} title="Thema van dit jaar">Thema</Pill>
             <Pill kind="primary" icon={<IconPlus />} onClick={onAddEvent}>Nieuwe memory</Pill>
           </div>
-        </motion.div>
+        </m.div>
       </div>
     )
   }
   if (uiLevel === 'event') {
     return (
       <div style={wrap}>
-      <motion.div key="event" style={wrapCol} {...dockEnter}>
+      <m.div key="event" style={wrapCol} {...dockEnter}>
         {/* BOVEN: de weergave-balk. Standaard verborgen; verschijnt pas als je op
             de schuifjes-knop ("Weergave aanpassen") klikt. Groeit geanimeerd in
             beeld; de context-knoppen (recht/gedraaid, opslaan, sortering) poppen
             mee in/uit terwijl de balk soepel meeschaalt. */}
         <AnimatePresence>
           {weergaveOpen && (
-            <motion.div
+            <m.div
               key="layoutbar"
               data-layoutbar
               initial={{ opacity: 0, scale: 0.9, y: 12 }}
@@ -3713,32 +3720,34 @@ function Fab({
                   </Pill>
                 </>
               )}
-            </motion.div>
+            </m.div>
           )}
         </AnimatePresence>
         {/* ONDER: actie-balk (icoon-knoppen), altijd zichtbaar. De schuifjes-knop
-            toont/verbergt de weergave-balk; de potlood-knop is paars = hoofd. */}
-        <motion.div layout style={dockBar}>
+            toont/verbergt de weergave-balk; de potlood-knop is paars = hoofd.
+            De balk is onderaan verankerd (wrap: bottom 24), dus hij verschuift niet
+            als de weergave-balk erboven verschijnt — geen layout-animatie nodig. */}
+        <div style={dockBar}>
           <DockIconBtn title="Foto's toevoegen" icon={<IconImage />} onClick={onAddPhotos} />
           <DockIconBtn title="Notitie toevoegen" icon={<IconNote />} onClick={onAddNote} />
           <DockIconBtn title="Weergave aanpassen" icon={<IconSliders />} onClick={onToggleWeergave} active={weergaveOpen} domId="weergave-toggle-btn" />
           <DockIconBtn title="Thema & sfeer" icon={<IconPalette />} onClick={onEventTheme} />
           {divider}
           <DockIconBtn title="Bewerk memory" icon={<IconPencil />} onClick={onEditEvent} />
-        </motion.div>
-      </motion.div>
+        </div>
+      </m.div>
       </div>
     )
   }
   if (uiLevel === 'focus') {
     return (
       <div style={wrap}>
-        <motion.div key="focus" style={wrapCol} {...dockEnter}>
+        <m.div key="focus" style={wrapCol} {...dockEnter}>
           <div style={row}>
             <Pill kind="primary" icon={<IconPencil size={16} />} onClick={onEdit}>Bewerk</Pill>
             <Pill kind="danger" icon={<IconTrash size={16} />} onClick={onDelete}>Verwijder</Pill>
           </div>
-        </motion.div>
+        </m.div>
       </div>
     )
   }

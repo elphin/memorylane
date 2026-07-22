@@ -1,8 +1,22 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
+// De versie leeft op één plek: src-tauri/tauri.conf.json (die stuurt ook de installer
+// aan). We injecteren 'm hier als __APP_VERSION__ zodat de "over"-tekst in de app
+// automatisch meeloopt — geen los versienummer meer bijwerken. In de échte desktop-app
+// leest getVersion() de bundle-versie; dit is de betrouwbare fallback voor browser-dev.
+const tauriConf = JSON.parse(
+  readFileSync(fileURLToPath(new URL('./src-tauri/tauri.conf.json', import.meta.url)), 'utf-8'),
+) as { version?: string }
+const APP_VERSION = tauriConf.version ?? '0.0.0'
+
 export default defineConfig({
   plugins: [react()],
+  define: {
+    __APP_VERSION__: JSON.stringify(APP_VERSION),
+  },
   server: {
     port: 5199,
     watch: {

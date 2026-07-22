@@ -103,7 +103,9 @@ export function SettingsScreen({
         <button className="btn btn-ghost" style={{ color: 'var(--danger)' }} onClick={() => void unpair()}>
           Ontkoppelen
         </button>
-        <div className="muted" style={{ textAlign: 'center' }}>MemoryLane Onderweg · v0.1.0</div>
+        <div className="muted" style={{ textAlign: 'center' }}>
+          MemoryLane Onderweg · v{__PWA_VERSION__}
+        </div>
       </div>
     </>
   )
