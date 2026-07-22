@@ -235,10 +235,10 @@ export class FocusScene implements Scene {
     const fs = this.frameStyleCur
     this.frame.clear()
     if (fs !== 'none') {
-      // Polaroid: brede onderrand voor de caption. Altijd strakke 90°-hoeken
-      // (consistent met L2 + de jaar-view; vaste voorkeur voor vierkante randen).
+      // Polaroid: brede onderrand voor de caption. Standaard strakke 90°-hoeken;
+      // alleen de bewust gekozen 'rounded'-stijl is afgerond.
       const band = fs === 'polaroid' ? PHOTO_BORDER * 3 : 0
-      const r = 0
+      const r = fs === 'rounded' ? 22 : 0
       this.frame
         .roundRect(-w / 2 - PHOTO_BORDER + 3, -h / 2 - PHOTO_BORDER + 7, w + PHOTO_BORDER * 2, h + PHOTO_BORDER * 2 + band, r + 2)
         .fill({ color: 0x000000, alpha: 0.16 })
@@ -246,10 +246,17 @@ export class FocusScene implements Scene {
         .roundRect(-w / 2 - PHOTO_BORDER, -h / 2 - PHOTO_BORDER, w + PHOTO_BORDER * 2, h + PHOTO_BORDER * 2 + band, r)
         .fill(this.T.colors.frame)
     }
-    // Strakke 90°-hoeken: geen afrond-masker meer nodig.
+    // Afgeronde foto-hoeken via het masker, alleen bij 'rounded' (en niet in
+    // beeldvullend — daar vult de foto de schermrand).
     if (this.sprite && this.photoMask) {
-      this.sprite.mask = null
-      this.photoMask.clear()
+      if (fs === 'rounded' && !this.fullscreen) {
+        this.photoMask.clear()
+        this.photoMask.roundRect(-w / 2, -h / 2, w, h, 16).fill(0xffffff)
+        this.sprite.mask = this.photoMask
+      } else {
+        this.sprite.mask = null
+        this.photoMask.clear()
+      }
     }
     this.positionCaption(w, h)
   }

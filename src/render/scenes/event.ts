@@ -269,11 +269,12 @@ export class EventScene implements Scene {
     return { sprite, frame, mask }
   }
 
-  /** (Her)teken het foto-masker: altijd strakke 90°-hoeken (vaste voorkeur voor
-   * vierkante randen, en consistent met de jaar-view). */
-  private drawPhotoMask(mask: Graphics, _style: FrameStyle, w: number, h: number): void {
+  /** (Her)teken het foto-masker: strakke 90°-hoeken, behalve bij de bewust
+   * afgeronde 'rounded'-stijl (dan volgen de hoeken het thema). */
+  private drawPhotoMask(mask: Graphics, style: FrameStyle, w: number, h: number): void {
     mask.clear()
-    mask.rect(-w / 2, -h / 2, w, h).fill(0xffffff)
+    if (style === 'rounded') mask.roundRect(-w / 2, -h / 2, w, h, 12).fill(0xffffff)
+    else mask.rect(-w / 2, -h / 2, w, h).fill(0xffffff)
   }
 
   /** Zet een foto-kaart op afmeting `w`×`h` (foto-inhoud): hertekent de witte
@@ -312,9 +313,9 @@ export class EventScene implements Scene {
     if (fs !== 'none') {
       // Polaroid: brede onderrand (de klassieke instant-band) voor de caption.
       const band = fs === 'polaroid' ? eb * 3.5 : 0
-      // Altijd rechte 90°-hoeken — consistent met de jaar-view (die tekent de
-      // thumbnails ook strak) en met de vaste voorkeur voor vierkante randen.
-      const r = 0
+      // Standaard strakke 90°-hoeken; alleen de bewust gekozen 'rounded'-stijl
+      // is afgerond (roundRect met radius 0 = een echt vierkante hoek).
+      const r = fs === 'rounded' ? 16 : 0
       // Zachte, "HD" slagschaduw naar rechtsonder (lichtbron linksboven): een
       // stapeltje gestapelde fills — van groot+ijl naar klein+dicht — bootst een
       // gauss-blur na zonder een dure filter (past bij de perf-eisen). De witte
@@ -357,17 +358,19 @@ export class EventScene implements Scene {
       if (n.capEl.width > maxW) n.capEl.scale.set(maxW / n.capEl.width)
     }
     const k = eb / BORDER // schaalt ring-dikte + -offset mee met de gedempte rand
+    // Rings volgen de hoekvorm van het kader (afgerond bij 'rounded', anders strak).
+    const ringR = fs === 'rounded' ? 16 : 0
     if (n.ring) {
       const rw = w / 2 + eb + 3 * k
       const rh = h / 2 + eb + 3 * k
       n.ring.clear()
-      n.ring.rect(-rw, -rh, rw * 2, rh * 2).stroke({ width: 4 * k, color: 0xffc24b, alignment: 0 })
+      n.ring.roundRect(-rw, -rh, rw * 2, rh * 2, ringR ? ringR + 3 * k : 0).stroke({ width: 4 * k, color: 0xffc24b, alignment: 0 })
     }
     if (n.yearRing) {
       const rw = w / 2 + eb + 8 * k
       const rh = h / 2 + eb + 8 * k
       n.yearRing.clear()
-      n.yearRing.rect(-rw, -rh, rw * 2, rh * 2).stroke({ width: 4 * k, color: 0x4b9bff, alignment: 0 })
+      n.yearRing.roundRect(-rw, -rh, rw * 2, rh * 2, ringR ? ringR + 8 * k : 0).stroke({ width: 4 * k, color: 0x4b9bff, alignment: 0 })
     }
   }
 
@@ -440,7 +443,9 @@ export class EventScene implements Scene {
     const hw = n.halfW + pad
     const hh = n.halfH + pad
     n.focusRing.clear()
-    n.focusRing.rect(-hw, -hh, hw * 2, hh * 2).stroke({ width: 3, color: 0xffffff, alignment: 0 })
+    // Volgt de hoekvorm van het kader (afgerond bij 'rounded', anders strak).
+    const fr = n.frameStyle === 'rounded' ? 18 : 0
+    n.focusRing.roundRect(-hw, -hh, hw * 2, hh * 2, fr).stroke({ width: 3, color: 0xffffff, alignment: 0 })
   }
 
   // ---- Toetsenbord-navigatie (2D spatial focus, L2) ----

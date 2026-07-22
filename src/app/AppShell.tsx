@@ -4525,7 +4525,8 @@ function ThemePanel({
               <div id="thema-fijn-afstellen" style={{ marginTop: 14 }}>
                 <div style={sectionLabel(0)}>Accentkleur</div>
                 <div style={{ fontSize: 12, color: u.textMuted, margin: '-4px 0 10px', lineHeight: 1.4 }}>
-                  Kleurt de tijdlijn-stip en de periode-balk van deze memory in het jaar-overzicht.
+                  De kleur van de markering van deze memory op de jaar-tijdlijn — of dat nu een balk
+                  (meerdaagse memory), een ring-stip of een gewone stip is.
                 </div>
                 <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
                   <button onClick={() => patch({ accent: undefined })} title="Geërfd" style={swatch(!value?.accent)} />
