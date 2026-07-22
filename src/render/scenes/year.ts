@@ -590,11 +590,12 @@ export class YearScene implements Scene {
    * de volle kaarthoogte + titelruimte in de buitenste lane, zodat een grote
    * kaart met titel niet boven/onder buiten beeld valt. */
   private lanesPerSide(vpH: number): number {
-    // Ruimte die de buitenste lane vrijhoudt aan de schermrand: de jaar-titel
-    // (bovenaan, ~48px) én het memory-titellabel dat bóven een top-kaart hangt
-    // (~40px). Te krap → top-kaarten (of hun label) lopen door de jaar-titel heen.
-    const TITLE_CLEAR = 92
-    return Math.max(1, Math.floor((vpH / 2 - AXIS_CLEAR_PX - CARD_H_MAX - TITLE_CLEAR) / LANE_PITCH) + 1)
+    // Ruimte die de buitenste lane vrijhoudt aan de schermrand. Zonder jaar-titel is
+    // ~92px genoeg voor het memory-titellabel dat bóven een top-kaart hangt. Staat de
+    // titel ("2024") wél aan, dan is meer nodig zodat een top-kaart of z'n (evt.
+    // tweeregelige) label NOOIT door die titel heen loopt — ~138px met marge.
+    const titleClear = this.titleInset > 0 ? 138 : 92
+    return Math.max(1, Math.floor((vpH / 2 - AXIS_CLEAR_PX - CARD_H_MAX - titleClear) / LANE_PITCH) + 1)
   }
 
   /** Scherm-y (px, t.o.v. de as) van het midden van een lane. */
