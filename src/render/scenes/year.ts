@@ -360,7 +360,7 @@ export class YearScene implements Scene {
       style: { fill: this.T.colors.textBright, fontSize: 15, fontWeight: '600', fontFamily: this.T.fonts.body },
     })
     this.dayLabel.resolution = 2
-    this.dayLabel.anchor.set(0.5, 1)
+    this.dayLabel.anchor.set(0.5, 0)
     this.dayLabel.visible = false
     this.root.addChild(this.dayLabel)
 
@@ -764,18 +764,45 @@ export class YearScene implements Scene {
     this.renderDay()
   }
 
+  // Zichtbaarheid + directe verberging. De eigenlijke geometrie/label-plaatsing
+  // gebeurt in drawDayIndicator: op schermresolutie, dus zoom-onafhankelijk.
   private renderDay(): void {
     const show = this.dayPicker && this.hoverWX !== null
     this.dayLine.visible = show
     this.dayLabel.visible = show
-    if (!show || this.hoverWX === null) return
-    const x = this.hoverWX
-    const h = this.bandHalfH()
+    if (!show) {
+      this.dayLine.clear()
+      return
+    }
+    // Meteen bijwerken (responsief op muisbeweging); de frame-lus doet het daarna
+    // per frame opnieuw zodat de lijn ook tijdens zoomen op zijn plek blijft.
+    this.drawDayIndicator(this.engine.viewport(), 1 / this.engine.camera.zoom)
+  }
+
+  /** Verticale dag-gids (Ctrl): op schermresolutie getekend (scale = 1/zoom), zodat
+   * hij ALTIJD 1px breed is en exact het beeld vult — onafhankelijk van in-/uitzoomen
+   * — en niet buiten beeld doorloopt. De X volgt de hover-wereld-X; het datumlabel
+   * staat bovenaan, binnen beeld. */
+  private drawDayIndicator(vp: { width: number; height: number }, invZ: number): void {
+    if (!this.dayPicker || this.hoverWX === null) return
+    const halfH = vp.height / 2
+    const topPad = 12 // afstand van het label tot de bovenrand
+    const botPad = 12 // afstand van de lijn tot de onderrand
+    const labelGap = 22 // ruimte tussen label en lijn-top (geen overlap)
+    // camera.y = 0 ⇒ lokale y = 0 valt op het verticale midden; met scale = invZ
+    // zijn de lokale eenheden gelijk aan scherm-pixels.
+    this.dayLine.scale.set(invZ)
+    this.dayLine.position.set(this.hoverWX, 0)
     this.dayLine.clear()
-    this.dayLine.moveTo(x, -h).lineTo(x, h).stroke({ width: 1.5, color: this.T.colors.accent, alpha: 0.9 })
-    const d = new Date(this.yearStart + Math.min(1, Math.max(0, (x + AXIS_W / 2) / AXIS_W)) * this.span)
+    this.dayLine
+      .moveTo(0, -halfH + topPad + labelGap)
+      .lineTo(0, halfH - botPad)
+      .stroke({ width: 1, color: this.T.colors.accent, alpha: 0.9 })
+    const p = Math.min(1, Math.max(0, (this.hoverWX + AXIS_W / 2) / AXIS_W))
+    const d = new Date(this.yearStart + p * this.span)
     this.dayLabel.text = `${d.getDate()} ${MONTHS[d.getMonth()]}`
-    this.dayLabel.position.set(x, -h - 6)
+    this.dayLabel.scale.set(invZ)
+    this.dayLabel.position.set(this.hoverWX, (-halfH + topPad) * invZ)
   }
 
   onHover(worldX: number | null, worldY: number): void {
@@ -812,6 +839,10 @@ export class YearScene implements Scene {
       ml.text.scale.set(invZ)
       ml.text.position.set(ml.midX, LABEL_SCREEN_Y * invZ)
     }
+
+    // Dag-gids (Ctrl): per frame op schermresolutie hertekenen zodat hij bij zoomen
+    // op zijn plek blijft, 1px breed blijft en niet buiten beeld doorloopt.
+    if (this.dayPicker && this.hoverWX !== null) this.drawDayIndicator(vp, invZ)
 
     // Lane-toewijzing (kaart vs. stip) opnieuw bepalen.
     this.repack(vp.width, vp.height)
