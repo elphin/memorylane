@@ -42,6 +42,8 @@ export interface Scene {
   /** Reserveer bovenaan ruimte (scherm-px) voor de titel zodat de dag-gids eronder
    * begint (alleen L1-jaar). */
   setTitleInset?(px: number): void
+  /** Datum-highlight bij hover (vonk → stip/balk + datum) aan/uit (alleen L1-jaar). */
+  setHoverPulse?(on: boolean): void
   /** Datum (`YYYY-MM-DD`) onder een wereld-x op de as (alleen L1-jaar). */
   dateAt?(worldX: number): string
   /** Toon/verberg de Ctrl-sleep-selectie (begin→eind) op de as (alleen L1-jaar). */

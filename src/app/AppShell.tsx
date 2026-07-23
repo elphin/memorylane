@@ -101,6 +101,9 @@ interface Settings {
   showMemoryTitles: boolean
   /** Teken de lijntjes van de as naar een memory-kaart gebogen (of recht). */
   curvedLeaders: boolean
+  /** Bij hover over een memory: een vonk langs de leader naar de datum, de stip/balk
+   * licht op en de exacte datum verschijnt (jaar-view). */
+  hoverPulse: boolean
   /** Snijd foto's in de memory-view naar een vierkant (1:1) bij? Uit = natuurlijke
    * verhouding (de kaart neemt de vorm van de foto over). */
   squarePhotos: boolean
@@ -139,6 +142,7 @@ const DEFAULT_SETTINGS: Settings = {
   scatterRotate: true,
   showMemoryTitles: true,
   curvedLeaders: true,
+  hoverPulse: true,
   squarePhotos: false,
   showTitle: true,
   photoTitleFromCaption: false,
@@ -572,6 +576,11 @@ export function AppShell() {
     }
   }, [settings.showTitle])
 
+  // Datum-highlight bij hover aan/uit → doorgeven aan de jaar-scene (live).
+  useEffect(() => {
+    if (levelRef.current === 'year') sceneRef.current?.setHoverPulse?.(settings.hoverPulse)
+  }, [settings.hoverPulse])
+
   // Viewport-wijziging (venster-resize / fullscreen) → focus-scene herfitten. De
   // frame-lus voert het uit ná Pixi's eigen resize (vlag i.p.v. direct).
   useEffect(() => {
@@ -882,6 +891,7 @@ export function AppShell() {
         if (ctrlDown) scene.setDayPicker(true)
         // Dag-gids onder de titel laten beginnen als die aan staat.
         scene.setTitleInset(settingsRef.current.showTitle ? TITLE_INSET_PX : 0)
+        scene.setHoverPulse(settingsRef.current.hoverPulse)
         // Gecentreerde reveal (geen tap-coördinaten → schermmidden): spiegelt de
         // gecentreerde exit hierboven, zodat een jaar in-/uitzoomen altijd vanuit
         // het midden gebeurt i.p.v. vanaf de aangeklikte tegel (zie comment boven).
@@ -3061,6 +3071,14 @@ function SettingsPanel({
                 label="Gebogen verbindingslijntjes (as → memory)"
               />
               {desc('Uit = rechte lijntjes. De lijntjes lopen van de tijdlijn naar de memory-kaart.')}
+
+              <div style={{ height: 1, background: u.border, margin: '16px 0' }} />
+              <Toggle
+                on={settings.hoverPulse}
+                set={(v) => onChange({ hoverPulse: v })}
+                label="Datum-highlight bij hover (jaar-view)"
+              />
+              {desc('Beweeg je over een memory, dan schiet er een vonkje langs het lijntje naar de tijdlijn, licht de stip/balk op en verschijnt de exacte datum.')}
 
               <div style={{ height: 1, background: u.border, margin: '16px 0' }} />
               <Toggle

@@ -63,6 +63,20 @@ export const YEAR_COMMIT_PX = 240
 const DOT_R = 7 // stip-straal (scherm-px)
 const DOT_HIT = 22 // royale klik-halfmaat van een stip (scherm-px)
 const MARKER_HIT_MIN = 20
+
+// Datum-highlight bij hover (subtiel; HOVER_INTENSITY is de hoofdknop — omhoog
+// draaien maakt alles feller). Eén vonk langs de leader (kaart→stip), bij aankomst
+// één "ping"-ring op de stip (of een gloed op de balk bij een periode), en zolang je
+// hovert een kalme gloed + het exacte datumlabel.
+const HOVER_INTENSITY = 1.0 // globale schaal op alle gloed-/vonk-alfa's
+const HOVER_SPARK_MS = 440 // duur van de vonk-reis kaart→stip
+const HOVER_PING_MS = 560 // duur van de ring-ping bij aankomst
+const HOVER_SPARK_R = 3.2 // straal van de vonk (scherm-px)
+const HOVER_SPARK_ALPHA = 0.95 // kern-alfa van de vonk
+const HOVER_GLOW_ALPHA = 0.5 // gloed om de stip terwijl je hovert
+const HOVER_PING_ALPHA = 0.55 // begin-alfa van de ping-ring
+const HOVER_PING_GROW = 15 // hoeveel de ping-ring uitdijt (scherm-px)
+const HOVER_SPAN_GLOW_ALPHA = 0.32 // extra oplichten van een periode-balk bij hover
 const LABEL_SCREEN_Y = 20 // maandlabel-offset onder de as (scherm-px)
 const TITLE_MAX = 24 // max. tekens van een memory-titel
 
@@ -101,6 +115,9 @@ interface Node {
   anchorX: number // wereld-x (de datum)
   hasCover: boolean
   isSpan: boolean
+  spanStartX: number // wereld-x begin/eind van de periode-balk (0 als geen span)
+  spanEndX: number
+  dateText: string // geformatteerde datum/reeks voor het hover-datumlabel
   coverItemId?: string
   eff: number // effectiveSize (belang) — bepaalt grootte + packing-prioriteit
   size: number // rauwe rating 1–100 (bron van eff; leeft mee met Shift-resize)
@@ -223,6 +240,16 @@ export class YearScene implements Scene {
   // Scherm-px bovenaan gereserveerd voor de titel ("2024"): staat die aan, dan
   // begint de dag-gids eronder i.p.v. erlangs. 0 = geen titel.
   private titleInset = 0
+  // Datum-highlight bij hover: een schermresolutie-laag (vonk/ping/gloed) + een
+  // datumlabel, en de animatie-toestand van het huidige effect.
+  private hoverPulse = true
+  private hoverLayer = new Graphics()
+  private dateLabel: Text
+  private fxId: string | null = null // node waarvoor het effect nu loopt
+  private fxSpark = 0 // voortgang vonk kaart→stip (0..1)
+  private fxSparkActive = false // reist de vonk nog?
+  private fxPing = 0 // voortgang ring-ping bij aankomst (0..1; 0 = geen)
+  private fxGlow = 0 // gloed/label-alfa terwijl je hovert (geëased 0..1)
   private rangeBand = new Graphics()
   private slideEnabled: boolean
   private slideMs: number
@@ -335,8 +362,19 @@ export class YearScene implements Scene {
     this.root.addChild(this.cardsLayer)
 
     // ---- Nodes bouwen -------------------------------------------------------
+    const fmtDate = (ms: number): string => {
+      const d = new Date(ms)
+      return `${d.getDate()} ${MONTHS[d.getMonth()]}`
+    }
     for (const ev of detail.events) {
       const node = this.buildNode(ev, anchorXOf(ev), isSpan(ev))
+      if (isSpan(ev)) {
+        node.spanStartX = dateToX(parseLocalDate(ev.startAt))
+        node.spanEndX = dateToX(parseLocalDate(ev.endAt!))
+        node.dateText = `${fmtDate(parseLocalDate(ev.startAt))} – ${fmtDate(parseLocalDate(ev.endAt!))}`
+      } else {
+        node.dateText = fmtDate(parseLocalDate(ev.startAt))
+      }
       this.nodes.push(node)
       this.cardNodes.push(node)
     }
@@ -366,6 +404,18 @@ export class YearScene implements Scene {
     this.dayLabel.anchor.set(0.5, 0)
     this.dayLabel.visible = false
     this.root.addChild(this.dayLabel)
+
+    // Datum-highlight bij hover: gloed/vonk/ping bovenop alles, plus een datumlabel.
+    this.hoverLayer.eventMode = 'none'
+    this.root.addChild(this.hoverLayer)
+    this.dateLabel = new Text({
+      text: '',
+      style: { fill: this.T.colors.textBright, fontSize: 14, fontWeight: '600', fontFamily: this.T.fonts.body },
+    })
+    this.dateLabel.resolution = 2
+    this.dateLabel.anchor.set(0.5, 1)
+    this.dateLabel.visible = false
+    this.root.addChild(this.dateLabel)
 
     // Buurjaar-naam-previews (verschijnen bij overscroll voorbij de grens).
     if (this.neighbors.prev) this.prevLabel = this.buildYearLabel(this.neighbors.prev)
@@ -541,6 +591,9 @@ export class YearScene implements Scene {
       anchorX,
       hasCover,
       isSpan,
+      spanStartX: 0,
+      spanEndX: 0,
+      dateText: '',
       coverItemId: ev.coverItemId,
       eff,
       size: ev.size ?? 50,
@@ -786,6 +839,122 @@ export class YearScene implements Scene {
     if (this.dayPicker && this.hoverWX !== null) {
       this.drawDayIndicator(this.engine.viewport(), 1 / this.engine.camera.zoom)
     }
+  }
+
+  /** Datum-highlight bij hover aan/uit. Uit → laag + label meteen leeg. */
+  setHoverPulse(on: boolean): void {
+    this.hoverPulse = on
+    if (!on) {
+      this.hoverLayer.clear()
+      this.dateLabel.visible = false
+      this.fxId = null
+      this.fxGlow = 0
+      this.fxSparkActive = false
+      this.fxPing = 0
+    }
+  }
+
+  /** Datum-highlight: één vonk kaart→stip, bij aankomst een ping op de stip (of gloed
+   * op de balk bij een periode), en zolang je hovert een kalme gloed + datumlabel.
+   * Alles op schermresolutie (de laag is met 1/zoom counter-scaled). */
+  private drawHoverFx(z: number, invZ: number, dt: number): void {
+    this.hoverLayer.clear()
+    this.hoverLayer.scale.set(invZ)
+    if (!this.hoverPulse) {
+      this.dateLabel.visible = false
+      return
+    }
+    // Idle: niets te doen én niets meer af te bouwen → sla de node-scan over.
+    if (
+      this.hoveredId === null &&
+      this.fxId === null &&
+      this.fxGlow <= 0.02 &&
+      !this.fxSparkActive &&
+      this.fxPing <= 0
+    ) {
+      this.dateLabel.visible = false
+      return
+    }
+    // Actieve node = de gehoverde, zichtbare kaart (geen stip/overflow).
+    const hov = this.nodes.find((n) => n.eventId === this.hoveredId && n.appear > 0.5)
+    const hovId = hov?.eventId ?? null
+    if (hovId !== this.fxId) {
+      // Hover-wissel → (her)start de vonk vanaf de kaart.
+      this.fxId = hovId
+      this.fxSpark = 0
+      this.fxSparkActive = hovId !== null
+      this.fxPing = 0
+    }
+    this.fxGlow += ((hov ? 1 : 0) - this.fxGlow) * 0.18
+    if (this.fxSparkActive) {
+      this.fxSpark += dt / HOVER_SPARK_MS
+      if (this.fxSpark >= 1) {
+        this.fxSpark = 1
+        this.fxSparkActive = false
+        this.fxPing = 0.0001 // start de aankomst-ping
+      }
+    }
+    if (this.fxPing > 0 && this.fxPing < 1) {
+      this.fxPing = Math.min(1, this.fxPing + dt / HOVER_PING_MS)
+    }
+
+    const n = this.fxId ? this.nodes.find((x) => x.eventId === this.fxId) : undefined
+    if (!n || this.fxGlow <= 0.02) {
+      this.dateLabel.visible = false
+      return
+    }
+
+    const I = HOVER_INTENSITY
+    const acc = this.T.colors.accent
+    const dotX = n.anchorX * z
+    const cardXl = n.anchorX * z + n.curOffX
+    const grow = 0.5 + 0.5 * n.appear
+    const side = n.lane ? n.lane.side : n.curY < 0 ? -1 : 1
+    const cardYl = n.curY - side * (n.cardH / 2) * grow // leader-eind (kaart-onderrand), scherm-y
+
+    // Gloed terwijl je hovert: stip → zachte cirkel; periode → de balk licht op.
+    if (n.isSpan) {
+      const sX = n.spanStartX * z
+      const eX = n.spanEndX * z
+      this.hoverLayer.rect(sX, -9, eX - sX, 18).fill({ color: acc, alpha: HOVER_SPAN_GLOW_ALPHA * this.fxGlow * I })
+    } else {
+      this.hoverLayer.circle(dotX, 0, DOT_R + 4).fill({ color: acc, alpha: HOVER_GLOW_ALPHA * this.fxGlow * I })
+      if (this.fxPing > 0 && this.fxPing < 1) {
+        const r = DOT_R + this.fxPing * HOVER_PING_GROW
+        this.hoverLayer
+          .circle(dotX, 0, r)
+          .stroke({ width: 1.5, color: acc, alpha: (1 - this.fxPing) * HOVER_PING_ALPHA * I })
+      }
+    }
+
+    // Vonk langs de leader (kaart→stip). p: 0=kaart, 1=stip ⇒ bezier-param u = 1-p.
+    if (this.fxSparkActive) {
+      const bez = (a: number, b: number, c: number, d: number, u: number): number => {
+        const t = 1 - u
+        return t * t * t * a + 3 * t * t * u * b + 3 * t * u * u * c + u * u * u * d
+      }
+      const at = (u: number): [number, number] => [
+        bez(dotX, dotX, cardXl, cardXl, u),
+        bez(0, cardYl * 0.4, cardYl * 0.6, cardYl, u),
+      ]
+      const p = this.fxSpark
+      const [gx, gy] = at(1 - p)
+      // Zachte accent-halo om de kern.
+      this.hoverLayer.circle(gx, gy, HOVER_SPARK_R * 2.4).fill({ color: acc, alpha: 0.22 * I })
+      // Kern + korte staart (staart iets richting de kaart = grotere u).
+      for (let k = 0; k < 4; k++) {
+        const [sx, sy] = at(Math.min(1, 1 - p + k * 0.05))
+        const a = (k === 0 ? HOVER_SPARK_ALPHA : HOVER_SPARK_ALPHA * (1 - k / 4) * 0.5) * I
+        this.hoverLayer.circle(sx, sy, HOVER_SPARK_R * (k === 0 ? 1 : 0.7)).fill({ color: 0xffffff, alpha: a })
+      }
+    }
+
+    // Datumlabel net boven de as, bij de stip; faadt met de gloed.
+    this.dateLabel.text = n.dateText
+    this.dateLabel.scale.set(invZ)
+    this.dateLabel.position.set(n.anchorX, -14 * invZ)
+    this.dateLabel.alpha = this.fxGlow
+    this.dateLabel.visible = true
   }
 
   private bandHalfH(): number {
@@ -1043,6 +1212,9 @@ export class YearScene implements Scene {
       }
     }
     this.animateBorders(ctx.dtMS)
+    // Datum-highlight bij hover (na de node-lus: gebruikt de nu bijgewerkte curOffX/
+    // curY/appear van de gehoverde kaart).
+    this.drawHoverFx(z, invZ, dt)
     this.primed = true
   }
 
