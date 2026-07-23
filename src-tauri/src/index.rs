@@ -317,22 +317,25 @@ pub fn list_years(conn: &Connection) -> rusqlite::Result<Vec<YearSummary>> {
              (SELECT count(*) FROM items i JOIN events e ON i.event_id = e.id WHERE e.year_id = y.id),
              COALESCE(
                (SELECT i.id FROM items i JOIN events e ON i.event_id = e.id
-                  WHERE e.year_id = y.id AND i.item_type = 'photo' AND i.id = y.cover_photo LIMIT 1),
+                  WHERE e.year_id = y.id AND i.item_type IN ('photo', 'video') AND i.id = y.cover_photo LIMIT 1),
                (SELECT i.id FROM items i JOIN events e ON i.event_id = e.id
                    WHERE e.year_id = y.id AND i.item_type = 'photo'
+                   ORDER BY (i.timestamp_ms IS NULL), i.timestamp_ms LIMIT 1),
+               (SELECT i.id FROM items i JOIN events e ON i.event_id = e.id
+                   WHERE e.year_id = y.id AND i.item_type = 'video'
                    ORDER BY (i.timestamp_ms IS NULL), i.timestamp_ms LIMIT 1)),
              (SELECT group_concat(id) FROM
                (SELECT i.id FROM items i JOIN events e ON i.event_id = e.id
                     WHERE e.year_id = y.id AND i.item_type = 'photo'
                     ORDER BY (i.timestamp_ms IS NULL), i.timestamp_ms LIMIT 48)),
              (SELECT group_concat(fid) FROM
-               (SELECT (SELECT i.id FROM items i WHERE i.event_id = e.id AND i.item_type = 'photo'
+               (SELECT (SELECT i.id FROM items i WHERE i.event_id = e.id AND i.item_type IN ('photo', 'video')
                             AND (i.slug = e.featured_photo OR i.id = e.featured_photo) LIMIT 1) AS fid
                     FROM events e
                     WHERE e.year_id = y.id AND e.featured_photo IS NOT NULL)
                WHERE fid IS NOT NULL),
              (SELECT i.id FROM items i JOIN events e ON i.event_id = e.id
-                WHERE e.year_id = y.id AND i.item_type = 'photo' AND i.id = y.cover_photo LIMIT 1),
+                WHERE e.year_id = y.id AND i.item_type IN ('photo', 'video') AND i.id = y.cover_photo LIMIT 1),
              y.theme
          FROM years y ORDER BY y.year",
     )?;
@@ -1325,6 +1328,42 @@ mod tests {
         let y = &list_years(&conn).unwrap()[0];
         assert_eq!(y.featured_ids, vec!["it1"]);
         assert!(y.photo_ids.contains(&"it1".to_string()));
+    }
+
+    #[test]
+    fn cover_can_be_video() {
+        // Een als omslag uitgelichte video moet als cover resolveren (niet naar een
+        // foto terugvallen), zowel op memory-niveau (L1) als in de jaar-featured-pool.
+        let mut m = sample_model();
+        m.items.push(Item {
+            id: "vid1".into(),
+            event_id: "ev1".into(),
+            item_type: ItemType::Video,
+            media: Some("clip.mp4".into()),
+            url: None,
+            caption: None,
+            happened_at: Some("2024-11-23".into()),
+            timestamp_ms: Some(1_700_000_100_000),
+            place: None,
+            people: vec![],
+            tags: vec![],
+            category: None,
+            frame: None,
+            body_text: None,
+            slug: Some("clip".into()),
+            synthetic: false,
+        });
+        m.events[0].featured_photo = Some("clip".into());
+        let mut conn = open_in_memory().unwrap();
+        load(&mut conn, &m).unwrap();
+
+        // L1: de event-cover is de video, ook al staat er een foto in dezelfde memory.
+        let yd = get_year(&conn, "y2024").unwrap().unwrap();
+        assert_eq!(yd.events[0].cover_item_id.as_deref(), Some("vid1"));
+
+        // L0: de uitgelichte video komt in de featured-pool van het jaar.
+        let y = &list_years(&conn).unwrap()[0];
+        assert_eq!(y.featured_ids, vec!["vid1"]);
     }
 
     #[test]
