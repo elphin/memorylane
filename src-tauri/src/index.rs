@@ -379,15 +379,19 @@ pub fn get_year(conn: &Connection, year_id: &str) -> rusqlite::Result<Option<Yea
         return Ok(None);
     };
 
-    // Cover per event: is er een `featured_photo` (op slug óf id) → die; anders
-    // een WILLEKEURIGE foto (per query → elke keer een andere bij een bezoek).
+    // Cover per event: is er een `featured_photo` (op slug óf id) → die (foto ÓF
+    // video — een video krijgt zijn frame-thumbnail); anders een WILLEKEURIGE foto
+    // (per query → elke keer een andere), en als er helemaal geen foto's zijn een
+    // willekeurige video, zodat een memory met alleen video's toch een omslag heeft.
     let mut stmt = conn.prepare(
         "SELECT e.id, e.kind, e.title, e.start_at, e.end_at,
              (SELECT count(*) FROM items i WHERE i.event_id = e.id),
              COALESCE(
-               (SELECT i.id FROM items i WHERE i.event_id = e.id AND i.item_type = 'photo'
+               (SELECT i.id FROM items i WHERE i.event_id = e.id AND i.item_type IN ('photo', 'video')
                     AND (i.slug = e.featured_photo OR i.id = e.featured_photo) LIMIT 1),
                (SELECT i.id FROM items i WHERE i.event_id = e.id AND i.item_type = 'photo'
+                    ORDER BY RANDOM() LIMIT 1),
+               (SELECT i.id FROM items i WHERE i.event_id = e.id AND i.item_type = 'video'
                     ORDER BY RANDOM() LIMIT 1)
              ),
              (SELECT group_concat(id) FROM
