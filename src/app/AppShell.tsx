@@ -104,6 +104,9 @@ interface Settings {
   /** Bij hover over een memory: een vonk langs de leader naar de datum, de stip/balk
    * licht op en de exacte datum verschijnt (jaar-view). */
   hoverPulse: boolean
+  /** Fijne maatverdeling op de jaar-as: week- en dag-streepjes die infaden bij
+   * inzoomen (maand-streepjes staan er altijd). */
+  fineTicks: boolean
   /** Snijd foto's in de memory-view naar een vierkant (1:1) bij? Uit = natuurlijke
    * verhouding (de kaart neemt de vorm van de foto over). */
   squarePhotos: boolean
@@ -143,6 +146,7 @@ const DEFAULT_SETTINGS: Settings = {
   showMemoryTitles: true,
   curvedLeaders: true,
   hoverPulse: true,
+  fineTicks: true,
   squarePhotos: false,
   showTitle: true,
   photoTitleFromCaption: false,
@@ -581,6 +585,11 @@ export function AppShell() {
     if (levelRef.current === 'year') sceneRef.current?.setHoverPulse?.(settings.hoverPulse)
   }, [settings.hoverPulse])
 
+  // Fijne maatverdeling (week/dag) aan/uit → doorgeven aan de jaar-scene (live).
+  useEffect(() => {
+    if (levelRef.current === 'year') sceneRef.current?.setFineTicks?.(settings.fineTicks)
+  }, [settings.fineTicks])
+
   // Viewport-wijziging (venster-resize / fullscreen) → focus-scene herfitten. De
   // frame-lus voert het uit ná Pixi's eigen resize (vlag i.p.v. direct).
   useEffect(() => {
@@ -892,6 +901,7 @@ export function AppShell() {
         // Dag-gids onder de titel laten beginnen als die aan staat.
         scene.setTitleInset(settingsRef.current.showTitle ? TITLE_INSET_PX : 0)
         scene.setHoverPulse(settingsRef.current.hoverPulse)
+        scene.setFineTicks(settingsRef.current.fineTicks)
         // Gecentreerde reveal (geen tap-coördinaten → schermmidden): spiegelt de
         // gecentreerde exit hierboven, zodat een jaar in-/uitzoomen altijd vanuit
         // het midden gebeurt i.p.v. vanaf de aangeklikte tegel (zie comment boven).
@@ -3079,6 +3089,14 @@ function SettingsPanel({
                 label="Datum-highlight bij hover (jaar-view)"
               />
               {desc('Beweeg je over een memory, dan schiet er een vonkje langs het lijntje naar de tijdlijn, licht de stip/balk op en verschijnt de exacte datum.')}
+
+              <div style={{ height: 1, background: u.border, margin: '16px 0' }} />
+              <Toggle
+                on={settings.fineTicks}
+                set={(v) => onChange({ fineTicks: v })}
+                label="Fijne tijdlijn-verdeling (week/dag)"
+              />
+              {desc('Zoom je in op de jaar-as, dan verschijnen eerst de week- en daarna de dag-streepjes (maand-streepjes staan er altijd). Gegradueerd en subtiel.')}
 
               <div style={{ height: 1, background: u.border, margin: '16px 0' }} />
               <Toggle

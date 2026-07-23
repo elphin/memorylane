@@ -44,6 +44,8 @@ export interface Scene {
   setTitleInset?(px: number): void
   /** Datum-highlight bij hover (vonk → stip/balk + datum) aan/uit (alleen L1-jaar). */
   setHoverPulse?(on: boolean): void
+  /** Week/dag-streepjes op de as (faden in bij inzoomen) aan/uit (alleen L1-jaar). */
+  setFineTicks?(on: boolean): void
   /** Datum (`YYYY-MM-DD`) onder een wereld-x op de as (alleen L1-jaar). */
   dateAt?(worldX: number): string
   /** Toon/verberg de Ctrl-sleep-selectie (begin→eind) op de as (alleen L1-jaar). */

@@ -78,6 +78,21 @@ const HOVER_PING_ALPHA = 0.55 // begin-alfa van de ping-ring
 const HOVER_PING_GROW = 15 // hoeveel de ping-ring uitdijt (scherm-px)
 const HOVER_SPAN_GLOW_ALPHA = 0.32 // extra oplichten van een periode-balk bij hover
 const LABEL_SCREEN_Y = 20 // maandlabel-offset onder de as (scherm-px)
+
+// Semantische maatverdeling op de as: maand-streepjes staan er altijd; week- en
+// dag-streepjes faden in bij inzoomen. Gegradueerd in hoogte (maand hoogst → dag
+// laagst) én opaciteit (dag het zachtst) → een fijne, rustige liniaal.
+const MONTH_TICK_H = 8 // half-hoogte streepje (scherm-px, ±)
+const WEEK_TICK_H = 5.5
+const DAY_TICK_H = 3.5
+const MONTH_TICK_ALPHA = 0.85
+const WEEK_TICK_ALPHA = 0.5
+const DAY_TICK_ALPHA = 0.32
+// Zoom-drempels: breedte van één maand op het scherm (px) waarbinnen de tier infadet.
+const WEEK_FADE_LO = 130
+const WEEK_FADE_HI = 240
+const DAY_FADE_LO = 340
+const DAY_FADE_HI = 640
 const TITLE_MAX = 24 // max. tekens van een memory-titel
 
 /** Effectieve zwaarte: rating-`size` leidend, met een bescheiden log-nudge voor
@@ -103,6 +118,12 @@ function cardScreenH(eff: number, id: string): number {
 }
 
 const MONTHS = ['jan', 'feb', 'mrt', 'apr', 'mei', 'jun', 'jul', 'aug', 'sep', 'okt', 'nov', 'dec']
+
+/** Zachte 0→1 overgang tussen a en b (voor het infaden van de tick-tiers). */
+function smoothstep(a: number, b: number, x: number): number {
+  const t = Math.min(1, Math.max(0, (x - a) / (b - a)))
+  return t * t * (3 - 2 * t)
+}
 
 interface Lane {
   side: number // -1 = boven de as (neg. y), 1 = onder
@@ -233,6 +254,10 @@ export class YearScene implements Scene {
   private primed = false // eerste frame snapt naar de packing-toestand; daarna animeren
   private yearStart = 0
   private span = 1
+  private year = 0 // kalenderjaar (voor maand-/week-/dag-streepjes)
+  private ticksLayer = new Graphics() // maand/week/dag-liniaal (schermresolutie)
+  private fineTicks = true // week/dag-streepjes tonen bij inzoomen?
+  private monthTickX: number[] = [] // wereld-x van de 11 maandgrenzen (constant)
   private dayPicker = false
   private hoverWX: number | null = null
   private dayLine = new Graphics()
@@ -287,22 +312,25 @@ export class YearScene implements Scene {
     const span = Math.max(1, yearEnd - yearStart)
     this.yearStart = yearStart
     this.span = span
+    this.year = year
     const dateToX = (ms: number): number => {
       const p = Math.min(1, Math.max(0, (ms - yearStart) / span))
       return -AXIS_W / 2 + p * AXIS_W
     }
 
-    // ---- As-lijn + maand-separators (wereldruimte, stretchen met de zoom) ----
+    // ---- As-lijn (wereldruimte, stretcht met de zoom) ----
+    // De maand-/week-/dag-streepjes staan NIET hier maar in ticksLayer: op scherm-
+    // resolutie (constante hoogte) en per frame hertekend, zodat week/dag pas bij
+    // inzoomen infaden (zie drawTicks).
     const axis = new Graphics()
     axis
       .moveTo(-AXIS_W / 2, 0)
       .lineTo(AXIS_W / 2, 0)
       .stroke({ width: 1, color: this.T.colors.axis, pixelLine: true })
-    for (let m = 1; m < 12; m++) {
-      const mx = dateToX(new Date(year, m, 1).getTime())
-      axis.moveTo(mx, -14).lineTo(mx, 14).stroke({ width: 1, color: this.T.colors.axisTick, pixelLine: true })
-    }
     this.root.addChild(axis)
+    for (let m = 1; m < 12; m++) this.monthTickX.push(dateToX(new Date(year, m, 1).getTime()))
+    this.ticksLayer.eventMode = 'none'
+    this.root.addChild(this.ticksLayer)
     this.root.addChild(this.rangeBand)
 
     // Maandlabels: constante schermgrootte, op het midden van elke maand (schuiven
@@ -854,6 +882,50 @@ export class YearScene implements Scene {
     }
   }
 
+  /** Week/dag-streepjes tonen bij inzoomen aan/uit (maand blijft altijd). */
+  setFineTicks(on: boolean): void {
+    this.fineTicks = on
+  }
+
+  /** Maatverdeling op de as: maand-streepjes altijd; week- en dag-streepjes faden in
+   * bij inzoomen (gegradueerd in hoogte + opaciteit). Op schermresolutie (constante
+   * hoogte, scherp), per frame hertekend; alleen de zichtbare streepjes. */
+  private drawTicks(z: number, invZ: number, camX: number, halfW: number): void {
+    const g = this.ticksLayer
+    g.clear()
+    g.scale.set(invZ)
+    const col = this.T.colors.axisTick
+    // Maand-separators (altijd): 11 streepjes op de 1e van elke maand (voorberekend).
+    for (const wx of this.monthTickX) {
+      g.moveTo(wx * z, -MONTH_TICK_H).lineTo(wx * z, MONTH_TICK_H).stroke({ width: 1, color: col, alpha: MONTH_TICK_ALPHA })
+    }
+    if (!this.fineTicks) return
+    const monthPx = (AXIS_W / 12) * z // breedte van één maand op het scherm
+    const weekA = smoothstep(WEEK_FADE_LO, WEEK_FADE_HI, monthPx) * WEEK_TICK_ALPHA
+    const dayA = smoothstep(DAY_FADE_LO, DAY_FADE_HI, monthPx) * DAY_TICK_ALPHA
+    if (weekA <= 0.02 && dayA <= 0.02) return
+    // Alleen de zichtbare dagen aflopen (kalendercorrect i.v.m. zomertijd).
+    const msAt = (wx: number): number => this.yearStart + ((wx + AXIS_W / 2) / AXIS_W) * this.span
+    const yearEnd = new Date(this.year, 11, 31, 23, 59, 59).getTime()
+    const lo = Math.max(this.yearStart, msAt(camX - halfW / z))
+    const hi = Math.min(yearEnd, msAt(camX + halfW / z))
+    const d = new Date(lo)
+    d.setHours(0, 0, 0, 0)
+    while (d.getTime() <= hi) {
+      const t = d.getTime()
+      // Maand-eerste is al een maand-streepje; sla 'm over (geen dubbele/opgetelde alfa).
+      if (d.getDate() !== 1) {
+        const x = (-AXIS_W / 2 + ((t - this.yearStart) / this.span) * AXIS_W) * z
+        if (d.getDay() === 1 && weekA > 0.02) {
+          g.moveTo(x, -WEEK_TICK_H).lineTo(x, WEEK_TICK_H).stroke({ width: 1, color: col, alpha: weekA })
+        } else if (dayA > 0.02) {
+          g.moveTo(x, -DAY_TICK_H).lineTo(x, DAY_TICK_H).stroke({ width: 1, color: col, alpha: dayA })
+        }
+      }
+      d.setDate(d.getDate() + 1)
+    }
+  }
+
   /** Datum-highlight: één vonk kaart→stip, bij aankomst een ping op de stip (of gloed
    * op de balk bij een periode), en zolang je hovert een kalme gloed + datumlabel.
    * Alles op schermresolutie (de laag is met 1/zoom counter-scaled). */
@@ -1054,6 +1126,9 @@ export class YearScene implements Scene {
       ml.text.scale.set(invZ)
       ml.text.position.set(ml.midX, LABEL_SCREEN_Y * invZ)
     }
+
+    // Maand/week/dag-liniaal (week/dag faden in bij inzoomen).
+    this.drawTicks(z, invZ, camX, halfW)
 
     // Dag-gids (Ctrl): per frame op schermresolutie hertekenen zodat hij bij zoomen
     // op zijn plek blijft, 1px breed blijft en niet buiten beeld doorloopt.
