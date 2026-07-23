@@ -41,7 +41,6 @@ const AXIS_CLEAR_PX = 96 // scherm tussen as en de eerste lane (ruim, zodat de
 const LANE_GAP_PX = 40 // ruimte tussen lanes (incl. plek voor de titel ertussen)
 const LANE_PITCH = CARD_H_MAX + LANE_GAP_PX
 const CARD_GAP_PX = 16 // min. horizontale scherm-ruimte tussen kaarten in een lane
-const STICKY_GAP_PX = 4 // lossere gap voor een kaart die z'n lane behoudt (hysterese)
 
 // Leader-lijntjes (as → kaart): een simpele lijn met constante schermdikte,
 // scherp getekend op schermresolutie (de leader-laag wordt met 1/zoom
@@ -108,7 +107,8 @@ interface Node {
   itemCount: number // aantal items (voor effectiveSize bij live resize)
   hash: number
   prefSide: number // voorkeurskant voor lane-balancering
-  offX: number // horizontale scherm-offset van de kaart t.o.v. zijn datum (±)
+  offX: number // horizontale scherm-offset van de kaart t.o.v. zijn datum (± doel)
+  curOffX: number // idem, geanimeerd (glijdt naar offX; geen sprong bij lane-wissel)
   // Schermgroottes (px).
   cardW: number
   cardH: number
@@ -547,11 +547,13 @@ export class YearScene implements Scene {
       itemCount: ev.itemCount,
       hash: hashId(ev.id),
       prefSide: -1,
-      // Deterministisch links/rechts van de datum, sterk gevarieerde magnitude.
+      // Zaad-offset (alleen voor de fit-camera vóór de eerste repack); repack zet de
+      // echte offX per frame. curOffX volgt offX geanimeerd.
       offX:
         ((hashId(ev.id) >>> 8) & 1 ? 1 : -1) *
         CARD_OFFSET_PX *
         (0.5 + 1.0 * (((hashId(ev.id) >>> 9) % 100) / 100)),
+      curOffX: 0,
       cardW,
       cardH,
       baseScreenScale: cardH / THUMB_H,
@@ -678,60 +680,89 @@ export class YearScene implements Scene {
     this.engine.jumpCamera(0, 0, zoom)
   }
 
-  /** Wijs elke cover-node een lane toe (of stip) in SCHERMruimte, greedy op
-   * belang, met plakkerige lane-behoud (hysterese) voor stabiliteit. */
+  /** Kaart-layout: bepaal per kaart de horizontale offset (offX, t.o.v. z'n datum) én
+   * de lane (verticale rij). Doel: een cluster (kaarten met dicht op elkaar liggende
+   * datums) spreidt zich uit in de VRIJE ruimte, en de leaders (as→kaart) kruisen
+   * niet onnodig. Per kant (boven/onder) plaatsen we de kaarten op DATUMVOLGORDE in de
+   * laagste lane die past — links→rechts, met minimale gap. Datumvolgorde per lane
+   * behouden ⇒ leaders binnen één lane kruisen nooit (alleen bij echte drukte, als een
+   * kaart een lane hoger moet, kan een leader nog een andere lane kruisen). Past 'ie in
+   * geen enkele lane binnen het
+   * offset-budget? → stip (overflow, net als voorheen bij te druk). Tot slot centreren
+   * we elke lane rond de datums (niet alles naar rechts). Per frame herberekend uit de
+   * schermposities: stabiel bij pannen (offX ~ invariant) en vloeiend bij zoomen. */
   private repack(vpW: number, vpH: number): void {
     const z = this.engine.camera.zoom
     const camX = this.engine.camera.x
+    const halfW = vpW / 2
     const N = this.lanesPerSide(vpH)
-    const occ = new Map<string, { lo: number; hi: number }[]>()
-    const offOn = this.curvedLeaders ? 1 : 0
-    for (const n of this.cardNodes) {
-      const sx = (n.anchorX - camX) * z + vpW / 2 + n.offX * offOn
-      const halfW = n.cardW / 2
-      // Kandidaat-lanes: eerst de huidige (sticky, lossere gap), daarna de lanes
-      // gesorteerd op nabijheid tot een (hash-)voorkeurslane. Zo verspreiden de
-      // kaarten zich over de beschikbare lanes (i.p.v. dicht op de as te clusteren)
-      // en wordt de verticale ruimte benut, zeker als er weinig zijn.
-      // Voorkeurslane, gebiast NAAR DE AS (kwadratisch): de meeste kaarten blijven
-      // dicht bij de tijdlijn, hogere lanes worden alleen benut als het druk wordt.
-      const rPref = ((n.hash >>> 20) % 1000) / 1000
-      const prefLevel = Math.min(N - 1, Math.floor(rPref * rPref * N))
-      const cands: { lane: Lane; sticky: boolean }[] = []
-      if (n.lane) cands.push({ lane: n.lane, sticky: true })
-      const rest: { lane: Lane; sticky: boolean }[] = []
-      for (let lvl = 0; lvl < N; lvl++) {
-        for (const side of n.prefSide < 0 ? [-1, 1] : [1, -1]) {
-          if (n.lane && n.lane.side === side && n.lane.level === lvl) continue
-          rest.push({ lane: { side, level: lvl }, sticky: false })
-        }
-      }
-      rest.sort((a, b) => Math.abs(a.lane.level - prefLevel) - Math.abs(b.lane.level - prefLevel))
-      cands.push(...rest)
-      let assigned: Lane | null = null
-      for (const c of cands) {
-        if (c.lane.level >= N) continue
-        const key = `${c.lane.side}:${c.lane.level}`
-        const gap = c.sticky ? STICKY_GAP_PX : CARD_GAP_PX
-        const list = occ.get(key)
-        let ok = true
-        if (list) {
-          for (const iv of list) {
-            if (!(sx + halfW + gap < iv.lo || sx - halfW - gap > iv.hi)) {
-              ok = false
+    if (!this.curvedLeaders) {
+      // Rechte leaders: geen horizontale offset — alleen lanes op datumvolgorde.
+      for (const side of [-1, 1] as const) {
+        const cards = this.cardNodes
+          .filter((n) => n.prefSide === side)
+          .sort((a, b) => a.anchorX - b.anchorX || a.hash - b.hash)
+        const laneRight = new Array<number>(N).fill(-Infinity)
+        for (const n of cards) {
+          const dx = (n.anchorX - camX) * z + halfW
+          const half = n.cardW / 2
+          let level = -1
+          for (let lvl = 0; lvl < N; lvl++) {
+            if (laneRight[lvl] === -Infinity || dx - half > laneRight[lvl] + CARD_GAP_PX) {
+              level = lvl
               break
             }
           }
-        }
-        if (ok) {
-          assigned = c.lane
-          const l = occ.get(key) ?? []
-          l.push({ lo: sx - halfW, hi: sx + halfW })
-          occ.set(key, l)
-          break
+          n.offX = 0
+          n.lane = level === -1 ? null : { side, level }
+          if (level !== -1) laneRight[level] = dx + half
         }
       }
-      n.lane = assigned
+      return
+    }
+    // Hoeveel een kaart maximaal van z'n datum mag afwijken (scherm-px) voordat 'ie
+    // een lane hoger gaat i.p.v. verder opzij. Ruim, zodat een cluster zich eerst
+    // BREED in de vrije ruimte verspreidt en pas stapelt als het echt vol is.
+    const MAX_OFFSET = Math.min(vpW * 0.3, 340)
+    for (const side of [-1, 1] as const) {
+      const cards = this.cardNodes
+        .filter((n) => n.prefSide === side)
+        .sort((a, b) => a.anchorX - b.anchorX || a.hash - b.hash)
+      const laneRight = new Array<number>(N).fill(-Infinity) // rechterrand per lane
+      const placed: { n: Node; desired: number; x: number; level: number }[] = []
+      for (const n of cards) {
+        const desired = (n.anchorX - camX) * z + halfW
+        const half = n.cardW / 2
+        let level = -1
+        let x = desired
+        for (let lvl = 0; lvl < N; lvl++) {
+          const cand =
+            laneRight[lvl] === -Infinity
+              ? desired
+              : Math.max(desired, laneRight[lvl] + half + CARD_GAP_PX)
+          if (cand - desired <= MAX_OFFSET) {
+            level = lvl
+            x = cand
+            break
+          }
+        }
+        if (level === -1) {
+          n.lane = null // in geen lane binnen budget → stip (overflow)
+          continue
+        }
+        laneRight[level] = x + half
+        n.lane = { side, level }
+        placed.push({ n, desired, x, level })
+      }
+      // Centreren per lane: schuif de kaarten zo dat de gemiddelde afwijking ~0 is
+      // (cluster rond de datums i.p.v. allemaal naar rechts). Uniforme schuif ⇒ de
+      // onderlinge gaps blijven behouden.
+      for (let lvl = 0; lvl < N; lvl++) {
+        const lane = placed.filter((p) => p.level === lvl)
+        if (!lane.length) continue
+        const shift = lane.reduce((s, p) => s + (p.x - p.desired), 0) / lane.length
+        for (const p of lane) p.n.offX = p.x - p.desired - shift
+      }
     }
   }
 
@@ -875,7 +906,7 @@ export class YearScene implements Scene {
     for (const n of this.nodes) {
       const screenX = (n.anchorX - camX) * z + halfW
       // Culling dekt zowel de stip (op de as, screenX) als de kaart (met offset).
-      const cardOff = this.curvedLeaders ? n.offX : 0
+      const cardOff = this.curvedLeaders ? n.curOffX : 0
       const loX = screenX + Math.min(0, cardOff) - n.cardW / 2
       const hiX = screenX + Math.max(0, cardOff) + n.cardW / 2
       const inView = hiX > -marginPx && loX < vp.width + marginPx
@@ -890,9 +921,13 @@ export class YearScene implements Scene {
       if (!this.primed) {
         n.appear = targetAppear
         n.curY = targetY
+        n.curOffX = n.offX
       } else {
         n.appear += (targetAppear - n.appear) * 0.16
         n.curY += (targetY - n.curY) * 0.16
+        // offX glijdt naar z'n doel: een lane-/spreiding-wissel bij zoomen schuift
+        // de kaart zacht opzij i.p.v. een sprong.
+        n.curOffX += (n.offX - n.curOffX) * 0.16
       }
       const off = (((n.hash >>> 3) % 5) - 2) * 6 // scherm-offset bij same-date stippen
 
@@ -921,7 +956,7 @@ export class YearScene implements Scene {
           // Kant volgt de doel-lane (niet het curY-teken) zodat een zeldzame
           // lane-flip niet één frame door de as "duikt" met omklappende titel/leader.
           const side = n.lane ? n.lane.side : n.curY < 0 ? -1 : 1
-          const cardX = n.anchorX + (this.curvedLeaders ? n.offX : 0) * invZ
+          const cardX = n.anchorX + (this.curvedLeaders ? n.curOffX : 0) * invZ
           n.card.position.set(cardX, n.curY * invZ)
           n.card.scale.set(n.baseScreenScale * n.hover * grow * invZ)
           n.card.alpha = n.appear
@@ -993,7 +1028,7 @@ export class YearScene implements Scene {
       if (!inView) {
         n.hitHalfW = 0
       } else if (n.appear > 0.5) {
-        n.hitCx = n.anchorX + (this.curvedLeaders ? n.offX : 0) * invZ
+        n.hitCx = n.anchorX + (this.curvedLeaders ? n.curOffX : 0) * invZ
         n.hitCy = n.curY * invZ
         n.hitHalfW = (n.cardW / 2 + BORDER) * invZ
         n.hitHalfH = (n.cardH / 2 + BORDER) * invZ
