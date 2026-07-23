@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "MemoryLane",
-  "version": "2.3.14",
+  "version": "2.3.15",
   "identifier": "nl.elphinstone.memorylane",
   "build": {
     "frontendDist": "../dist",
