@@ -41,6 +41,7 @@ const AXIS_CLEAR_PX = 96 // scherm tussen as en de eerste lane (ruim, zodat de
 const LANE_GAP_PX = 40 // ruimte tussen lanes (incl. plek voor de titel ertussen)
 const LANE_PITCH = CARD_H_MAX + LANE_GAP_PX
 const CARD_GAP_PX = 16 // min. horizontale scherm-ruimte tussen kaarten in een lane
+const EDGE_PAD = 34 // min. scherm-px tussen een kaart en de linker-/rechterrand (overzicht)
 
 // Leader-lijntjes (as → kaart): een simpele lijn met constante schermdikte,
 // scherp getekend op schermresolutie (de leader-laag wordt met 1/zoom
@@ -123,6 +124,20 @@ const MONTHS = ['jan', 'feb', 'mrt', 'apr', 'mei', 'jun', 'jul', 'aug', 'sep', '
 function smoothstep(a: number, b: number, x: number): number {
   const t = Math.min(1, Math.max(0, (x - a) / (b - a)))
   return t * t * (3 - 2 * t)
+}
+
+/** Van der Corput (bit-reversal) in [0,1): een low-discrepancy-reeks. Opeenvolgende
+ * indices liggen ver uit elkaar → evenwichtige, niet-monotone verdeling (voor de
+ * hoogte-slots van de kaarten). */
+function vanDerCorput(n: number): number {
+  let r = 0
+  let b = 0.5
+  while (n > 0) {
+    r += (n & 1) * b
+    n >>>= 1
+    b *= 0.5
+  }
+  return r
 }
 
 interface Lane {
@@ -780,14 +795,23 @@ export class YearScene implements Scene {
     return -side * frac * 14 // beperkte jitter naar de as (alleen bij >1 lane)
   }
 
-  /** Verdeel de getoonde kaarten van één kant GELIJKMATIG over de hoogte (slot 0..1),
-   * in hash-geschudde volgorde (niet monotoon met datum), zodat ze de ruimte vullen en
-   * niet op één lijn staan. Horizontaal zijn ze al gescheiden ⇒ vrije y is veilig. */
+  /** Verdeel de getoonde kaarten van één kant over de hoogte (slot 0..1). We gebruiken
+   * een van-der-Corput-reeks over de DATUMVOLGORDE: naburige datums krijgen sterk
+   * contrasterende hoogtes en de volle hoogte wordt gevuld — een fijne, niet-monotone
+   * spreiding (geen saaie ramp). Horizontaal zijn de kaarten al gescheiden ⇒ vrije y
+   * is veilig. `sideCards` staat al op datumvolgorde. */
   private assignVSlots(sideCards: Node[]): void {
     const laned = sideCards.filter((n) => n.lane)
-    laned.sort((a, b) => ((a.hash >>> 3) & 0xffff) - ((b.hash >>> 3) & 0xffff))
     const k = laned.length
-    laned.forEach((n, j) => (n.vSlot = k <= 1 ? 0.5 : j / (k - 1)))
+    if (k <= 1) {
+      if (k === 1) laned[0]!.vSlot = 0.5
+      return
+    }
+    const vals = laned.map((_, i) => vanDerCorput(i + 1))
+    const min = Math.min(...vals)
+    const max = Math.max(...vals)
+    const span = max - min || 1
+    laned.forEach((n, i) => (n.vSlot = (vals[i]! - min) / span))
   }
 
   /** Scherm-y (t.o.v. de as) waar een kaart naartoe animeert. Bij MEER lanes: de
@@ -885,6 +909,46 @@ export class YearScene implements Scene {
         laneRight[level] = x + half
         n.lane = { side, level }
         n.offX = x - desired
+      }
+      // Balanceer per lane: haal de gemiddelde offset eruit. De overlap-push duwt
+      // altijd naar RECHTS, dus een cluster hoopt anders scheef naar rechts op; door
+      // het gemiddelde af te trekken staat 'ie rond de datums verdeeld (links én
+      // rechts). De onderlinge speelse spreiding blijft; alleen de scheefstand weg.
+      for (let lvl = 0; lvl < N; lvl++) {
+        const laneCards = cards.filter((n) => n.lane && n.lane.level === lvl)
+        if (laneCards.length < 2) continue
+        const mean = laneCards.reduce((s, n) => s + n.offX, 0) / laneCards.length
+        for (const n of laneCards) n.offX -= mean
+      }
+      // Rand-marge (alleen in de overzicht-stand, waar het hele jaar past): geen kaart
+      // mag door drift/centrering tegen of over de scherm-rand vallen. We klemmen ALLEEN
+      // als de kaarten écht binnen de marges passen (anders zou de klem ze op elkaar
+      // stapelen) — passen ze niet, dan laten we ze liever wat over de rand komen dan
+      // te overlappen. Order-preserving (links→rechts, dan rechts→links), gap behouden.
+      const atFit = AXIS_W / 2 <= (halfW - EDGE_MARGIN) / z
+      if (atFit) {
+        const laned = cards.filter((n) => n.lane)
+        const need =
+          laned.reduce((s, n) => s + n.cardW, 0) + Math.max(0, laned.length - 1) * CARD_GAP_PX
+        if (need <= vpW - 2 * EDGE_PAD) {
+          const baseX = (n: Node): number => (n.anchorX - camX) * z + halfW
+          let prevRight = -Infinity
+          for (const n of laned) {
+            const half = n.cardW / 2
+            const sx = Math.max(baseX(n) + n.offX, EDGE_PAD + half, prevRight + CARD_GAP_PX + half)
+            n.offX = sx - baseX(n)
+            prevRight = sx + half
+          }
+          let nextLeft = Infinity
+          for (let i = laned.length - 1; i >= 0; i--) {
+            const n = laned[i]!
+            const half = n.cardW / 2
+            let sx = Math.min(baseX(n) + n.offX, vpW - EDGE_PAD - half, nextLeft - CARD_GAP_PX - half)
+            sx = Math.max(sx, EDGE_PAD + half) // niet over de linkerrand terug
+            n.offX = sx - baseX(n)
+            nextLeft = sx - half
+          }
+        }
       }
       if (N === 1) this.assignVSlots(cards)
     }
@@ -994,13 +1058,17 @@ export class YearScene implements Scene {
     const hov = this.nodes.find((n) => n.eventId === this.hoveredId && n.appear > 0.5)
     const hovId = hov?.eventId ?? null
     if (hovId !== this.fxId) {
-      // Hover-wissel → (her)start de vonk vanaf de kaart.
+      // Hover-wissel → (her)start de vonk vanaf de kaart; de stip/balk begint DONKER
+      // en licht pas op als de vonk de as raakt.
       this.fxId = hovId
       this.fxSpark = 0
       this.fxSparkActive = hovId !== null
       this.fxPing = 0
+      this.fxGlow = 0
     }
-    this.fxGlow += ((hov ? 1 : 0) - this.fxGlow) * 0.18
+    // Gloed (stip/balk + datumlabel) pas als de vonk is aangekomen (fxSparkActive uit).
+    const lit = hov && !this.fxSparkActive
+    this.fxGlow += ((lit ? 1 : 0) - this.fxGlow) * 0.22
     if (this.fxSparkActive) {
       this.fxSpark += dt / HOVER_SPARK_MS
       if (this.fxSpark >= 1) {
@@ -1014,10 +1082,12 @@ export class YearScene implements Scene {
     }
 
     const n = this.fxId ? this.nodes.find((x) => x.eventId === this.fxId) : undefined
-    if (!n || this.fxGlow <= 0.02) {
+    if (!n) {
       this.dateLabel.visible = false
       return
     }
+    // NB: de vonk (verderop) tekent tijdens de reis; de gloed/ping/label hangen op
+    // fxGlow (alpha) en zijn dus vanzelf onzichtbaar zolang de vonk nog onderweg is.
 
     const I = HOVER_INTENSITY
     const acc = this.T.colors.accent
@@ -1069,7 +1139,7 @@ export class YearScene implements Scene {
     this.dateLabel.scale.set(invZ)
     this.dateLabel.position.set(n.anchorX, -14 * invZ)
     this.dateLabel.alpha = this.fxGlow
-    this.dateLabel.visible = true
+    this.dateLabel.visible = this.fxGlow > 0.02 // pas zichtbaar als de vonk is aangekomen
   }
 
   private bandHalfH(): number {
