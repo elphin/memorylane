@@ -82,12 +82,12 @@ const LABEL_SCREEN_Y = 20 // maandlabel-offset onder de as (scherm-px)
 // Semantische maatverdeling op de as: maand-streepjes staan er altijd; week- en
 // dag-streepjes faden in bij inzoomen. Gegradueerd in hoogte (maand hoogst → dag
 // laagst) én opaciteit (dag het zachtst) → een fijne, rustige liniaal.
-const MONTH_TICK_H = 11 // half-hoogte streepje (scherm-px, ±)
-const WEEK_TICK_H = 8
-const DAY_TICK_H = 5
-const MONTH_TICK_ALPHA = 0.9
-const WEEK_TICK_ALPHA = 0.62
-const DAY_TICK_ALPHA = 0.45
+const MONTH_TICK_H = 12 // half-hoogte streepje (scherm-px, ±)
+const WEEK_TICK_H = 9
+const DAY_TICK_H = 5.5
+const MONTH_TICK_ALPHA = 0.95
+const WEEK_TICK_ALPHA = 0.8
+const DAY_TICK_ALPHA = 0.6
 // Zoom-drempels: breedte van één maand op het scherm (px) waarbinnen de tier infadet.
 const WEEK_FADE_LO = 115
 const WEEK_FADE_HI = 205
@@ -147,6 +147,7 @@ interface Node {
   prefSide: number // voorkeurskant voor lane-balancering
   offX: number // horizontale scherm-offset van de kaart t.o.v. zijn datum (± doel)
   curOffX: number // idem, geanimeerd (glijdt naar offX; geen sprong bij lane-wissel)
+  vSlot: number // verticale slot 0..1 (bij één lane: verdeelt kaarten over de hoogte)
   // Schermgroottes (px).
   cardW: number
   cardH: number
@@ -256,6 +257,11 @@ export class YearScene implements Scene {
   private span = 1
   private year = 0 // kalenderjaar (voor maand-/week-/dag-streepjes)
   private lanesN = 1 // aantal lanes per kant deze frame (voor de hoogte-jitter)
+  // Verticale spreiding bij één lane: kaart-afstand tot de as verdeelt zich tussen
+  // vMin en vMaxTop/vMaxBottom (per frame uit de vensterhoogte + titelruimte).
+  private vMin = 120
+  private vMaxTop = 200
+  private vMaxBottom = 200
   private ticksLayer = new Graphics() // maand/week/dag-liniaal (schermresolutie)
   private fineTicks = true // week/dag-streepjes tonen bij inzoomen?
   private monthTickX: number[] = [] // wereld-x van de 11 maandgrenzen (constant)
@@ -636,6 +642,7 @@ export class YearScene implements Scene {
         CARD_OFFSET_PX *
         (0.5 + 1.0 * (((hashId(ev.id) >>> 9) % 100) / 100)),
       curOffX: 0,
+      vSlot: 0.5,
       cardW,
       cardH,
       baseScreenScale: cardH / THUMB_H,
@@ -770,8 +777,27 @@ export class YearScene implements Scene {
   private laneJitter(n: Node): number {
     const side = n.lane ? n.lane.side : 1
     const frac = ((n.hash >>> 16) % 1000) / 1000 // 0..1
-    const maxIn = this.lanesN <= 1 ? 48 : 14
-    return -side * frac * maxIn // |y| = base − frac·maxIn (dichter bij de as)
+    return -side * frac * 14 // beperkte jitter naar de as (alleen bij >1 lane)
+  }
+
+  /** Verdeel de getoonde kaarten van één kant GELIJKMATIG over de hoogte (slot 0..1),
+   * in hash-geschudde volgorde (niet monotoon met datum), zodat ze de ruimte vullen en
+   * niet op één lijn staan. Horizontaal zijn ze al gescheiden ⇒ vrije y is veilig. */
+  private assignVSlots(sideCards: Node[]): void {
+    const laned = sideCards.filter((n) => n.lane)
+    laned.sort((a, b) => ((a.hash >>> 3) & 0xffff) - ((b.hash >>> 3) & 0xffff))
+    const k = laned.length
+    laned.forEach((n, j) => (n.vSlot = k <= 1 ? 0.5 : j / (k - 1)))
+  }
+
+  /** Scherm-y (t.o.v. de as) waar een kaart naartoe animeert. Bij MEER lanes: de
+   * lane-y + een kleine jitter. Bij ÉÉN lane: de kaart-afstand tot de as volgens z'n
+   * verdeelde slot (vMin..vMax) — zo vullen de kaarten de hoogte i.p.v. één lijn. */
+  private cardTargetY(n: Node): number {
+    const lane = n.lane!
+    if (this.lanesN > 1) return this.laneCenterY(lane) + this.laneJitter(n)
+    const max = lane.side < 0 ? this.vMaxTop : this.vMaxBottom
+    return lane.side * (this.vMin + n.vSlot * (max - this.vMin))
   }
 
   /** Kaart-layout: horizontale offset (offX t.o.v. de datum) + lane per kaart. Doel: een
@@ -786,6 +812,14 @@ export class YearScene implements Scene {
     const halfW = vpW / 2
     const N = this.lanesPerSide(vpH)
     this.lanesN = N
+    // Verticale spreiding (bij één lane): verdeel de kaarten over de VOLLE beschikbare
+    // hoogte i.p.v. een smalle band bij de as. vMax houdt rekening met de kaarthoogte,
+    // het memory-label en (bovenaan) de jaar-titel-ruimte. (Vóór de rechte-leader-tak
+    // berekend zodat cardTargetY in beide modi geldige grenzen heeft.)
+    const V_EDGE = CARD_H_MAX / 2 + 42 + 12 // kaart-half + label + marge
+    this.vMin = 118
+    this.vMaxTop = Math.max(this.vMin + 70, vpH / 2 - this.titleInset - V_EDGE)
+    this.vMaxBottom = Math.max(this.vMin + 70, vpH / 2 - V_EDGE)
     if (!this.curvedLeaders) {
       // Rechte leaders: geen horizontale offset — alleen lanes op datumvolgorde.
       for (const side of [-1, 1] as const) {
@@ -807,13 +841,14 @@ export class YearScene implements Scene {
           n.lane = level === -1 ? null : { side, level }
           if (level !== -1) laneRight[level] = dx + half
         }
+        if (N === 1) this.assignVSlots(cards)
       }
       return
     }
     // Hoe ver een kaart max van z'n datum mag afwijken (scherm-px). Ruim, zodat een
     // cluster zich eerst breed in de vrije ruimte verspreidt; daarboven een lane hoger,
     // anders een stip.
-    const MAX_OFFSET = Math.min(vpW * 0.34, 380)
+    const MAX_OFFSET = Math.min(vpW * 0.38, 440)
     for (const side of [-1, 1] as const) {
       const cards = this.cardNodes
         .filter((n) => n.prefSide === side)
@@ -826,7 +861,7 @@ export class YearScene implements Scene {
         // Dit geeft de losse spreiding als er ruimte is; bij drukte neemt de overlap-
         // push het over (en houdt de datumvolgorde per lane aan).
         const dir = (n.hash >>> 8) & 1 ? 1 : -1
-        const drift = dir * CARD_OFFSET_PX * (0.6 + 1.1 * (((n.hash >>> 9) % 100) / 100))
+        const drift = dir * CARD_OFFSET_PX * (0.85 + 1.5 * (((n.hash >>> 9) % 100) / 100))
         const want = desired + drift
         // Lane: begin bij een hash-lane (hoogte-variatie bij >1 lane), pak de eerste die
         // past. Kaarten komen in datumvolgorde binnen ⇒ push per lane = order-preserving.
@@ -851,6 +886,7 @@ export class YearScene implements Scene {
         n.lane = { side, level }
         n.offX = x - desired
       }
+      if (N === 1) this.assignVSlots(cards)
     }
   }
 
@@ -1168,7 +1204,7 @@ export class YearScene implements Scene {
       // anders stip/overflow (appear→0) op de as. Eerste frame snapt (primed).
       const hasLane = !!n.lane
       const targetAppear = hasLane ? 1 : 0
-      const targetY = hasLane ? this.laneCenterY(n.lane!) + this.laneJitter(n) : 0
+      const targetY = hasLane ? this.cardTargetY(n) : 0
       if (!this.primed) {
         n.appear = targetAppear
         n.curY = targetY
