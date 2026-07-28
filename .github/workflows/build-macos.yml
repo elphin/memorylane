@@ -1,0 +1,53 @@
+name: Build macOS
+
+# Bouwt een universal (Intel + Apple Silicon) .dmg van MemoryLane in de cloud,
+# zodat er geen fysieke Mac nodig is om te bouwen. Draai handmatig via de
+# "Run workflow"-knop, of automatisch bij het pushen van een `v*`-tag.
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+# Voorkom dubbele parallelle builds (bijv. tag-push + handmatige run tegelijk).
+concurrency:
+  group: build-macos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust (universal targets)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      # Universal build: bundelt beide architecturen in één .dmg. Ongesigneerd —
+      # voor persoonlijk gebruik open je 'm op de Mac met rechtsklik → Openen.
+      - name: Build universal .dmg
+        run: npm run tauri build -- --target universal-apple-darwin
+
+      - name: Upload .dmg artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MemoryLane-macos-universal-dmg
+          path: src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+          if-no-files-found: error
