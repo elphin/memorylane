@@ -449,6 +449,8 @@ export function AppShell() {
     if (patch.squarePhotos !== undefined && levelRef.current === 'event' && currentEventRef.current) {
       void enterEventRef.current(currentEventRef.current)
     }
+    // Kijk-modus: het notitie-sleep-hoekje hoort weg zolang bewerken uit staat.
+    if (patch.viewMode !== undefined) sceneRef.current?.setEditable?.(!next.viewMode)
   }
 
   // Open de thema-kiezer voor het huidige jaar (L1) of event (L2). Synthetische
@@ -1038,6 +1040,7 @@ export function AppShell() {
           settingsRef.current.squarePhotos,
         )
         sceneRef.current = scene
+        scene.setEditable(!settingsRef.current.viewMode)
         setGridSortMode('date') // nieuwe scene start op datum-sortering
         // Open in de onthouden weergave van dit event (vóór de reveal, zodat de
         // camera-fit meteen klopt); valt terug op de globale standaard.
@@ -3291,12 +3294,13 @@ function SettingsPanel({
                   ],
                 },
                 {
-                  title: 'Memory-canvas (eigen layout)',
+                  title: 'Memory-canvas',
                   items: [
-                    { k: ['Shift', '+', 'Slepen'], d: 'Foto/notitie schalen (bij een notitie schaalt de tekst mee)' },
-                    { k: ['Alt', '+', 'Slepen'], d: 'Foto roteren' },
+                    { k: ['Hoekje slepen'], d: 'Notitie: box groter/kleiner (werkt in elke weergave)' },
                     { k: ['Alt', '+', 'Slepen'], d: 'Notitie: box groter/kleiner (tekst herloopt, font gelijk)' },
-                    { k: ['Alt', '+', 'Klik'], d: 'Notitie: passend maken (box precies om alle tekst)' },
+                    { k: ['Alt', '+', 'Klik'], d: 'Notitie: terug naar automatisch passend om de tekst' },
+                    { k: ['Shift', '+', 'Slepen'], d: 'Foto/notitie schalen (bij een notitie schaalt de tekst mee) — eigen layout' },
+                    { k: ['Alt', '+', 'Slepen'], d: 'Foto roteren — alleen in de eigen layout' },
                     { k: ['Ctrl'], d: '(ingedrukt) gouden rand op de memory-omslag tonen' },
                     { k: ['Ctrl', '+', 'Shift'], d: '(ingedrukt) blauwe rand op de vaste jaar-cover tonen' },
                     { k: ['Ctrl', '+', 'Klik'], d: 'Foto als memory-omslag (featured)' },

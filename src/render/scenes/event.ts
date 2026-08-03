@@ -3,7 +3,7 @@
 // `_canvas.json` (indien aanwezig) of een auto-grid. Slepen persisteert via
 // de backend (write-through naar `_canvas.json`).
 
-import { Container, Graphics, Sprite, Text, Texture } from 'pixi.js'
+import { CanvasTextMetrics, Container, Graphics, Sprite, Text, Texture } from 'pixi.js'
 import type { Backend, CanvasLayoutInput, EventDetail, Item } from '../../lib/backend'
 import { resolveFrameStyle, resolveTheme } from '../../theme/resolve'
 import type { FrameStyle, ResolvedTheme } from '../../theme/tokens'
@@ -25,6 +25,13 @@ const PHOTO = 200
 const BORDER = 8
 const TEXT_W = 240
 const TEXT_H = 150
+// Plafond voor de "passend"-hoogte (automatisch én handmatig): een extreem lange
+// notitie mag het canvas niet opblazen. Daarboven clipt de tekst weer.
+const TEXT_H_MAX = TEXT_H * 6
+// Grootte (canvas-eenheden) van het sleep-hoekje rechtsonder op een notitie, en de
+// royalere zone waarbinnen een pointerdown als "hoekje pakken" telt.
+const GRIP = 12
+const GRIP_HIT = 22
 const CELL = 260
 
 interface Node {
@@ -46,6 +53,8 @@ interface Node {
   textBg: Graphics | null
   textEl: Text | null
   textClip: Graphics | null
+  /** Sleep-hoekje rechtsonder (alleen notities), zichtbaar bij hover. */
+  resizeGrip: Graphics | null
   x: number
   y: number
   // Doel-positie/-rotatie; `update()` lerpt de node hier vloeiend naartoe (voor
@@ -70,10 +79,11 @@ interface Node {
   key: string
   loaded: boolean
   tier: number // huidige geladen bron-resolutie (256/1024/2048) — LOD
-  // Layout-eigenschappen uit `_canvas.json` die deze fase (nog) niet visueel
-  // toegepast worden maar WEL behouden moeten blijven bij het terugschrijven —
-  // anders wist de eerste drag bestaande curatie (schaal/rotatie/afmeting).
+  // Curatie-eigenschappen uit `_canvas.json`. `scale`, `width` en `height` worden
+  // visueel toegepast; `textScale` (nog) niet, maar moet wél behouden blijven bij het
+  // terugschrijven — anders wist de eerste drag bestaande curatie.
   scale: number
+  /** Ongebruikt bij het tekenen (de container leest `trot`); alleen historisch. */
   rotation: number
   textScale?: number
   width?: number
@@ -102,6 +112,10 @@ export class EventScene implements Scene {
   // Toetsenbord-navigatie: item.id van het gefocuste item (consistent met hitTest
   // en enterFocus), of null in muis-modus.
   private kbFocusId: string | null = null
+  // Kijk-modus: bewerken staat dan volledig uit (de sleep-dispatcher geeft `null`),
+  // dus het sleep-hoekje van een notitie hoort er ook niet te zijn — een affordance
+  // die niets doet is erger dan geen affordance.
+  private editable = true
 
   constructor(
     private engine: RenderEngine,
@@ -136,11 +150,13 @@ export class EventScene implements Scene {
       let textEl: Text | null = null
       let textClip: Graphics | null = null
       let capEl: Text | null = null
+      let resizeGrip: Graphics | null = null
       if (isText) {
         const tc = this.buildTextCard(container, item)
         textBg = tc.bg
         textEl = tc.text
         textClip = tc.clip
+        resizeGrip = this.buildResizeGrip(container)
       } else {
         const card = this.buildPhotoCard(container, frameStyle)
         sprite = card.sprite
@@ -207,6 +223,7 @@ export class EventScene implements Scene {
         textBg,
         textEl,
         textClip,
+        resizeGrip,
         x,
         y,
         tx: x,
@@ -232,10 +249,19 @@ export class EventScene implements Scene {
         height: saved?.height,
       }
       this.nodes.push(node)
-      // Notitie: box op maat zetten (onthouden width/height of default) → juiste
-      // hittest-halfmaten (breedte×hoogte i.p.v. vierkant) + herlopen tekst.
+      // Notitie: box op maat zetten → juiste hittest-halfmaten (breedte×hoogte i.p.v.
+      // vierkant) + herlopen tekst. Is er geen HANDMATIG gekozen hoogte, dan maken we
+      // 'm automatisch passend om de hele tekst, zodat je een notitie kunt lezen
+      // zonder 'm te openen. Die automatische maat blijft efemeer (persistSize =
+      // false): hij wordt elke keer opnieuw berekend en past zich dus aan als de
+      // tekst wijzigt, en hij belandt nooit ongevraagd in `_canvas.json`.
       if (isText) {
-        this.sizeTextCard(node, node.width ?? TEXT_W, node.height ?? TEXT_H)
+        if (node.height == null) {
+          this.sizeTextCard(node, node.width ?? TEXT_W, TEXT_H, false)
+          this.fitTextCardAuto(node)
+        } else {
+          this.sizeTextCard(node, node.width ?? TEXT_W, node.height)
+        }
       } else {
         // Foto: het kader per stijl tekenen (buildPhotoCard maakt alleen de lagen)
         // + de focus-ring voor kaderloze foto's.
@@ -245,8 +271,53 @@ export class EventScene implements Scene {
     })
 
     this.root.sortableChildren = true
+    // Geen opgeslagen indeling (nieuwe of net geïmporteerde memory)? Dan is de
+    // auto-grid hierboven een vast raster van CELL×CELL — en een automatisch passend
+    // gemaakte notitie is vaak hoger dan één cel, waardoor de tekst achter de tegel
+    // eronder zou verdwijnen. Gebruik in dat geval de formaat-bewuste packer, die
+    // rekening houdt met de werkelijke hoogte van elk item.
+    let packed = false
+    if (detail.canvas.length === 0 && this.nodes.length > 1) {
+      this.layoutGridPositions()
+      for (const n of this.nodes) {
+        n.x = n.tx
+        n.y = n.ty
+        n.baseX = n.tx
+        n.baseY = n.ty
+        n.baseZ = n.z
+        n.container.position.set(n.x, n.y)
+      }
+      packed = true
+    }
+    // Bestaande indeling: de notitie is nu mogelijk hoger dan toen jij 'm plaatste en
+    // kan een buur overlappen. De TEKST leesbaar houden weegt dan zwaarder dan de
+    // stapelvolgorde, dus zo'n notitie komt vooraan te staan. Alleen de render-z —
+    // de opgeslagen z-order (`baseZ`) blijft ongemoeid.
+    else this.raiseOverlappingNotes()
     engine.world.addChild(this.root)
-    this.fitCamera(cols, Math.max(1, Math.ceil(detail.items.length / cols)))
+    // Na de formaat-bewuste packer op de wérkelijke bounds fitten; anders volstaat de
+    // schatting op basis van het CELL-raster.
+    if (packed) this.refit()
+    else this.fitCamera(cols, Math.max(1, Math.ceil(detail.items.length / cols)))
+  }
+
+  /** Zet automatisch passend gemaakte notities die een buur overlappen vooraan, zodat
+   * de tekst leesbaar blijft. Rekent op de DOEL-posities (tx/ty), zodat het ook klopt
+   * tijdens een layout-animatie. Alleen de render-z; `baseZ` blijft ongemoeid. */
+  private raiseOverlappingNotes(): void {
+    for (const n of this.nodes) {
+      if (!n.textEl || n.height != null) continue // alleen de automatische maat
+      const overlaps = this.nodes.some(
+        (o) =>
+          o !== n &&
+          Math.abs(o.tx - n.tx) < o.halfW * o.scale + n.halfW * n.scale &&
+          Math.abs(o.ty - n.ty) < o.halfH * o.scale + n.halfH * n.scale,
+      )
+      // Alleen de RENDER-z ophogen, niet `n.z`: die wordt door `persistLayout` naar
+      // `baseZ` gesynchroniseerd en zou de bewust gekozen stapelvolgorde in
+      // `_canvas.json` overschrijven bij een willekeurige, ongerelateerde bewerking.
+      if (overlaps) n.container.zIndex = ++this.zTop
+    }
   }
 
   private buildPhotoCard(
@@ -405,6 +476,11 @@ export class EventScene implements Scene {
     ring.visible = false
     container.addChild(ring)
     return ring
+  }
+
+  /** Kijk-modus aan/uit: verbergt het notitie-sleep-hoekje (bewerken is dan uit). */
+  setEditable(on: boolean): void {
+    this.editable = on
   }
 
   /** Zet de uitgelichte foto (op ref) — de rand toont pas bij ingedrukte toets. */
@@ -725,6 +801,9 @@ export class EventScene implements Scene {
     // ná grid/scatter (`n.z = ++this.zTop`) een z ONDER de peers op (scatter
     // gebruikt z tot 999), waardoor de gesleepte kaart niet naar voren komt.
     for (const n of this.nodes) this.zTop = Math.max(this.zTop, n.z)
+    // De z-wissel hierboven wist een eerdere ophoging van een overlappende notitie —
+    // opnieuw bepalen op de nieuwe doel-posities.
+    this.raiseOverlappingNotes()
     if (snap) this.snapAll()
     this.refit()
   }
@@ -805,6 +884,7 @@ export class EventScene implements Scene {
       }
     }
     for (const n of this.nodes) this.zTop = Math.max(this.zTop, n.z)
+    this.raiseOverlappingNotes() // zie applyLayout
     if (snap) this.snapAll()
     this.refit()
     return { matched, total: this.nodes.length }
@@ -833,15 +913,15 @@ export class EventScene implements Scene {
       n.baseRot = n.trot
       n.baseZ = n.z
       // Snap de node meteen op zijn eindstand (geen naschommeling na het opslaan)
-      // en zorg dat persist (die n.x/n.y/n.rotation schrijft) de eindstand wegschrijft.
+      // (persistLayout schrijft de base-waarden, die hierboven al gelijkgetrokken zijn).
       n.x = n.tx
       n.y = n.ty
       n.container.position.set(n.x, n.y)
       n.container.rotation = n.trot
-      n.rotation = n.trot // zodat persist de (scatter-)rotatie meeschrijft
+      n.rotation = n.trot
     }
     this.mode = 'custom'
-    this.persist()
+    this.persistLayout()
   }
 
   /** Wereldgrenzen van alle kaarten op hun HUIDIGE positie (voor fit-to-view). */
@@ -877,6 +957,18 @@ export class EventScene implements Scene {
     )
   }
 
+  /** Na een notitie-resize: in de grid-stand is de skyline-packing gebaseerd op
+   * `halfH`, dus die moet opnieuw — anders overlapt de nu grotere notitie zijn buren.
+   * In grid/scatter onthouden we bovendien de gewijzigde opstelling per event
+   * (die leeft in localStorage, niet in de vault). */
+  private afterTextResize(): void {
+    // Bewust géén refit: dat is een harde camerasprong (`jumpCamera`) net nadat je de
+    // muisknop loslaat. De update-lerp animeert de buren netjes weg.
+    if (this.mode === 'grid') this.layoutGridPositions()
+    this.raiseOverlappingNotes()
+    if (this.mode !== 'custom') this.onViewChange?.(this.layoutState())
+  }
+
   /** Past de camera op de huidige node-bounds (na een layout-wissel). */
   private refit(): void {
     if (this.nodes.length === 0) return
@@ -903,15 +995,61 @@ export class EventScene implements Scene {
     )
   }
 
-  /** De ref (slug/id) van het item onder een wereldpunt, of null. */
-  refAt(worldX: number, worldY: number): string | null {
-    for (let i = this.nodes.length - 1; i >= 0; i--) {
-      const n = this.nodes[i]
-      if (n.sprite && Math.abs(worldX - n.x) <= n.halfW * n.scale && Math.abs(worldY - n.y) <= n.halfH * n.scale) {
-        return n.ref
-      }
+  /** De bovenste node onder een wereldpunt, of null. "Bovenste" = de hoogste
+   * render-z, niet de array-volgorde: sinds een automatisch passend gemaakte notitie
+   * naar voren gehaald kan worden, lopen die twee uiteen — en dan zou je klik het
+   * item ONDER de zichtbare notitie pakken. */
+  private topNodeAt(worldX: number, worldY: number, needSprite = false): Node | null {
+    let best: Node | null = null
+    for (const n of this.nodes) {
+      if (needSprite && !n.sprite) continue
+      // Op de WERKELIJK getekende maat toetsen (incl. de hover-boost ×1.05), niet op
+      // `n.scale`: het sleep-hoekje wordt vlak binnen de rand van de vergrote
+      // container getekend, dus met de ongeboostte box zou juist dat hoekje op een
+      // hoge notitie buiten de klikzone vallen.
+      const sc = this.effScale(n)
+      if (Math.abs(worldX - n.x) > n.halfW * sc) continue
+      if (Math.abs(worldY - n.y) > n.halfH * sc) continue
+      if (!best || n.container.zIndex >= best.container.zIndex) best = n
     }
-    return null
+    return best
+  }
+
+  /** De schaal waarop de node op dit moment getekend wordt (inclusief hover-boost);
+   * `update()` lerpt die naar `n.scale`. De vangnetten dekken alleen een 0-schaal. */
+  private effScale(n: Node): number {
+    return n.container.scale.x || n.scale || 1
+  }
+
+  /** De ref (slug/id) van de foto onder een wereldpunt, of null. */
+  refAt(worldX: number, worldY: number): string | null {
+    return this.topNodeAt(worldX, worldY, true)?.ref ?? null
+  }
+
+  /** Sleep-hoekje rechtsonder op een notitie: maakt de box-resize ontdekbaar zonder
+   * dat je de Alt-sneltoets hoeft te kennen. Verschijnt bij hover. */
+  private buildResizeGrip(container: Container): Graphics {
+    const g = new Graphics()
+    g.visible = false
+    container.addChild(g)
+    return g
+  }
+
+  /** (Her)teken het sleep-hoekje in de rechterbenedenhoek van de huidige box. */
+  private drawResizeGrip(n: Node): void {
+    if (!n.resizeGrip) return
+    // Op halfW/halfH gebaseerd, niet op `width`/`height`: die zijn bij een automatisch
+    // passende notitie bewust leeg (zie sizeTextCard).
+    const x = n.halfW - 4
+    const y = n.halfH - 4
+    n.resizeGrip.clear()
+    // Drie schuine streepjes — de universele "hier kun je slepen"-hoek.
+    for (const d of [0, 5, 10]) {
+      n.resizeGrip
+        .moveTo(x - GRIP - 1 + d, y)
+        .lineTo(x, y - GRIP - 1 + d)
+        .stroke({ width: 1.5, color: this.T.colors.paperInk, alpha: 0.45 })
+    }
   }
 
   private buildTextCard(container: Container, item: Item): { bg: Graphics; text: Text; clip: Graphics } {
@@ -934,9 +1072,9 @@ export class EventScene implements Scene {
       },
     })
     text.resolution = 2
-    // Boven-uitgelijnd + geklipt op het kader: lange tekst loopt niet buiten de
-    // box (met Alt-slepen maak je de box groter → meer tekst zichtbaar; Alt-tik =
-    // passend om alle tekst te tonen).
+    // Boven-uitgelijnd + geklipt op het kader: lange tekst loopt niet buiten de box.
+    // De box opent automatisch passend om de tekst; met Alt-slepen of het hoekje
+    // kies je zelf een maat, en een Alt-tik zet 'm terug op automatisch.
     text.anchor.set(0.5, 0)
     text.position.set(0, -TEXT_H / 2 + 14)
     container.addChild(text)
@@ -949,10 +1087,19 @@ export class EventScene implements Scene {
 
   /** Herteken de notitie-box op maat `w`×`h` (font blijft gelijk; tekst herloopt
    * op de nieuwe breedte en wordt op de nieuwe hoogte geklipt). Werkt de hittest-
-   * halfmaten bij. */
-  private sizeTextCard(n: Node, w: number, h: number): void {
-    n.width = w
-    n.height = h
+   * halfmaten bij.
+   *
+   * `persistSize`: legt de maat vast in `n.width/n.height` en dus in `_canvas.json`.
+   * Alleen doen bij een HANDMATIGE resize. De automatische "passend"-maat blijft
+   * bewust efemeer (alleen `halfW/halfH` + de tekening): `persistLayout()` schrijft
+   * `width/height` van élke node, dus een auto-maat in `n.height` zou bij de
+   * eerstvolgende ongerelateerde actie (een foto verslepen) permanent vastgelegd
+   * worden — en dan past de notitie zich nooit meer aan gewijzigde tekst aan. */
+  private sizeTextCard(n: Node, w: number, h: number, persistSize = true): void {
+    if (persistSize) {
+      n.width = w
+      n.height = h
+    }
     n.halfW = w / 2
     n.halfH = h / 2
     if (n.textBg) {
@@ -970,18 +1117,27 @@ export class EventScene implements Scene {
       n.textEl.style.wordWrapWidth = w - 32
       n.textEl.position.set(0, -h / 2 + 14)
     }
+    this.drawResizeGrip(n) // hoekje volgt de nieuwe rechterbenedenhoek
     this.drawFocusRing(n) // box-maat veranderde → focus-ring mee hertekenen
   }
 
   /** "Passend": maak de box (op de huidige breedte) precies hoog genoeg voor alle
-   * tekst, zodat je een lang verhaal volledig ziet. */
-  private fitTextCard(n: Node): void {
+   * tekst, zodat je een lang verhaal volledig kunt lezen zonder de notitie te openen.
+   * Geklemd op `TEXT_H_MAX`, zodat één extreem lange notitie het canvas niet opblaast
+   * (daarboven clipt de tekst weer — dan open je 'm gewoon).
+   *
+   * Altijd EFEMEER: dit is de AUTOMATISCHE maat, die bij elke scene-opbouw opnieuw
+   * bepaald wordt en dus meebeweegt als de tekst verandert. Alleen een handmatige
+   * resize legt een maat vast in `_canvas.json` (zie `sizeTextCard`). */
+  private fitTextCardAuto(n: Node): void {
     if (!n.textEl) return
-    const w = n.width ?? TEXT_W
+    const w = n.width ?? n.halfW * 2
     n.textEl.style.wordWrapWidth = w - 32
-    const needed = n.textEl.height + 28 // volledige gewrapte teksthoogte + marge
-    this.sizeTextCard(n, w, Math.max(TEXT_H, needed))
-    this.persist()
+    // De tekst los meten i.p.v. via `n.textEl.height`: dat element heeft een
+    // clip-masker, dus een meting via de bounds is kwetsbaar voor de volgorde waarin
+    // masker en maat worden bijgewerkt.
+    const needed = CanvasTextMetrics.measureText(n.textEl.text, n.textEl.style).height + 28
+    this.sizeTextCard(n, w, Math.min(TEXT_H_MAX, Math.max(TEXT_H, needed)), false)
   }
 
   private fitCamera(cols: number, rows: number): void {
@@ -996,139 +1152,230 @@ export class EventScene implements Scene {
     )
   }
 
+  /** Wereldpunt naar de LOKALE, ongeschaalde en ongeroteerde coördinaten van een node.
+   * Nodig omdat kaarten scheef kunnen staan (scatter, en na "Opslaan als Eigen" ook in
+   * de eigen layout): een asgebonden test zou het hoekje dan tientallen eenheden
+   * misplaatsen. */
+  private localPoint(n: Node, wx: number, wy: number): { lx: number; ly: number } {
+    const r = n.container.rotation
+    const c = Math.cos(r)
+    const s = Math.sin(r)
+    const dx = wx - n.x
+    const dy = wy - n.y
+    // De WERKELIJKE containerschaal, niet `n.scale`: `update()` telt er een
+    // hover-boost (×1.05) bij op, en het hoekje is per definitie alleen pakbaar
+    // terwijl je hovert — met `n.scale` zou de hitzone er structureel naast liggen.
+    const sc = this.effScale(n)
+    return { lx: (dx * c + dy * s) / sc, ly: (-dx * s + dy * c) / sc }
+  }
+
+  /** De box-maat die hoort bij een cursorpositie (lokale coördinaten), geklemd.
+   * De grenzen zijn HALFmaten (de cursor geeft de afstand tot het midden), dus het
+   * hoogte-plafond is `TEXT_H_MAX / 2` — hetzelfde plafond als de automatische maat. */
+  private textBoxFor(lx: number, ly: number): { w: number; h: number } {
+    return {
+      w: Math.min(TEXT_W * 4, Math.max(TEXT_W * 0.5, Math.abs(lx))) * 2,
+      h: Math.min(TEXT_H_MAX / 2, Math.max(TEXT_H * 0.5, Math.abs(ly))) * 2,
+    }
+  }
+
+  /** Pointerdown op het sleep-hoekje van een notitie → box hergroten. Geeft null als
+   * het hoekje niet zichtbaar is of het punt er niet op ligt. Dezelfde resize-logica
+   * als Alt-slepen, alleen ankert deze op de hoek die je vastpakt. */
+  private beginGripResize(n: Node, wx: number, wy: number): DragHandle | null {
+    // Alleen pakken wat je ook ziet: anders zit er op touch (geen hover) een
+    // onzichtbare dode zone in elke notitie waar slepen ineens hergroot.
+    if (!n.resizeGrip?.visible) return null
+    const { lx, ly } = this.localPoint(n, wx, wy)
+    if (Math.abs(lx - n.halfW) > GRIP_HIT || Math.abs(ly - n.halfH) > GRIP_HIT) return null
+    // Greep-offset onthouden zodat de box niet naar de cursor "springt" bij het pakken.
+    const gripDX = lx - n.halfW
+    const gripDY = ly - n.halfH
+    this.bringToFront(n)
+    let changed = false
+    const moveTol = 6 / this.engine.camera.zoom // world-drempel ~ 6 scherm-px
+    return {
+      moveTo: (mx, my) => {
+        // Een klik met wat jitter mag de automatische maat niet vastzetten.
+        if (!changed && Math.hypot(mx - wx, my - wy) < moveTol) return
+        const p = this.localPoint(n, mx, my)
+        const box = this.textBoxFor(p.lx - gripDX, p.ly - gripDY)
+        this.sizeTextCard(n, box.w, box.h)
+        changed = true
+      },
+      end: () => {
+        if (!changed) return // tik op de hoek = niets (geen ongewilde wijziging)
+        this.persistLayout()
+        this.afterTextResize()
+      },
+    }
+  }
+
+  /** Node naar voren halen via de bestaande z-ladder (niet met een magische offset,
+   * die `zTop` niet kent en een layout-wissel niet overleeft). `baseZ` — de
+   * opgeslagen stapelvolgorde — blijft ongemoeid. */
+  private bringToFront(n: Node): void {
+    n.z = ++this.zTop
+    n.container.zIndex = n.z
+  }
+
   beginDrag(wx: number, wy: number): DragHandle | null {
     // Slepen mag in elke stand. In 'custom' persisteert het meteen; in grid/scatter
     // verschuif je alleen visueel (niet weggeschreven) — met "Opslaan als Eigen"
     // leg je die opstelling vast als je eigen layout.
-    // Bovenste item onder het punt.
-    for (let i = this.nodes.length - 1; i >= 0; i--) {
-      const n = this.nodes[i]
-      if (Math.abs(wx - n.x) <= n.halfW * n.scale && Math.abs(wy - n.y) <= n.halfH * n.scale) {
-        const offX = n.x - wx
-        const offY = n.y - wy
-        const startX = n.x
-        const startY = n.y
-        // Naar voren halen.
-        n.z = ++this.zTop
-        n.container.zIndex = n.z
-        let moved = false
-        return {
-          moveTo: (mx, my) => {
-            n.x = mx + offX
-            n.y = my + offY
-            // Doel = huidige positie, zodat de update-lerp de sleep niet tegenwerkt.
-            n.tx = n.x
-            n.ty = n.y
-            n.container.position.set(n.x, n.y)
-            // Pas als echt verplaatst telt het als een drag → write. De drempel
-            // is zoom-geschaald zodat hij overeenkomt met de 6px-scherm-tapdrempel
-            // in de gesture-controller (world = screen / zoom). Anders zou een tik
-            // met lichte jitter bij uitgezoomd L2 zowel persist ALS onTap (→L3)
-            // triggeren én het item ongewild verschuiven.
-            const dragPx = 6 / this.engine.camera.zoom
-            if (!moved && Math.hypot(n.x - startX, n.y - startY) > dragPx) moved = true
-          },
-          end: () => {
-            // Alleen in de eigen layout leggen we de sleep meteen vast (base +
-            // _canvas.json). In grid/scatter verschuift het item alleen visueel;
-            // "Opslaan als Eigen" legt die opstelling desgewenst vast.
-            if (moved && this.mode === 'custom') {
-              n.baseX = n.x
-              n.baseY = n.y
-              n.baseZ = n.z
-              this.persist()
-            } else if (moved) {
-              // Grid/scatter gaat niet naar de vault, maar de per-event view
-              // onthouden we wél (een gesleepte scatter blijft zo bewaard).
-              this.onViewChange?.(this.layoutState())
-            }
-          },
+    // Bovenste item onder het punt (op render-z, zie topNodeAt).
+    const n = this.topNodeAt(wx, wy)
+    if (!n) return null
+    // Sleep-hoekje rechtsonder op een notitie: pakken = box hergroten i.p.v.
+    // verplaatsen. Zo is de functie ook zonder de Alt-sneltoets te vinden.
+    const grip = this.beginGripResize(n, wx, wy)
+    if (grip) return grip
+    const offX = n.x - wx
+    const offY = n.y - wy
+    const startX = n.x
+    const startY = n.y
+    this.bringToFront(n)
+    let moved = false
+    return {
+      moveTo: (mx, my) => {
+        n.x = mx + offX
+        n.y = my + offY
+        // Doel = huidige positie, zodat de update-lerp de sleep niet tegenwerkt.
+        n.tx = n.x
+        n.ty = n.y
+        n.container.position.set(n.x, n.y)
+        // Pas als echt verplaatst telt het als een drag → write. De drempel
+        // is zoom-geschaald zodat hij overeenkomt met de 6px-scherm-tapdrempel
+        // in de gesture-controller (world = screen / zoom). Anders zou een tik
+        // met lichte jitter bij uitgezoomd L2 zowel persist ALS onTap (→L3)
+        // triggeren én het item ongewild verschuiven.
+        const dragPx = 6 / this.engine.camera.zoom
+        if (!moved && Math.hypot(n.x - startX, n.y - startY) > dragPx) moved = true
+      },
+      end: () => {
+        // Alleen in de eigen layout leggen we de sleep meteen vast (base +
+        // _canvas.json). In grid/scatter verschuift het item alleen visueel;
+        // "Opslaan als Eigen" legt die opstelling desgewenst vast.
+        if (moved && this.mode === 'custom') {
+          n.baseX = n.x
+          n.baseY = n.y
+          n.baseZ = n.z
+          this.persistLayout()
+        } else if (moved) {
+          // Grid/scatter gaat niet naar de vault, maar de per-event view
+          // onthouden we wél (een gesleepte scatter blijft zo bewaard).
+          this.onViewChange?.(this.layoutState())
         }
-      }
+      },
     }
-    return null
   }
 
-  /** Roteren (Alt) of schalen (Shift) van de foto onder het punt. Alleen in de
-   * eigen layout ('custom'), zodat het naar `_canvas.json` gepersisteerd kan worden.
-   * Roteren volgt de muishoek rond het midden; schalen de afstand tot het midden. */
+  /** Roteren (Alt) of schalen (Shift) van het item onder het punt.
+   *
+   * Een NOTITIE mag in élke weergave hergroot worden: de box-maat is presentatie van
+   * het item zelf, geen layout — en `persistLayout` schrijft de eigen indeling terug,
+   * dus grid/scatter kunnen die niet meer stukmaken. Foto's roteren/schalen blijft
+   * beperkt tot de eigen layout ('custom'), want dát is layout. */
   beginTransform(wx: number, wy: number, kind: 'rotate' | 'scale'): DragHandle | null {
-    if (this.mode !== 'custom') return null
-    for (let i = this.nodes.length - 1; i >= 0; i--) {
-      const n = this.nodes[i]
-      const hw = n.halfW * n.scale
-      const hh = n.halfH * n.scale
-      if (Math.abs(wx - n.x) > hw || Math.abs(wy - n.y) > hh) continue
-      // Naar voren halen.
-      n.z = ++this.zTop
-      n.container.zIndex = n.z
-      let changed = false
-      // Notitie (tekst/link): Alt = box-resize i.p.v. roteren. Slepen maakt de box
-      // groter/kleiner (font gelijk, tekst herloopt); een Alt-tík (geen beweging)
-      // maakt de box passend om álle tekst te tonen.
-      const isTextNode = n.item.itemType === 'text' || n.item.itemType === 'link'
-      if (kind === 'rotate' && isTextNode) {
-        const moveTol = 6 / this.engine.camera.zoom // world-drempel ~ 6 scherm-px
-        return {
-          moveTo: (mx, my) => {
-            if (!changed && Math.hypot(mx - wx, my - wy) < moveTol) return // tik → geen resize
-            // De box-hoek volgt de cursor: halve maten = afstand tot het midden,
-            // teruggerekend naar lokale (ongeschaalde) coördinaten (÷ n.scale).
-            const hw = Math.min(TEXT_W * 4, Math.max(TEXT_W * 0.5, Math.abs(mx - n.x) / n.scale))
-            const hh = Math.min(TEXT_H * 6, Math.max(TEXT_H * 0.5, Math.abs(my - n.y) / n.scale))
-            this.sizeTextCard(n, hw * 2, hh * 2)
-            changed = true
-          },
-          end: () => {
-            if (changed) this.persist()
-            else this.fitTextCard(n) // Alt-tik = passend
-          },
-        }
-      }
-      if (kind === 'rotate') {
-        const startAngle = Math.atan2(wy - n.y, wx - n.x)
-        const startRot = n.trot
-        return {
-          moveTo: (mx, my) => {
-            n.trot = startRot + (Math.atan2(my - n.y, mx - n.x) - startAngle)
-            n.rotation = n.trot
-            n.container.rotation = n.trot // meteen responsief (geen lerp-vertraging)
-            changed = true
-          },
-          end: () => {
-            if (!changed) return
-            n.baseRot = n.trot
-            this.persist()
-          },
-        }
-      }
-      // Schalen: factor = huidige afstand / startafstand tot het midden.
-      const startDist = Math.max(1, Math.hypot(wx - n.x, wy - n.y))
-      const startScale = n.scale
+    const n = this.topNodeAt(wx, wy)
+    if (!n) return null
+    const isTextNode = n.item.itemType === 'text' || n.item.itemType === 'link'
+    // Buiten de eigen layout is alleen de notitie-box-resize (Alt) toegestaan.
+    // Schalen (Shift) blijft custom-only: dat verandert `n.scale`, waar de
+    // grid-packing op rekent, en hoort bij de layout.
+    if (this.mode !== 'custom' && !(isTextNode && kind === 'rotate')) return null
+    this.bringToFront(n)
+    let changed = false
+    // Notitie (tekst/link): Alt = box-resize i.p.v. roteren. Slepen maakt de box
+    // groter/kleiner (font gelijk, tekst herloopt); een Alt-tík (geen beweging) zet
+    // 'm terug op AUTOMATISCH passend — dat is de zinvolle tegenhanger nu notities
+    // standaard al passend openen.
+    if (kind === 'rotate' && isTextNode) {
+      const moveTol = 6 / this.engine.camera.zoom // world-drempel ~ 6 scherm-px
       return {
         moveTo: (mx, my) => {
-          const f = Math.hypot(mx - n.x, my - n.y) / startDist
-          n.scale = Math.min(4, Math.max(0.3, startScale * f))
+          if (!changed && Math.hypot(mx - wx, my - wy) < moveTol) return // tik → geen resize
+          // De box-hoek volgt de cursor: halve maten = afstand tot het midden in
+          // LOKALE coördinaten (dus ook correct als de kaart scheef staat).
+          const p = this.localPoint(n, mx, my)
+          const box = this.textBoxFor(p.lx, p.ly)
+          this.sizeTextCard(n, box.w, box.h)
           changed = true
         },
         end: () => {
-          if (changed) this.persist()
+          if (!changed) {
+            // Terug naar automatisch: de opgeslagen maat wissen en opnieuw passend
+            // maken. `persistLayout` schrijft `width/height` dan als `undefined`
+            // weg, dus de override verdwijnt echt uit `_canvas.json`.
+            n.width = undefined
+            n.height = undefined
+            this.sizeTextCard(n, TEXT_W, TEXT_H, false)
+            this.fitTextCardAuto(n)
+          }
+          this.persistLayout()
+          this.afterTextResize()
         },
       }
     }
-    return null
+    if (kind === 'rotate') {
+      const startAngle = Math.atan2(wy - n.y, wx - n.x)
+      const startRot = n.trot
+      return {
+        moveTo: (mx, my) => {
+          n.trot = startRot + (Math.atan2(my - n.y, mx - n.x) - startAngle)
+          n.rotation = n.trot
+          n.container.rotation = n.trot // meteen responsief (geen lerp-vertraging)
+          changed = true
+        },
+        end: () => {
+          if (!changed) return
+          n.baseRot = n.trot
+          this.persistLayout()
+        },
+      }
+    }
+    // Schalen: factor = huidige afstand / startafstand tot het midden.
+    const startDist = Math.max(1, Math.hypot(wx - n.x, wy - n.y))
+    const startScale = n.scale
+    return {
+      moveTo: (mx, my) => {
+        const f = Math.hypot(mx - n.x, my - n.y) / startDist
+        n.scale = Math.min(4, Math.max(0.3, startScale * f))
+        changed = true
+      },
+      end: () => {
+        if (changed) this.persistLayout()
+      },
+    }
   }
 
-  private persist(): void {
-    // Behoud bestaande layout-eigenschappen (scale/rotation/textScale/width/
-    // height) uit `_canvas.json`; drag wijzigt alleen positie en z-order.
+  /** Schrijf de layout naar `_canvas.json`.
+   *
+   * Positie/rotatie/z komen uit de BASE-waarden — de eigen ("custom") opstelling.
+   * In de custom-stand zijn die gelijk aan de huidige waarden (elke commit werkt ze
+   * eerst bij), maar in grid/scatter staan de nodes op een tijdelijke, herschikte
+   * plek: die mag nooit de vault in, anders wist het aanpassen van een notitie in
+   * grid-stand de hele eigen indeling. De maat-eigenschappen (schaal, notitie-box)
+   * zijn wél presentatie van het item zelf en gaan altijd mee. */
+  private persistLayout(): void {
+    // In de eigen layout is de zichtbare stand per definitie de eigen stand: trek de
+    // base daarmee gelijk vóór het schrijven. Zonder dit zou een naar-voren-gehaalde
+    // of net geroteerde kaart er anders uitzien dan wat er is opgeslagen.
+    if (this.mode === 'custom') {
+      for (const n of this.nodes) {
+        n.baseX = n.tx
+        n.baseY = n.ty
+        n.baseRot = n.trot
+        n.baseZ = n.z
+      }
+    }
     const items: CanvasLayoutInput[] = this.nodes.map((n) => ({
       itemRef: n.ref,
-      x: n.x,
-      y: n.y,
+      x: n.baseX,
+      y: n.baseY,
       scale: n.scale,
-      rotation: n.rotation,
-      zIndex: n.z,
+      rotation: n.baseRot,
+      zIndex: n.baseZ,
       textScale: n.textScale,
       width: n.width,
       height: n.height,
@@ -1164,6 +1411,11 @@ export class EventScene implements Scene {
         n.focusAlpha += (target - n.focusAlpha) * kf
         n.focusRing.alpha = n.focusAlpha
         n.focusRing.visible = n.focusAlpha > 0.01
+      }
+      // Sleep-hoekje alleen tonen op de notitie waar je boven hangt (of die
+      // toetsenbord-focus heeft) — anders is het canvas vol met hoekjes.
+      if (n.resizeGrip) {
+        n.resizeGrip.visible = this.editable && (n.item.id === this.hoveredId || focused)
       }
     }
     for (const n of this.nodes) {
@@ -1254,13 +1506,7 @@ export class EventScene implements Scene {
   }
 
   hitTest(worldX: number, worldY: number): string | null {
-    for (let i = this.nodes.length - 1; i >= 0; i--) {
-      const n = this.nodes[i]
-      if (Math.abs(worldX - n.x) <= n.halfW * n.scale && Math.abs(worldY - n.y) <= n.halfH * n.scale) {
-        return n.item.id
-      }
-    }
-    return null
+    return this.topNodeAt(worldX, worldY)?.item.id ?? null
   }
 
   destroy(): void {

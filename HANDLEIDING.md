@@ -64,6 +64,12 @@ het terug naar muis-modus.
   of **foto's** toe, en bewerk je een memory.
 - In een memory-canvas orden je de foto's vrij: **grid**, **scatter** (speels
   kriskras) of je **eigen** indeling. Sleep foto's; met Alt/Shift roteer/schaal je.
+- Een **notitie** opent automatisch groot genoeg om de hele tekst te lezen — je
+  hoeft 'm dus niet aan te klikken. (Bij een heel lang verhaal stopt dat bij een
+  maximumhoogte; die notitie open je gewoon.) Wil je 'm anders: pak het **hoekje rechtsonder**
+  (verschijnt zodra je erboven hangt) of houd **Alt** ingedrukt en sleep. Een
+  **Alt+klik** zet 'm terug op automatisch passend. Dit werkt in élke weergave,
+  ook in grid en scatter.
 - Een foto uitlichten als omslag van de memory: **Ctrl+klik**. Als vaste
   jaar-omslag: **Ctrl+Shift+klik**.
 
