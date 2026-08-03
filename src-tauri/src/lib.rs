@@ -164,6 +164,7 @@ pub fn run() {
             commands::set_year_size_factor,
             commands::set_year_theme,
             commands::set_event_theme,
+            commands::set_event_tags,
             commands::delete_item,
             commands::update_item,
             commands::get_item_metadata,

@@ -52,6 +52,8 @@ export interface EventSummary {
   synthetic?: boolean
   /** Thema-keuze van dit event. Afwezig = erven van het jaar. */
   theme?: ThemeChoice
+  /** Trefwoorden van deze memory — waar de jaar-tijdlijn op filtert. */
+  tags?: string[]
 }
 
 export interface Year {
@@ -135,6 +137,8 @@ export interface EventInfo {
   synthetic?: boolean
   /** Thema-keuze van dit event. Afwezig = erven van het jaar. */
   theme?: ThemeChoice
+  /** Trefwoorden van deze memory. Afwezig = geen. */
+  tags?: string[]
 }
 
 export interface EventDetail {
@@ -265,6 +269,8 @@ export interface Backend {
   setEventSize(eventId: string, size: number | null): Promise<void>
   /** Zet of wist de "in aanbouw"-vlag van een event. */
   setEventUnderConstruction(eventId: string, flag: boolean): Promise<void>
+  /** Zet de trefwoorden van een memory (lege lijst = geen tags). */
+  setEventTags(eventId: string, tags: string[]): Promise<void>
   createEvent(
     yearId: string,
     title: string,
@@ -502,6 +508,11 @@ class TauriBackend implements Backend {
     await invoke('set_event_under_construction', { eventId, flag })
   }
 
+  async setEventTags(eventId: string, tags: string[]): Promise<void> {
+    const invoke = await this.api()
+    await invoke('set_event_tags', { eventId, tags })
+  }
+
   async setYearSizeFactor(yearId: string, factor: number | null): Promise<void> {
     const invoke = await this.api()
     await invoke('set_year_size_factor', { yearId, factor })
@@ -682,6 +693,8 @@ class MockBackend implements Backend {
           size: e % 5 === 0 ? 75 : e % 5 === 2 ? 30 : undefined,
           // Elk 3e event "in aanbouw" → test de badge in de jaar-view.
           underConstruction: e % 3 === 0 || undefined,
+          // Gevarieerde tags → test het filter op de jaar-tijdlijn.
+          tags: [['vakantie'], ['concert'], ['familie', 'vakantie'], []][e % 4],
         }
       })
       // Eén memory per jaar loopt door in het volgende jaar (28 dec → 3 jan), zodat
@@ -698,6 +711,7 @@ class MockBackend implements Backend {
           coverItemId: `${id}-nye-i0`,
           photoIds: [],
           size: 70,
+          tags: ['feest'],
         })
       }
       const points: DensityPoint[] = []
@@ -920,6 +934,7 @@ class MockBackend implements Backend {
         featuredPhoto: this.featured.get(eventId),
         size: summary?.size,
         underConstruction: summary?.underConstruction,
+        tags: summary?.tags,
         theme: this.eventThemes.get(eventId),
       },
       items,
@@ -1009,6 +1024,10 @@ class MockBackend implements Backend {
   async setEventUnderConstruction(eventId: string, flag: boolean): Promise<void> {
     const ev = this.findEvent(eventId)
     if (ev) ev.underConstruction = flag || undefined
+  }
+  async setEventTags(eventId: string, tags: string[]): Promise<void> {
+    const ev = this.findEvent(eventId)
+    if (ev) ev.tags = tags.length ? tags : undefined
   }
   async updateEvent(
     eventId: string,

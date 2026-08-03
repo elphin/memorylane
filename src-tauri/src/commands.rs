@@ -476,6 +476,20 @@ impl VaultService {
         Ok(())
     }
 
+    /// Zet de trefwoorden (tags) van een memory. Lege lijst = geen tags.
+    pub fn set_event_tags(&self, event_id: &str, tags: &[String]) -> Result<(), String> {
+        let vault = self.current_vault()?;
+        let folder = {
+            let conn = self.conn.lock().map_err(lock_err)?;
+            index::event_folder(&conn, event_id)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("event {event_id} niet gevonden"))?
+        };
+        writer::set_event_tags(&vault, &folder, tags).map_err(|e| e.to_string())?;
+        self.rescan()?;
+        Ok(())
+    }
+
     /// Zet of wist de "in aanbouw"-vlag (`underConstruction`) van een event.
     pub fn set_event_under_construction(&self, event_id: &str, flag: bool) -> Result<(), String> {
         let vault = self.current_vault()?;
@@ -833,6 +847,16 @@ pub fn set_event_size(
     size: Option<i64>,
 ) -> Result<(), String> {
     state.set_event_size(&event_id, size)
+}
+
+/// Zet de trefwoorden (tags) van een memory.
+#[tauri::command]
+pub fn set_event_tags(
+    state: State<VaultService>,
+    event_id: String,
+    tags: Vec<String>,
+) -> Result<(), String> {
+    state.set_event_tags(&event_id, &tags)
 }
 
 /// Zet of wist de "in aanbouw"-vlag (`underConstruction`) van een event.

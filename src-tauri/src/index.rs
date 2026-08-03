@@ -245,6 +245,9 @@ pub struct EventSummary {
     pub synthetic: bool,
     /// Thema-keuze van dit event (personalisatie-cascade). None = erven van het jaar.
     pub theme: Option<ThemeChoice>,
+    /// Trefwoorden van deze memory — waar de jaar-tijdlijn op filtert.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -405,7 +408,7 @@ pub fn get_year(conn: &Connection, year_id: &str) -> rusqlite::Result<Option<Yea
              (SELECT group_concat(id) FROM
                (SELECT id FROM items WHERE event_id = e.id AND item_type = 'photo'
                     ORDER BY (timestamp_ms IS NULL), timestamp_ms LIMIT 24)),
-             e.size, e.under_construction, e.synthetic, e.theme
+             e.size, e.under_construction, e.synthetic, e.theme, e.tags
          FROM events e
          WHERE e.year_id = ?1
             -- Een memory die de jaargrens kruist hoort in BEIDE jaren te staan. Het
@@ -436,6 +439,7 @@ pub fn get_year(conn: &Connection, year_id: &str) -> rusqlite::Result<Option<Yea
                 under_construction: r.get(9)?,
                 synthetic: r.get::<_, i64>(10)? != 0,
                 theme: theme_from_json(r.get(11)?),
+                tags: parse_json_vec(&r.get::<_, String>(12)?),
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;

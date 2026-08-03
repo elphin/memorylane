@@ -520,7 +520,13 @@ fn set_fm_block(fm: &mut Vec<String>, key: &str, line_value: Option<String>) {
         // er verderop nog indented inhoud van hetzelfde blok komt.
         let mut end = i + 1;
         while end < fm.len() {
-            if fm[end].starts_with([' ', '\t']) {
+            // Een seq-item mag in YAML op DEZELFDE kolom als de sleutel staan
+            // (`tags:` gevolgd door flush-left `- vakantie`). Zonder deze tak zouden
+            // die items verweesd achterblijven; de parser stopt dan op de seq-marker
+            // en álle sleutels daarna vallen uit de index.
+            let t = fm[end].trim_start();
+            let flush_seq = !fm[end].starts_with([' ', '\t']) && (t == "-" || t.starts_with("- "));
+            if fm[end].starts_with([' ', '\t']) || flush_seq {
                 end += 1;
             } else if fm[end].trim().is_empty()
                 && next_nonblank_is_indented(&fm[end + 1..])
@@ -821,6 +827,18 @@ pub fn set_event_under_construction(
 ) -> std::io::Result<()> {
     edit_event_md(vault_root, folder_path, |fm| {
         set_fm_field(fm, "underConstruction", if on { Some("true") } else { None });
+    })
+}
+
+/// Zet de `tags` van een memory in `<folder>/_event.md`. Leeg = veld verwijderen
+/// (een lege lijst is hetzelfde als "geen tags" en hoort de vault niet te vervuilen).
+///
+/// Via `set_fm_block`, niet `set_fm_field`: een handgeschreven of v1-bestand kan een
+/// BLOK-lijst hebben (`tags:` gevolgd door `  - vakantie`). Alleen de sleutelregel
+/// vervangen zou die items verweesd achterlaten en de YAML breken.
+pub fn set_event_tags(vault_root: &Path, folder_path: &str, tags: &[String]) -> std::io::Result<()> {
+    edit_event_md(vault_root, folder_path, |fm| {
+        set_fm_block(fm, "tags", flow_seq(tags));
     })
 }
 
@@ -2328,5 +2346,66 @@ type: photo
         // Map-vorm met f64's is precies wat `scanner::read_location` eist; een scalar
         // zou daar stil wegvallen en nooit in de index belanden.
         assert!(place.get("lat").unwrap().as_f64().is_some());
+    }
+    /// Trefwoorden van een memory: een handgeschreven BLOK-lijst (geïndenteerd én
+    /// flush-left) moet volledig vervangen worden. Alleen de sleutelregel overschrijven
+    /// zou de items verweesd achterlaten — en dan stopt de parser daar, waardoor alle
+    /// sleutels erna uit de index vallen.
+    #[test]
+    fn set_event_tags_replaces_block_lists_and_clears() {
+        for body in [
+            // Geïndenteerd blok.
+            "---
+id: e1
+type: event
+tags:
+  - vakantie
+  - strand
+title: Zomer
+---
+",
+            // Flush-left blok (ook geldige YAML).
+            "---
+id: e1
+type: event
+tags:
+- vakantie
+- strand
+title: Zomer
+---
+",
+        ] {
+            let tmp = tempfile::tempdir().unwrap();
+            let root = tmp.path();
+            std::fs::create_dir_all(root.join("2024/ev")).unwrap();
+            std::fs::write(root.join("2024/ev/_event.md"), body).unwrap();
+
+            set_event_tags(root, "2024/ev", &["concert".into(), "a,b".into()]).unwrap();
+            let after = std::fs::read_to_string(root.join("2024/ev/_event.md")).unwrap();
+            assert!(!after.contains("- vakantie"), "verweesde regel: {after}");
+            assert!(!after.contains("- strand"), "verweesde regel: {after}");
+            let p = crate::vault::frontmatter::parse(&after);
+            assert_eq!(p.get("tags").unwrap().as_string_list(), vec!["concert", "a,b"]);
+            // De sleutel ná het blok moet bewaard blijven — dat is precies wat een
+            // verweesde seq-marker zou slopen.
+            assert_eq!(p.get_str("title").as_deref(), Some("Zomer"), "in: {after}");
+
+            // Lege lijst = geen tags → veld helemaal weg (vault schoon houden).
+            set_event_tags(root, "2024/ev", &[]).unwrap();
+            let after = std::fs::read_to_string(root.join("2024/ev/_event.md")).unwrap();
+            assert!(crate::vault::frontmatter::parse(&after).get("tags").is_none(), "{after}");
+            assert!(after.contains("title: Zomer"));
+        }
+    }
+
+    /// Losse jaarmap (synthetische "Losse foto's"-bundel): geen `_event.md`, dus een
+    /// no-op i.p.v. een gematerialiseerd bestand.
+    #[test]
+    fn set_event_tags_on_loose_year_folder_is_noop() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("2024")).unwrap();
+        set_event_tags(root, "2024", &["vakantie".into()]).unwrap();
+        assert!(!root.join("2024/_event.md").exists());
     }
 }

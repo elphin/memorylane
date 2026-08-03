@@ -403,6 +403,9 @@ export class YearScene implements Scene {
       showTitles?: boolean
       curvedLeaders?: boolean
       neighbors?: { prev?: string; next?: string }
+      /** Waarom is dit jaar leeg? 'filter' = door het actieve tagfilter, niet omdat er
+       * niets in dit jaar staat — anders lijkt een filter een leeg jaar. */
+      emptyReason?: 'none' | 'filter'
       /** Zichtbare randdikte om de tegels (app-instelling). */
       borderPx?: number
     } = {
@@ -545,7 +548,10 @@ export class YearScene implements Scene {
 
     if (detail.events.length === 0) {
       const hint = new Text({
-        text: 'Geen memories in dit jaar',
+        text:
+          opts.emptyReason === 'filter'
+            ? 'Geen memories met dit filter'
+            : 'Geen memories in dit jaar',
         style: { fill: this.T.colors.textFaint, fontSize: 20, fontFamily: this.T.fonts.body },
       })
       hint.resolution = 2

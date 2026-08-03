@@ -50,6 +50,21 @@ interface EventForm {
   /** Item-id van de gekozen omslagfoto (alleen bewerk-modus). `undefined` = nog geen
    * vaste keuze; de tijdlijn toont dan een willekeurige foto uit de memory. */
   coverItemId?: string
+  /** Trefwoorden van de memory (alleen bewerk-modus), als komma-string in het veld. */
+  tags?: string
+  /** Synthetische "Losse foto's"-bundel: geen eigen `_event.md`, dus geen tags. */
+  synthetic?: boolean
+}
+
+/** Komma-string → schone lijst (getrimd, geen lege, geen dubbele). */
+function parseTags(s: string): string[] {
+  const out: string[] = []
+  for (const raw of s.split(',')) {
+    const t = raw.trim()
+    // Hoofdletterloos ontdubbelen, maar de eerst getypte schrijfwijze behouden.
+    if (t && !out.some((x) => x.toLowerCase() === t.toLowerCase())) out.push(t)
+  }
+  return out
 }
 
 /** Drie startwaarden voor het belang van een nieuw event (de gebruiker kan het
@@ -783,6 +798,44 @@ export function AppShell() {
   // (L3) en een snap-herbouw vers kunnen resolven tegen het actuele app-thema.
   const currentThemeChoicesRef = useRef<{ year?: ThemeChoiceLike | null; event?: ThemeChoiceLike | null }>({})
   const currentYearCoverRef = useRef<string | null>(null) // item-id van de jaar-cover
+  // Alle trefwoorden die in het huidige jaar voorkomen — voor de suggestie-chips in de
+  // bewerk-dialoog én voor de filterbalk. Bewust op de ONGEFILTERDE lijst gevuld:
+  // anders verdwijnen de andere tags uit beeld zodra je filtert en kun je alleen nog
+  // wissen.
+  const yearTagsRef = useRef<string[]>([])
+  // Actief tagfilter op de jaar-tijdlijn (leeg = alles). In een ref én in state: de
+  // scene-opbouw draait buiten React, de balk hoort in React.
+  // Bewust NIET in localStorage: een filter dat een herstart overleeft opent de app
+  // met een (schijnbaar) lege tijdlijn, en de oorzaak staat dan buiten beeld.
+  const [tagFilter, setTagFilter] = useState<string[]>([])
+  const tagFilterRef = useRef<string[]>([])
+  // Filterwissels debouncen: `enterYear` slaat een aanroep stil over als er al één
+  // loopt (`enteringRef`), dus snel achter elkaar klikken zou een wissel verliezen.
+  const tagFilterTimerRef = useRef<number>(0)
+
+  /** Zet het tagfilter en herbouw het jaar op zijn plek (camera blijft staan). */
+  const applyTagFilter = useCallback((next: string[]): void => {
+    tagFilterRef.current = next
+    setTagFilter(next)
+    window.clearTimeout(tagFilterTimerRef.current)
+    // Vastleggen wáár we stonden: navigeer je binnen de debounce weg, dan zou de
+    // herbouw op het nieuwe niveau landen en daar een lopende reveal-animatie
+    // afbreken (die herbouw krijgt `snapCam` mee en bevriest de camera halverwege).
+    const level = levelRef.current
+    const year = currentYearRef.current
+    const run = (): void => {
+      if (levelRef.current !== level || currentYearRef.current !== year) return
+      // `enterYear` slaat een aanroep stil over zolang er al één loopt; opnieuw
+      // plannen i.p.v. laten vallen, anders toont de balk een filter dat de tijdlijn
+      // niet heeft toegepast en is er geen weg terug behalve nog eens klikken.
+      if (enteringRef.current) {
+        tagFilterTimerRef.current = window.setTimeout(run, 60)
+        return
+      }
+      refreshCurrentSceneRef.current()
+    }
+    tagFilterTimerRef.current = window.setTimeout(run, 90)
+  }, [])
   const currentItemsRef = useRef<Item[]>([])
   const entryZoomRef = useRef(1)
   const enterSeqRef = useRef(0)
@@ -933,6 +986,20 @@ export function AppShell() {
       try {
         const detail = await backendRef.current.getYear(yearId)
         if (disposed || !engine || seq !== enterSeqRef.current || !detail) return
+        // Trefwoorden van dít jaar, vóór het filter — de filterbalk en de
+        // suggestie-chips moeten alle tags blijven tonen, ook als er één actief is.
+        yearTagsRef.current = [...new Set(detail.events.flatMap((e) => e.tags ?? []))].sort()
+        // Filteren gebeurt hier, bij de scene-OPBOUW: de renderlus en de gebakken
+        // periode-balken kennen geen "verborgen" stand, en zo komt de vrijgekomen
+        // ruimte automatisch ten goede aan de memories die je wél wilde zien.
+        const active = tagFilterRef.current
+        const filtered =
+          active.length === 0
+            ? detail
+            : {
+                ...detail,
+                events: detail.events.filter((e) => (e.tags ?? []).some((t) => active.includes(t))),
+              }
         // Oud niveau meebewegen + uitfaden (crossfade). Móet vóór de nieuwe
         // scene-constructor: die roept jumpCamera en verandert de camera.
         const old = sceneRef.current
@@ -957,13 +1024,17 @@ export function AppShell() {
         // Kodachrome-jaar écht zijn eigen sfeer, en klopt de span-blend (die
         // tegen het jaar-appBg rekent) met wat er achter staat.
         setCanvasBackground(resolveTheme(detail.year.theme), false)
-        const scene = new YearScene(engine, backendRef.current, detail, {
+        const scene = new YearScene(engine, backendRef.current, filtered, {
           enabled: settingsRef.current.slideshow,
           speedMs: settingsRef.current.slideshowSpeed * 1000,
           showTitles: settingsRef.current.showMemoryTitles,
           curvedLeaders: settingsRef.current.curvedLeaders,
           neighbors,
           borderPx: yearBorderPx(settingsRef.current.borderThickness),
+          emptyReason:
+            active.length > 0 && filtered.events.length === 0 && detail.events.length > 0
+              ? 'filter'
+              : 'none',
         })
         sceneRef.current = scene
         // Animatieloze herbouw: camera exact terug op de stand van vóór de wissel
@@ -1011,7 +1082,9 @@ export function AppShell() {
           scene.focusOn?.(focusAfter)
           kbNavRef.current = true
         } else if (focusFirstAfter) {
-          const first = [...detail.events].sort((a, b) => a.startAt.localeCompare(b.startAt))[0]
+          // Op de GEFILTERDE lijst: focussen op een verborgen memory zet wel de
+          // toetsenbord-modus aan maar toont geen focus.
+          const first = [...filtered.events].sort((a, b) => a.startAt.localeCompare(b.startAt))[0]
           if (first) {
             scene.focusOn?.(first.id)
             kbNavRef.current = true
@@ -1241,7 +1314,9 @@ export function AppShell() {
       if (lvl === 'lifeline') {
         setupLifeline(undefined, cam)
       } else if (lvl === 'year' && currentYearRef.current) {
-        void enterYear(currentYearRef.current, 'in', undefined, false, cam)
+        // Toetsenbord-focus meenemen: bij een filterwissel blijft de gefocuste memory
+        // anders nergens. `focusOn` is een no-op als hij weggefilterd is.
+        void enterYear(currentYearRef.current, 'in', sceneRef.current?.focusedId?.() ?? undefined, false, cam)
       } else if (lvl === 'event' && currentEventRef.current) {
         void enterEvent(currentEventRef.current, 'in', undefined, false, cam)
       } else if (lvl === 'focus') {
@@ -1866,6 +1941,7 @@ export function AppShell() {
       window.removeEventListener('blur', onBlur)
       if (searchTimerRef.current) window.clearTimeout(searchTimerRef.current)
       window.clearTimeout(coverHintTimerRef.current)
+      window.clearTimeout(tagFilterTimerRef.current)
       sceneRef.current?.destroy()
       sceneRef.current = null
       engine?.destroy()
@@ -2008,6 +2084,10 @@ export function AppShell() {
     setVaultPath(await backend.getVaultPath())
     // Nieuwe/gewijzigde vault → de onthouden L0-stand slaat nergens meer op.
     lifelineCamRef.current = null
+    // En een tagfilter uit de vórige vault ook niet: dat zou het eerste jaar dat je
+    // opent stil leeg maken.
+    tagFilterRef.current = []
+    setTagFilter([])
     if (years.length > 0) {
       sceneRef.current?.destroy()
       // Terug naar L0: achtergrond + titel-uiMode terug naar het app-thema
@@ -2220,6 +2300,8 @@ export function AppShell() {
       // via de items van dit event. Geen expliciete keuze → undefined, en dan toont
       // de dialoog bewust de grijze "kies er een"-box (de tijdlijn kiest zelf wel
       // een willekeurige foto, maar dat is geen keuze die jij gemaakt hebt).
+      tags: (info.tags ?? []).join(', '),
+      synthetic: info.synthetic ?? false,
       coverItemId: info.featuredPhoto
         ? currentItemsRef.current.find(
             (it) => it.slug === info.featuredPhoto || it.id === info.featuredPhoto,
@@ -2261,6 +2343,15 @@ export function AppShell() {
         const origSize = currentEventInfoRef.current?.size ?? 50
         if (f.size != null && f.size !== origSize) {
           await backend.setEventSize(f.eventId, f.size)
+        }
+        // Trefwoorden: alleen schrijven bij een echte wijziging (elke schrijfactie
+        // kost een rescan). Synthetische bundels hebben geen `_event.md` → overslaan.
+        if (!f.synthetic) {
+          const nextTags = parseTags(f.tags ?? '')
+          const origTags = currentEventInfoRef.current?.tags ?? []
+          const same =
+            nextTags.length === origTags.length && nextTags.every((t, i) => t === origTags[i])
+          if (!same) await backend.setEventTags(f.eventId, nextTags)
         }
         // "In aanbouw"-vlag: apart non-destructief veld; alleen bij een echte wijziging.
         const origUC = currentEventInfoRef.current?.underConstruction ?? false
@@ -2632,6 +2723,60 @@ export function AppShell() {
           </button>
         )}
       {toast && <div style={toastStyle(u)}>{toast}</div>}
+      {/* Tagfilter op de jaar-tijdlijn. Alleen zichtbaar als dit jaar tags heeft; de
+          chips komen uit de ONGEFILTERDE lijst, zodat je altijd kunt wisselen en niet
+          alleen kunt wissen. Actief filter blijft in beeld — je mag nooit met een
+          onzichtbaar filter blijven zitten. */}
+      {phase === 'ready' && uiLevel === 'year' && !anyDialog && !settingsOpen && !searchOpen &&
+        !screensaverIds && (yearTagsRef.current.length > 0 || tagFilter.length > 0) && (
+        <div style={tagBarStyle(u)}>
+          {/* Unie van "tags in dit jaar" en "actief filter": een actieve tag die in dit
+              jaar niet voorkomt moet zichtbaar blijven, anders sta je in een leeg jaar
+              zonder knop om het filter te wissen. */}
+          {[...new Set([...yearTagsRef.current, ...tagFilter])].sort().map((t) => {
+            const on = tagFilter.includes(t)
+            return (
+              <button
+                key={t}
+                type="button"
+                onClick={() =>
+                  applyTagFilter(on ? tagFilter.filter((x) => x !== t) : [...tagFilter, t])
+                }
+                title={on ? `${t} niet meer tonen` : `Alleen ${t} tonen`}
+                style={{
+                  padding: '5px 12px',
+                  borderRadius: 999,
+                  fontSize: 12,
+                  cursor: 'pointer',
+                  border: `1px solid ${on ? u.primary : u.border}`,
+                  background: on ? u.primary : u.cardAlt,
+                  color: on ? u.primaryText : u.textMuted,
+                }}
+              >
+                {t}
+              </button>
+            )
+          })}
+          {tagFilter.length > 0 && (
+            <button
+              type="button"
+              onClick={() => applyTagFilter([])}
+              title="Alle memories weer tonen"
+              style={{
+                padding: '5px 12px',
+                borderRadius: 999,
+                fontSize: 12,
+                cursor: 'pointer',
+                border: `1px solid ${u.border}`,
+                background: 'transparent',
+                color: u.text,
+              }}
+            >
+              ✕ wis filter
+            </button>
+          )}
+        </div>
+      )}
       {/* Kies-modus: duidelijk in beeld dát je in die modus zit. Zonder deze balk was
           de enige aanwijzing een gouden rand die je pas ziet als je al hovert. */}
       {coverPick && uiLevel === 'event' && !screensaverIds && (
@@ -2714,6 +2859,7 @@ export function AppShell() {
                 ? backendRef.current?.thumb(eventForm.coverItemId, 256).url
                 : undefined
             }
+            tagSuggestions={yearTagsRef.current}
             onPickCover={() => {
               // Kiezen gebeurt op het canvas zelf (daar zie je de foto's groot). Het
               // formulier gaat opzij en komt na het kiezen terug — inclusief wat je
@@ -4134,6 +4280,7 @@ function EventDialog({
   onCancel,
   thumbUrl,
   onPickCover,
+  tagSuggestions,
 }: {
   form: EventForm
   busy: boolean
@@ -4144,6 +4291,8 @@ function EventDialog({
   thumbUrl?: string
   /** Sluit de dialoog en start het kiezen van een omslagfoto op het canvas. */
   onPickCover: () => void
+  /** Trefwoorden die in dit jaar al gebruikt worden (aanklikbare suggesties). */
+  tagSuggestions: string[]
 }) {
   const u = ui()
   useEscape(onCancel)
@@ -4261,6 +4410,58 @@ function EventDialog({
             })}
           </div>
         </div>
+        {form.mode === 'edit' && !form.synthetic && (
+          <div style={{ marginTop: 18 }}>
+            <div style={fieldLabel}>Trefwoorden</div>
+            <input
+              value={form.tags ?? ''}
+              onChange={(e) => onChange({ tags: e.target.value })}
+              placeholder="vakantie, concert, familie"
+              style={field(u)}
+            />
+            {/* Bestaande trefwoorden van dit jaar: aanklikken = toevoegen/weghalen. */}
+            {tagSuggestions.length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+                {tagSuggestions.map((t) => {
+                  const cur = parseTags(form.tags ?? '')
+                  // Hoofdletterloos vergelijken: "Vakantie" en "vakantie" zijn hetzelfde
+                  // trefwoord; anders zou de chip een al getypte tag niet herkennen en
+                  // zou je 'm dubbel toevoegen.
+                  const on = cur.some((x) => x.toLowerCase() === t.toLowerCase())
+                  return (
+                    <button
+                      key={t}
+                      type="button"
+                      onClick={() =>
+                        onChange({
+                          tags: (on
+                            ? cur.filter((x) => x.toLowerCase() !== t.toLowerCase())
+                            : [...cur, t]
+                          ).join(', '),
+                        })
+                      }
+                      style={{
+                        padding: '4px 10px',
+                        borderRadius: 999,
+                        fontSize: 12,
+                        cursor: 'pointer',
+                        border: `1px solid ${on ? u.primary : u.borderSoft}`,
+                        background: on ? u.primaryFaintBg : u.choiceBg,
+                        color: on ? u.btnText : u.chipText,
+                      }}
+                    >
+                      {t}
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+            <div style={{ fontSize: 11, color: u.hintMuted, marginTop: 6, lineHeight: 1.35 }}>
+              Waar je op de jaar-tijdlijn op kunt filteren — bijvoorbeeld alleen je
+              vakanties of alleen concerten. Scheiden met komma’s.
+            </div>
+          </div>
+        )}
         {form.mode === 'edit' && (
           <div style={{ marginTop: 18 }}>
             <div style={fieldLabel}>Thumbnail</div>
@@ -5299,6 +5500,28 @@ const coverBannerStyle: React.CSSProperties = {
   flexWrap: 'wrap',
   justifyContent: 'center',
 }
+
+/** Filterbalk onderin de jaar-tijdlijn, boven de bediening-dock. */
+const tagBarStyle = (u: UiPalette): React.CSSProperties => ({
+  position: 'absolute',
+  // Boven de bediening-dock (bottom 24) en onder de toast (bottom 150). Bij heel veel
+  // tags scrollt de balk intern i.p.v. door te groeien over de toast heen.
+  bottom: 92,
+  maxHeight: 58,
+  overflowY: 'auto',
+  left: '50%',
+  transform: 'translateX(-50%)',
+  display: 'flex',
+  flexWrap: 'wrap',
+  justifyContent: 'center',
+  gap: 6,
+  maxWidth: '80vw',
+  padding: '8px 12px',
+  borderRadius: 16,
+  background: u.toastBg,
+  border: `1px solid ${u.border}`,
+  zIndex: 60,
+})
 
 const gearBtn = (u: UiPalette): React.CSSProperties => ({
   position: 'absolute',
