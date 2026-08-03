@@ -64,38 +64,51 @@ export function IconCopy({ size = 18, style }: IconProps) {
   )
 }
 
-/** Foto's toevoegen: afbeelding met zon en bergen. */
+/** Foto's toevoegen: een foto met een pijl omhoog erboven — het universele
+ * upload-gebaar, zodat de knop niet leest als "foto's bekijken". */
 export function IconImage({ size = 20, style }: IconProps) {
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} style={svgBase(style)}>
-      <rect x="3" y="4" width="18" height="16" rx="2.5" />
-      <circle cx="8.5" cy="9.5" r="1.9" />
-      <path d="M4 17.5l4.5-4.5 3.2 3.2 3.3-3.3L20 16.5" />
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" style={svgBase(style)}>
+      {/* Upload-pijl */}
+      <path d="M12 7.2V2M9.2 4.6L12 1.8l2.8 2.8" />
+      {/* Foto */}
+      <rect x="3" y="8.5" width="18" height="13" rx="2.4" />
+      <circle cx="8" cy="13" r="1.6" />
+      <path d="M4 19l3.8-3.6 2.5 2.4 3.2-3.1L20 18.6" />
     </svg>
   )
 }
 
-/** Notitie toevoegen: kaart met tekstregels. */
+/** Notitie toevoegen: een blad met geschreven regels (de laatste als krabbel) en
+ * een plus-badge — "hier schrijf je iets nieuws", niet "hier staat een document". */
 export function IconNote({ size = 20, style }: IconProps) {
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} style={svgBase(style)}>
-      <path d="M4.5 5.5A1.5 1.5 0 0 1 6 4h8l5 5v9.5A1.5 1.5 0 0 1 17.5 20h-11A1.5 1.5 0 0 1 5 18.5z" />
-      <path d="M13.5 4v5h5" />
-      <path d="M8.5 13h7M8.5 16.5h4.5" strokeLinecap="round" />
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" style={svgBase(style)}>
+      {/* Blad met omgevouwen hoek; rechtsonder open voor de badge */}
+      <path d="M4.6 5.6A1.6 1.6 0 0 1 6.2 4h7.2l4.4 4.4v3.4" />
+      <path d="M4.6 5.6v13A1.6 1.6 0 0 0 6.2 20.2h6.4" />
+      <path d="M13.2 4v4.6h4.6" />
+      {/* Regels: twee recht, de derde met een handschrift-krul */}
+      <path d="M7.8 11.2h6.2M7.8 14h4.2" />
+      <path d="M7.8 16.8c.8-.9 1.4.9 2.2 0" />
+      {/* Toevoegen */}
+      <circle cx="18.2" cy="17.8" r="3.9" />
+      <path d="M18.2 16v3.6M16.4 17.8h3.6" />
     </svg>
   )
 }
 
-/** Weergave aanpassen: schuifjes. */
+/** Weergave aanpassen: de indeling van een canvas (één grote + twee kleine kaarten)
+ * met een herschik-pijl eronder. Bewust géén schuifjes: die lezen als "algemene
+ * instellingen", terwijl deze knop de indeling van dít canvas bijstelt. */
 export function IconSliders({ size = 20, style }: IconProps) {
   return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} style={svgBase(style)}>
-      <path d="M4 7h9M18 7h2" strokeLinecap="round" />
-      <circle cx="15.5" cy="7" r="2.1" />
-      <path d="M4 12h3M11.5 12h8.5" strokeLinecap="round" />
-      <circle cx="9" cy="12" r="2.1" />
-      <path d="M4 17h9M18 17h2" strokeLinecap="round" />
-      <circle cx="15.5" cy="17" r="2.1" />
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" style={svgBase(style)}>
+      <rect x="2.6" y="3.4" width="8.6" height="11" rx="1.6" />
+      <rect x="13.4" y="3.4" width="8" height="5" rx="1.5" />
+      <rect x="13.4" y="10" width="8" height="4.4" rx="1.5" />
+      {/* Herschikken */}
+      <path d="M4.4 18.8h15.2M6.8 16.4l-2.4 2.4 2.4 2.4M17.2 16.4l2.4 2.4-2.4 2.4" />
     </svg>
   )
 }
