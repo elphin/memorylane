@@ -68,6 +68,8 @@ export interface Scene {
   /** Kijk-modus aan/uit: verbergt bewerk-affordances zoals het sleep-hoekje op een
    * notitie (alleen L2). */
   setEditable?(on: boolean): void
+  /** Zichtbare randdikte (px) om foto's/tegels (app-instelling; L1 en L2). */
+  setBorderPx?(px: number): void
   /** Ref (slug/id) van de foto onder een wereldpunt, of null (alleen L2). */
   refAt?(worldX: number, worldY: number): string | null
   /** Herschik het event-canvas: 'custom' (eigen posities), 'grid' (chronologisch,

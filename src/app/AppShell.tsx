@@ -110,6 +110,11 @@ interface Settings {
   /** Snijd foto's in de memory-view naar een vierkant (1:1) bij? Uit = natuurlijke
    * verhouding (de kaart neemt de vorm van de foto over). */
   squarePhotos: boolean
+  /** Dikte (px) van de zichtbare rand om de foto's in een memory. 0 = geen rand.
+   * De jaar-tegels volgen proportioneel (zie `YEAR_BORDER_RATIO`), zodat de
+   * standaardwaarde exact het bestaande beeld oplevert. De klik-zone wordt nooit
+   * kleiner, dus een dunne rand maakt niets moeilijker aan te klikken. */
+  borderThickness: number
   /** Toon de titel bovenin (Memory Lane / jaar / eventnaam). */
   showTitle: boolean
   /** Bij een detailfoto: toon de caption als titel (indien aanwezig; anders de
@@ -148,6 +153,7 @@ const DEFAULT_SETTINGS: Settings = {
   hoverPulse: true,
   fineTicks: true,
   squarePhotos: false,
+  borderThickness: 8,
   showTitle: true,
   photoTitleFromCaption: false,
   diaMode: 'kenburns',
@@ -158,6 +164,15 @@ const DEFAULT_SETTINGS: Settings = {
   backOnRightClick: true,
 }
 const SETTINGS_KEY = 'memorylane-settings'
+/** De jaar-tegels hadden altijd een dunnere rand (6) dan de foto's op het
+ * memory-canvas (8) — kleine tegels verdragen minder rand. Eén instelling stuurt
+ * beide; de jaar-view volgt in die verhouding, zodat de standaard (8) precies het
+ * beeld van vóór de instelling geeft. */
+const YEAR_BORDER_RATIO = 6 / 8
+/** De jaar-rand bij de standaard-instelling (vangnet bij een corrupte opslag). */
+const DEFAULT_YEAR_BORDER_PX = 6
+const yearBorderPx = (px: number): number =>
+  Number.isFinite(px) ? px * YEAR_BORDER_RATIO : DEFAULT_YEAR_BORDER_PX
 // Scherm-px die de titel ("2024") bovenaan inneemt (top 18 + ~30px teksthoogte +
 // gaatje). De dag-gids (Ctrl) start hieronder als de titel aan staat.
 const TITLE_INSET_PX = 60
@@ -451,6 +466,19 @@ export function AppShell() {
     }
     // Kijk-modus: het notitie-sleep-hoekje hoort weg zolang bewerken uit staat.
     if (patch.viewMode !== undefined) sceneRef.current?.setEditable?.(!next.viewMode)
+    // Randdikte: een live setter, géén scene-herbouw. De schuif vuurt per pixel en
+    // `enterYear`/`enterEvent` slaan gelijktijdige aanroepen stil over (enteringRef),
+    // waardoor de instelling niet zou aankomen.
+    if (patch.borderThickness !== undefined) {
+      // De jaar-scene krijgt de proportioneel dunnere waarde, het canvas de rauwe.
+      // `sceneRef` en `levelRef` worden altijd in hetzelfde synchrone blok gezet, dus
+      // het niveau hoort hier gegarandeerd bij de actieve scene.
+      sceneRef.current?.setBorderPx?.(
+        levelRef.current === 'year'
+          ? yearBorderPx(next.borderThickness)
+          : next.borderThickness,
+      )
+    }
   }
 
   // Open de thema-kiezer voor het huidige jaar (L1) of event (L2). Synthetische
@@ -884,6 +912,7 @@ export function AppShell() {
           showTitles: settingsRef.current.showMemoryTitles,
           curvedLeaders: settingsRef.current.curvedLeaders,
           neighbors,
+          borderPx: yearBorderPx(settingsRef.current.borderThickness),
         })
         sceneRef.current = scene
         // Animatieloze herbouw: camera exact terug op de stand van vóór de wissel
@@ -1038,6 +1067,7 @@ export function AppShell() {
             saveEventView(eventId, viewFromState(state))
           },
           settingsRef.current.squarePhotos,
+          settingsRef.current.borderThickness,
         )
         sceneRef.current = scene
         scene.setEditable(!settingsRef.current.viewMode)
@@ -1940,6 +1970,13 @@ export function AppShell() {
     settingsRef.current = DEFAULT_SETTINGS
     setSettings(DEFAULT_SETTINGS)
     applyPanLockRef.current()
+    // Live setters die geen scene-herbouw doen, moeten hier expliciet mee.
+    sceneRef.current?.setBorderPx?.(
+      levelRef.current === 'year'
+        ? yearBorderPx(DEFAULT_SETTINGS.borderThickness)
+        : DEFAULT_SETTINGS.borderThickness,
+    )
+    sceneRef.current?.setEditable?.(!DEFAULT_SETTINGS.viewMode)
     setToast('App-instellingen teruggezet naar standaard.')
   }
 
@@ -3067,6 +3104,48 @@ function SettingsPanel({
                   label="Foto's vierkant bijsnijden (in een memory)"
                 />
                 {desc('Uit = de foto behoudt zijn eigen verhouding (de tegel neemt de vorm van de foto over).')}
+              </div>
+
+              <div style={{ marginTop: 14 }}>
+                <div style={{ fontSize: 13, color: u.textMuted, marginBottom: 6 }}>
+                  Rand om foto's: {settings.borderThickness === 0 ? 'geen' : `${settings.borderThickness}px`}
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                  <input
+                    type="range"
+                    min={0}
+                    max={16}
+                    step={1}
+                    value={settings.borderThickness}
+                    onChange={(e) => onChange({ borderThickness: Number(e.target.value) })}
+                    style={{ flex: 1 }}
+                  />
+                  {/* Levend voorbeeld: een tegeltje met exact de gekozen randdikte. */}
+                  <div
+                    aria-hidden
+                    style={{
+                      width: 54,
+                      height: 40,
+                      flex: '0 0 auto',
+                      // De rand-kleur van het APP-thema; een jaar/event met een eigen
+                      // thema kan er minimaal van afwijken.
+                      background: `#${THEME.colors.frame.toString(16).padStart(6, '0')}`,
+                      padding: settings.borderThickness,
+                      boxSizing: 'border-box',
+                      borderRadius: 2,
+                      boxShadow: '0 2px 6px rgba(0,0,0,0.35)',
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: '100%',
+                        height: '100%',
+                        background: 'linear-gradient(135deg,#6d7fd6,#b45ea8)',
+                      }}
+                    />
+                  </div>
+                </div>
+                {desc('Geldt voor de foto’s in een memory; de tegels in de jaar-tijdlijn volgen in dezelfde verhouding (die hebben van oudsher een iets dunnere rand). Niet voor één foto beeldvullend. De klik-zone blijft minstens even groot, dus een dunne rand maakt niets moeilijker aan te klikken.')}
               </div>
 
               <div style={{ height: 1, background: u.border, margin: '16px 0' }} />

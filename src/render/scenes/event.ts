@@ -22,7 +22,28 @@ export interface LayoutState {
 }
 
 const PHOTO = 200
+// Vaste layout-marge: hit-box, grid-tussenruimte en ring-radius hangen hieraan. De
+// ZICHTBARE randdikte is instelbaar (zie `borderPx`) — bewust losgekoppeld, zodat een
+// dunne rand een foto niet moeilijker aanklikbaar maakt of het grid laat verspringen.
 const BORDER = 8
+/** Bovengrens van de instelbare randdikte. */
+const BORDER_MAX = 16
+/** Vaste referentie voor de ring-dikte/-offset. Bewust NIET de instelling: `eb / 0`
+ * zou NaN geven en de gouden/blauwe randen met NaN-geometrie laten tekenen. */
+const BORDER_REF = 8
+/** Ondergrenzen zodat "dun" niet stiekem "geen schaduw" of "geen polaroid" betekent:
+ * schaduw en polaroid-band zijn vormtaal, geen randdikte. */
+const SHADOW_MIN = 3
+const POLAROID_MIN = 5
+/** Onder deze randdikte is de witte rand te dun om toetsenbord-focus mee te tonen;
+ * de node valt dan terug op de aparte focus-ring. */
+const FOCUS_MIN = 3
+
+/** Eén clamp voor de instelbare randdikte (constructor én live setter), inclusief
+ * vangnet voor een corrupte localStorage-waarde. */
+function clampBorder(px: number, fallback: number): number {
+  return Number.isFinite(px) ? Math.max(0, Math.min(BORDER_MAX, px)) : fallback
+}
 const TEXT_W = 240
 const TEXT_H = 150
 // Plafond voor de "passend"-hoogte (automatisch én handmatig): een extreem lange
@@ -127,7 +148,11 @@ export class EventScene implements Scene {
     private onViewChange?: (state: LayoutState) => void,
     // Foto's naar een vierkant (1:1) bijsnijden? Uit = natuurlijke verhouding.
     private squarePhotos = false,
+    // Zichtbare randdikte om foto's (app-instelling). De layout-marge blijft `BORDER`.
+    // Wordt hieronder door dezelfde clamp gehaald als de live setter.
+    private borderPx = BORDER,
   ) {
+    this.borderPx = clampBorder(this.borderPx, BORDER)
     this.T = resolveTheme(detail.yearTheme, detail.event.theme)
     this.featuredRef = detail.event.featuredPhoto ?? null
     this.yearCoverId = detail.yearCover ?? null
@@ -182,17 +207,14 @@ export class EventScene implements Scene {
         }
       }
 
-      // Toetsenbord-focus-indicator. Foto's gebruiken hun EIGEN witte rand (de
-      // `frame` faadt weg voor niet-gefocuste tegels, net als de jaar-view); een
-      // notitie heeft geen witte fotorand en krijgt daarom een aparte ring —
-      // net als een foto met kader-stijl 'geen' (die heeft óók geen rand om te
-      // faden, anders is toetsenbord-focus daar onzichtbaar).
-      let focusRing: Graphics | null = null
-      if (isText || frameStyle === 'none') {
-        focusRing = new Graphics()
-        focusRing.visible = false
-        container.addChild(focusRing)
-      }
+      // Toetsenbord-focus-indicator. Foto's gebruiken normaal hun EIGEN witte rand
+      // (die faadt weg voor niet-gefocuste tegels, net als de jaar-view). Maar een
+      // notitie heeft geen witte fotorand, kader-stijl 'geen' evenmin, en met de
+      // rand-instelling op 0 heeft géén enkele foto er nog een — dus krijgt elke node
+      // een ring; `useFocusRing()` bepaalt per frame of hij nodig is.
+      const focusRing = new Graphics()
+      focusRing.visible = false
+      container.addChild(focusRing)
 
       // Positie: uit _canvas.json of auto-grid.
       const saved = layout.get(ref)
@@ -364,10 +386,30 @@ export class EventScene implements Scene {
     this.drawFocusRing(n) // kaderloze foto's: ring volgt de nieuwe maat
   }
 
-  /** Effectieve witte-rand-dikte: dempt mee met de eigen schaal, zodat een
-   * opgeschaalde foto geen evenredig dikke (log-uit-proportie) rand krijgt. */
+  /** Effectieve witte-rand-dikte: de ingestelde dikte, gedempt met de eigen schaal
+   * zodat een opgeschaalde foto geen evenredig dikke (uit-proportie) rand krijgt. */
   private effBorder(scale: number): number {
-    return BORDER / Math.sqrt(Math.max(1, scale))
+    return this.borderPx / Math.sqrt(Math.max(1, scale))
+  }
+
+  /** Variant met een ondergrens op de INSTELLING (niet op de gedempte waarde): zo is
+   * dit bij de standaarddikte exact gelijk aan `effBorder`, en beschermt de grens
+   * alleen de dunne standen — niet ook nog sterk opgeschaalde foto's. */
+  private effBorderMin(scale: number, min: number): number {
+    return Math.max(this.borderPx, min) / Math.sqrt(Math.max(1, scale))
+  }
+
+  /** Zichtbare randdikte (app-instelling). Herteken alle kaders. */
+  setBorderPx(px: number): void {
+    const next = clampBorder(px, BORDER)
+    if (next === this.borderPx) return
+    this.borderPx = next
+    for (const n of this.nodes) {
+      if (n.frame) this.drawFrameBorder(n)
+      this.drawFocusRing(n)
+    }
+    // De polaroid-band telt mee in de grid-packing → die is nu stale.
+    if (this.mode === 'grid') this.layoutGridPositions()
   }
 
   /** (Her)teken het kader (per stijl: kader/polaroid/afgerond/geen, met een
@@ -382,8 +424,10 @@ export class EventScene implements Scene {
     const h = n.cardH
     n.frame.clear()
     if (fs !== 'none') {
-      // Polaroid: brede onderrand (de klassieke instant-band) voor de caption.
-      const band = fs === 'polaroid' ? eb * 3.5 : 0
+      // Polaroid: brede onderrand (de klassieke instant-band) voor de caption. Met
+      // een ondergrens: bij een dunne rand-instelling moet een polaroid nog steeds
+      // een polaroid zijn, anders belandt het bijschrift op de foto.
+      const band = fs === 'polaroid' ? this.effBorderMin(n.scale, POLAROID_MIN) * 3.5 : 0
       // Standaard strakke 90°-hoeken; alleen de bewust gekozen 'rounded'-stijl
       // is afgerond (roundRect met radius 0 = een echt vierkante hoek).
       const r = fs === 'rounded' ? 16 : 0
@@ -395,11 +439,17 @@ export class EventScene implements Scene {
       // buiten het kader uitsteekt; de schaduw valt puur naar rechtsonder.
       // Zachter/vager (meer lagen, lagere alpha) en iets minder spread (kleinere
       // offset + blur) dan de eerste versie.
-      const blur = eb * 1.15
+      // De schaduw rekent met een ondergrens: hij is diepte, geen randdikte. Zonder
+      // die grens vallen bij randdikte 0 alle 11 lagen samen met het kader zelf en
+      // verdwijnt de slagschaduw volledig.
+      const sb = this.effBorderMin(n.scale, SHADOW_MIN)
+      const blur = sb * 1.15
       // dx net iets groter dan blur → veilige marge zodat geen ijle laag aan de
       // lichtkant (links/boven) buiten het kader piept. dy iets groter = "opgetild".
-      const dx = eb * 1.2
-      const dy = eb * 1.35
+      const dx = sb * 1.2
+      const dy = sb * 1.35
+      // De rect volgt het KADER (eb), niet de schaduw-ondergrens: anders steekt de
+      // schaduw bij een dunne rand aan de licht-kant (links/boven) buiten het kader uit.
       const sw = w + eb * 2
       const sh = h + eb * 2 + band
       const cx = -w / 2 - eb + dx
@@ -420,7 +470,7 @@ export class EventScene implements Scene {
     // Polaroid-caption gecentreerd in de onderrand (schaalt mee met de band en
     // wordt op de bandbreedte geklemd zodat 'ie nooit uit de rand steekt).
     if (n.capEl) {
-      const band = eb * 3.5
+      const band = this.effBorderMin(n.scale, POLAROID_MIN) * 3.5
       n.capEl.visible = fs === 'polaroid'
       n.capEl.position.set(0, h / 2 + (eb + band) / 2)
       n.capEl.style.fontSize = Math.max(11, Math.min(16, band * 0.5))
@@ -428,7 +478,10 @@ export class EventScene implements Scene {
       const maxW = w + eb * 2 - 10
       if (n.capEl.width > maxW) n.capEl.scale.set(maxW / n.capEl.width)
     }
-    const k = eb / BORDER // schaalt ring-dikte + -offset mee met de gedempte rand
+    // Ring-dikte/-offset schalen mee met de rand, maar tegen een VASTE referentie en
+    // met een ondergrens: gedeeld door de instelling zou randdikte 0 een NaN opleveren
+    // en de rings met NaN-geometrie laten tekenen (dus onzichtbaar/kapot).
+    const k = Math.max(0.35, eb / BORDER_REF)
     // Rings volgen de hoekvorm van het kader (afgerond bij 'rounded', anders strak).
     const ringR = fs === 'rounded' ? 16 : 0
     if (n.ring) {
@@ -513,6 +566,12 @@ export class EventScene implements Scene {
 
   /** (Her)teken de notitie-focus-ring op de huidige kaartmaat (halfW/halfH), net
    * buiten de rand. Wit en subtiel. Foto's gebruiken hun eigen frame (geen ring). */
+  /** Is de eigen witte rand te dun om als focus-indicator te dienen? Dan valt de
+   * node terug op de aparte ring. */
+  private useFocusRing(n: Node): boolean {
+    return !n.frame || n.frameStyle === 'none' || this.borderPx < FOCUS_MIN
+  }
+
   private drawFocusRing(n: Node): void {
     if (!n.focusRing) return
     const pad = 4
@@ -669,7 +728,7 @@ export class EventScene implements Scene {
     // Polaroid-band + schaduw-offset vallen buiten halfH (bewust: de hit-box
     // blijft de foto zelf) — tel ze hier wél mee, anders plakt het grid dicht.
     const extraH = (n: Node): number =>
-      n.frameStyle === 'polaroid' ? this.effBorder(n.scale) * 3.5 + 5 : 0
+      n.frameStyle === 'polaroid' ? this.effBorderMin(n.scale, POLAROID_MIN) * 3.5 + 5 : 0
     const items = ordered.map((n) => ({
       n,
       w: 2 * n.halfW * n.scale,
@@ -1407,7 +1466,9 @@ export class EventScene implements Scene {
         if (n.capEl) n.capEl.alpha = n.borderAlpha
       }
       if (n.focusRing) {
-        const target = this.kbFocusId !== null && focused ? 1 : 0
+        // Alleen tonen als de eigen witte rand niet volstaat (notitie, kaderloos, of
+        // een te dun ingestelde rand) — anders zou de gefocuste foto twee randen krijgen.
+        const target = this.kbFocusId !== null && focused && this.useFocusRing(n) ? 1 : 0
         n.focusAlpha += (target - n.focusAlpha) * kf
         n.focusRing.alpha = n.focusAlpha
         n.focusRing.visible = n.focusAlpha > 0.01

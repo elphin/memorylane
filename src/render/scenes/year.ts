@@ -28,6 +28,11 @@ const BORDER = 8
 // grootte). BORDER blijft de layout-marge (hit-box, titel-offset); de getekende
 // rand is dunner en gelijk voor elke tegel.
 const BORDER_PX = 6
+/** Bovengrens van de instelbare randdikte (gelijk aan het memory-canvas). */
+const BORDER_PX_MAX = 16
+/** Onder deze randdikte is de witte rand te dun om toetsenbord-focus mee te tonen; de
+ * gefocuste tegel krijgt dan tijdelijk een rand van minstens deze dikte. */
+const FOCUS_MIN_PX = 3
 const CARD_ASPECT = THUMB_W / THUMB_H
 
 // Kaart-schermhoogtes (px) naar zwaarte. Vast op het scherm, ongeacht de zoom.
@@ -241,8 +246,10 @@ interface Node {
   badge: Container | null // "in aanbouw"-ezelsoor (herplaatsen bij resize)
   borderAlpha: number // huidige rand-alpha (animeert weg voor niet-gefocuste tegels)
   frameDrawnScale: number // baseScreenScale × fitScale waarvoor de frame laatst getekend is (-1 = nog niet)
+  frameDrawnFocus: boolean // had de tegel toetsenbord-focus toen de frame getekend werd?
   title: Text | null
   titleSide: number // laatst toegepaste titel-kant (om niet elke frame te herzetten)
+  titleDrawScale: number // schaal waarvoor de titel-offset laatst berekend is
   dot: Container | null // stip-marker (non-cover, of cover-overflow bij een niet-span)
   sprite: Sprite | null
   sprite2: Sprite | null
@@ -384,6 +391,8 @@ export class YearScene implements Scene {
   private slideMs: number
   private showTitles: boolean
   private curvedLeaders: boolean
+  // Zichtbare randdikte om de tegels (app-instelling). BORDER blijft de layout-marge.
+  private borderPx = BORDER_PX
   private neighbors: { prev?: string; next?: string }
   private prevLabel: Text | null = null // buurjaar-naam links (eerder jaar)
   private nextLabel: Text | null = null // buurjaar-naam rechts (later jaar)
@@ -398,6 +407,8 @@ export class YearScene implements Scene {
       showTitles?: boolean
       curvedLeaders?: boolean
       neighbors?: { prev?: string; next?: string }
+      /** Zichtbare randdikte om de tegels (app-instelling). */
+      borderPx?: number
     } = {
       enabled: false,
       speedMs: 5000,
@@ -409,6 +420,9 @@ export class YearScene implements Scene {
     this.slideMs = Math.max(800, opts.speedMs)
     this.showTitles = opts.showTitles ?? false
     this.curvedLeaders = opts.curvedLeaders ?? true
+    this.borderPx = Number.isFinite(opts.borderPx)
+      ? Math.max(0, Math.min(BORDER_PX_MAX, opts.borderPx!))
+      : BORDER_PX
     this.neighbors = opts.neighbors ?? {}
     const year = detail.year.year
     const yearStart = new Date(year, 0, 1).getTime()
@@ -626,8 +640,11 @@ export class YearScene implements Scene {
     let sprite2: Sprite | null = null
     const card = new Container()
     const frame = new Graphics()
+    // Voorlopige maat; de renderlus tekent 'm in hetzelfde frame op de exacte
+    // scherm-dikte (this.borderPx / drawScale) opnieuw.
+    const b0 = this.borderPx
     frame
-      .rect(-THUMB_W / 2 - BORDER, -THUMB_H / 2 - BORDER, THUMB_W + BORDER * 2, THUMB_H + BORDER * 2)
+      .rect(-THUMB_W / 2 - b0, -THUMB_H / 2 - b0, THUMB_W + b0 * 2, THUMB_H + b0 * 2)
       .fill(this.T.colors.frame)
     card.addChild(frame)
     if (hasCover) {
@@ -695,7 +712,7 @@ export class YearScene implements Scene {
     let badge: Container | null = null
     if (ev.underConstruction) {
       badge = this.buildUnderConstructionBadge()
-      const bpx = BORDER_PX / (cardH / THUMB_H)
+      const bpx = this.borderPx / (cardH / THUMB_H)
       badge.position.set(THUMB_W / 2 + bpx, -(THUMB_H / 2 + bpx))
       card.addChild(badge)
     }
@@ -772,8 +789,10 @@ export class YearScene implements Scene {
       badge,
       borderAlpha: 1,
       frameDrawnScale: -1,
+      frameDrawnFocus: false,
       title,
       titleSide: 0,
+      titleDrawScale: -1,
       dot,
       sprite,
       sprite2,
@@ -897,7 +916,7 @@ export class YearScene implements Scene {
     // hoort bij de klem in repack, en dubbel reserveren zou het jaar onnodig uitzoomen.
     const sideMargin = 60 // scherm-px speling per kant
     for (const n of this.cardNodes) {
-      const halfExtent = n.cardW / 2 // scherm-px (schaalt niet met zoom)
+      const halfExtent = this.halfExtent(n, 1) // scherm-px (schaalt niet met zoom)
       const anchorAbs = Math.abs(n.anchorX)
       if (anchorAbs < 1) continue
       const maxZoom = (vp.width / 2 - halfExtent - sideMargin) / anchorAbs
@@ -916,6 +935,35 @@ export class YearScene implements Scene {
     const side = n.lane ? n.lane.side : 1
     const frac = ((n.hash >>> 16) % 1000) / 1000 // 0..1
     return -side * frac * 14 // beperkte jitter naar de as (alleen bij >1 lane)
+  }
+
+  /** Hoeveel de ingestelde rand DIKKER is dan de standaard. Alle layout-berekeningen
+   * rekenen met dit surplus in plaats van met de volle randdikte: op de standaard is
+   * het 0, en dan is de packing bewijsbaar identiek aan die van vóór de instelling —
+   * een instelling hoort op zijn standaardwaarde niets te veranderen. Zet je de rand
+   * dikker, dan schuift alles precies dat surplus mee en overlapt er niets. */
+  private borderSurplus(): number {
+    return Math.max(0, this.borderPx - BORDER_PX)
+  }
+
+  /** Halve breedte voor de PACKING (buur-afstand, rand-eis, fit-camera): de tegel plus
+   * het rand-surplus. */
+  private halfExtent(n: Node, fit: number): number {
+    return (n.cardW * fit) / 2 + this.borderSurplus()
+  }
+
+  /** Halve ZICHTBARE breedte (tegel + volledige getekende rand) — voor de culling,
+   * waar te ruim onschadelijk is en te krap een kaart zou laten knipperen. */
+  private halfVisual(n: Node, fit: number): number {
+    return (n.cardW * fit) / 2 + this.borderPx
+  }
+
+  /** Minimale tussenruimte tussen twee kaarten in dezelfde lane. De getekende rand
+   * telt hierin mee i.p.v. in `half`, zodat de STANDAARD-instelling (6px) exact
+   * dezelfde spreiding oplevert als voorheen — een instelling hoort op zijn
+   * standaardwaarde niets te veranderen — en een dikke rand tóch niet overlapt. */
+  private cardGap(): number {
+    return Math.max(CARD_GAP_PX, this.borderPx * 2 + 4)
   }
 
   /** Scherm-y (t.o.v. de as) waar een kaart naartoe animeert. Bij MEER lanes: de
@@ -996,18 +1044,20 @@ export class YearScene implements Scene {
     ): number | null => {
       const list = lanes[sideIdx(side)]![level]!
       const half = (n.cardW * fit) / 2
+      const gap = this.cardGap()
       const desired = (n.anchorX - camX) * z + halfW
       // Invoegpositie op DATUM → venster tussen de datum-buren.
       let i = 0
       while (i < list.length && list[i]!.anchorX <= n.anchorX) i++
-      let lo = i > 0 ? list[i - 1]!.right + CARD_GAP_PX + half - slack : -Infinity
-      let hi = i < list.length ? list[i]!.left - CARD_GAP_PX - half + slack : Infinity
+      let lo = i > 0 ? list[i - 1]!.right + gap + half - slack : -Infinity
+      let hi = i < list.length ? list[i]!.left - gap - half + slack : Infinity
       if (clampEdges) {
         // Een cross-jaar-memory ankert dicht bij het uiteinde van de as en heeft daar
         // minder lucht; die krijgt een krappere marge zodat hij een kaart blijft.
         // De slack geldt hier BEWUST niet: dit is de harde "niets over de schermrand"-
         // eis, en met slack zou een krappe marge er precies door opgeheven worden.
-        const pad = n.spansYears ? EDGE_PAD_AXIS_END : EDGE_PAD
+        // Voor de schermrand telt de ZICHTBARE breedte (incl. de getekende rand).
+        const pad = (n.spansYears ? EDGE_PAD_AXIS_END : EDGE_PAD) + this.borderSurplus()
         lo = Math.max(lo, pad + half)
         hi = Math.min(hi, vpW - pad - half)
       }
@@ -1123,8 +1173,8 @@ export class YearScene implements Scene {
       const tier = sizeTier(n.size)
       // Bereik van `n`: het scherm-x-venster waarin hij zou kunnen landen (incl. de
       // verplichte tussenruimte, anders valt een slot dat hem net wél blokkeert erbuiten).
-      const reachLo = desired - MAX_OFFSET - n.cardW / 2 - CARD_GAP_PX
-      const reachHi = desired + MAX_OFFSET + n.cardW / 2 + CARD_GAP_PX
+      const reachLo = desired - MAX_OFFSET - this.halfExtent(n, 1) - this.cardGap()
+      const reachHi = desired + MAX_OFFSET + this.halfExtent(n, 1) + this.cardGap()
       let victim: { slot: LaneSlot; side: number; level: number; tier: number } | null = null
       for (const c of cands) {
         for (const slot of lanes[sideIdx(c.side)]![c.level]!) {
@@ -1222,6 +1272,19 @@ export class YearScene implements Scene {
       this.fxSparkActive = false
       this.fxPing = 0
     }
+  }
+
+  /** Zichtbare randdikte om de tegels (app-instelling). Markeert alle kaders als
+   * "opnieuw tekenen"; de renderlus pakt dat op zodra een tegel in beeld is. */
+  setBorderPx(px: number): void {
+    const next = Number.isFinite(px) ? Math.max(0, Math.min(BORDER_PX_MAX, px)) : BORDER_PX
+    if (next === this.borderPx) return
+    this.borderPx = next
+    for (const n of this.nodes) {
+      n.frameDrawnScale = -1
+      n.titleDrawScale = -1 // titel-offset hangt aan de randdikte → opnieuw plaatsen
+    }
+    this.layoutDirty = true // de zichtbare breedte veranderde → opnieuw inpassen
   }
 
   /** Week/dag-streepjes tonen bij inzoomen aan/uit (maand blijft altijd). */
@@ -1519,7 +1582,7 @@ export class YearScene implements Scene {
       // Culling dekt zowel de stip (op de as, screenX) als de kaart (met offset).
       // `fitScale` is de krimpfactor uit de packing (1 = ware grootte).
       const cardOff = this.curvedLeaders ? n.curOffX : 0
-      const halfCardW = (n.cardW * n.curFitScale) / 2
+      const halfCardW = this.halfVisual(n, n.curFitScale)
       const loX = screenX + Math.min(0, cardOff) - halfCardW
       const hiX = screenX + Math.max(0, cardOff) + halfCardW
       const inView = hiX > -marginPx && loX < vp.width + marginPx
@@ -1558,9 +1621,14 @@ export class YearScene implements Scene {
           // hertekenen als die effectieve schaal wijzigt (resize of krimp-stap; de
           // krimp is gekwantiseerd, dus dat blijft zeldzaam).
           const drawScale = n.baseScreenScale * n.fitScale
-          if (n.frame && n.frameDrawnScale !== drawScale) {
+          // De witte rand ís de focus-indicator; staat de instelling zo dun dat er
+          // niets te zien valt, dan krijgt juist de gefocuste tegel een minimale rand.
+          const kbFocused = n.eventId === this.kbFocusId
+          if (n.frame && (n.frameDrawnScale !== drawScale || n.frameDrawnFocus !== kbFocused)) {
             n.frameDrawnScale = drawScale
-            const b = BORDER_PX / drawScale
+            n.frameDrawnFocus = kbFocused
+            const px = kbFocused ? Math.max(this.borderPx, FOCUS_MIN_PX) : this.borderPx
+            const b = px / drawScale
             n.frame.clear()
             n.frame
               .rect(-THUMB_W / 2 - b, -THUMB_H / 2 - b, THUMB_W + b * 2, THUMB_H + b * 2)
@@ -1580,10 +1648,16 @@ export class YearScene implements Scene {
           n.card.alpha = n.appear
 
           // Titel-kant volgt de (huidige) lane.
-          if (n.title && n.titleSide !== side) {
+          // Ook op drawScale sleutelen: de offset hangt aan de randdikte in
+          // KAART-coördinaten, en die verandert mee met krimp of een live resize.
+          if (n.title && (n.titleSide !== side || n.titleDrawScale !== drawScale)) {
             n.titleSide = side
+            n.titleDrawScale = drawScale
             n.title.anchor.set(0.5, side < 0 ? 1 : 0)
-            n.title.position.set(0, side * (THUMB_H / 2 + BORDER + 6))
+            // Buiten de getekende rand blijven: die kan bij een dikke instelling breder
+            // zijn dan de vaste layout-marge.
+            const pad = BORDER + this.borderSurplus() / drawScale
+            n.title.position.set(0, side * (THUMB_H / 2 + pad + 6))
           }
 
           // Leader: van de datum op de as naar de onderrand van de (verschoven)
@@ -1648,8 +1722,11 @@ export class YearScene implements Scene {
       } else if (n.appear > 0.5) {
         n.hitCx = n.anchorX + (this.curvedLeaders ? n.curOffX : 0) * invZ
         n.hitCy = n.curY * invZ
-        n.hitHalfW = ((n.cardW * n.curFitScale) / 2 + BORDER) * invZ
-        n.hitHalfH = ((n.cardH * n.curFitScale) / 2 + BORDER) * invZ
+        // Klik-zone: minstens de layout-marge, maar nooit kleiner dan de getekende
+        // rand — anders zie je een tegel waarvan de rand niet reageert.
+        const hitPad = Math.max(BORDER, this.borderPx)
+        n.hitHalfW = ((n.cardW * n.curFitScale) / 2 + hitPad) * invZ
+        n.hitHalfH = ((n.cardH * n.curFitScale) / 2 + hitPad) * invZ
       } else if (n.dot) {
         n.hitCx = n.anchorX + off * invZ
         n.hitCy = 0
