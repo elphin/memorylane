@@ -39,9 +39,22 @@ const CARD_H_MAX = 132
 const AXIS_CLEAR_PX = 96 // scherm tussen as en de eerste lane (ruim, zodat de
 // leader-lijn een mooie verticale S maakt i.p.v. schuin te lopen)
 const LANE_GAP_PX = 40 // ruimte tussen lanes (incl. plek voor de titel ertussen)
-const LANE_PITCH = CARD_H_MAX + LANE_GAP_PX
+// Rechte (strikt verticale) leaders hebben de S-bocht-ruimte niet nodig: lanes mogen
+// dichter op de as en dichter op elkaar. Dat verlaagt de drempel voor een tweede lane
+// per kant van ~1076 naar ~988 px vensterhoogte mét jaartitel (standaard aan), en van
+// ~984 naar ~896 px zonder titel. Niet lager kiezen: bij AXIS_CLEAR 56 valt het kader
+// op de maandlabels (die tot ~38 scherm-px reiken) zodra laneJitter er 14px afhaalt.
+const AXIS_CLEAR_STRAIGHT = 64
+const LANE_GAP_STRAIGHT = 28
 const CARD_GAP_PX = 16 // min. horizontale scherm-ruimte tussen kaarten in een lane
 const EDGE_PAD = 34 // min. scherm-px tussen een kaart en de linker-/rechterrand (overzicht)
+// Kaarten van een memory die de jaargrens kruist ankeren op het uiteinde van de as en
+// hebben daar minder lucht; een krappere rand-marge houdt ze een kaart i.p.v. een stip.
+const EDGE_PAD_AXIS_END = 10
+// Krimp-om-te-passen: past een kaart nergens op ware grootte, dan proberen we deze
+// stappen vóór hij een stip wordt. Gekwantiseerd (niet continu) zodat het frame-kader
+// niet elk frame opnieuw getekend hoeft te worden en een kaart niet zichtbaar "pompt".
+const FIT_STEPS = [1, 0.85, 0.72, 0.6] as const
 
 // Leader-lijntjes (as → kaart): een simpele lijn met constante schermdikte,
 // scherp getekend op schermresolutie (de leader-laag wordt met 1/zoom
@@ -104,6 +117,33 @@ function effectiveSize(size: number | undefined, itemCount: number): number {
   return Math.max(1, Math.min(100, base + nudge))
 }
 
+/** Belang-tier uit de RAUWE rating: 2 = uitzonderlijk, 1 = bijzonder, 0 = gewoon.
+ * Bewust NIET uit `eff`: de itemCount-nudge (max +12) mag een gewone memory niet naar
+ * een hogere tier tillen. Grenzen gelijk aan de stip-tiers en de drie keuze-buckets
+ * (30/50/70) in de memory-dialoog. */
+function sizeTier(size: number): number {
+  return size >= 60 ? 2 : size >= 40 ? 1 : 0
+}
+
+/** Toelatingsvolgorde voor de packing: eerst álle uitzonderlijke memories, dan de
+ * bijzondere, dan de gewone; binnen een tier de zwaarste eerst en daarna de hash
+ * (deterministisch). Gedeeld door de constructor-sort en de re-sort na een live
+ * grootte-wijziging, zodat die twee nooit uit de pas lopen. */
+function admissionOrder(a: Node, b: Node): number {
+  return sizeTier(b.size) - sizeTier(a.size) || b.eff - a.eff || a.hash - b.hash
+}
+
+/** Zijwaartse drift (scherm-px) van een kaart t.o.v. zijn datum — de speelse
+ * spreiding. ENIGE bron, en alleen `repack` roept hem aan; `fitCamera` reserveert de
+ * drift bewust NIET (die dwingt de overzicht-stand af, en de rand-eis in repack is de
+ * garantie dat niets over de rand valt). Voorheen hadden die twee elk hun eigen
+ * formule met dezelfde hash-bits, waardoor repack structureel 27–66 px verder dreef
+ * dan de fit-camera had gereserveerd → kaarten liepen rechts uit beeld. */
+function driftFor(hash: number): number {
+  const dir = (hash >>> 8) & 1 ? 1 : -1
+  return dir * CARD_OFFSET_PX * (0.5 + 1.0 * (((hash >>> 9) % 100) / 100))
+}
+
 /** Deterministische ±8% grootte-variatie (organischer); alleen visueel. */
 function jitterScale(id: string): number {
   const r = ((hashId(id) >>> 13) % 1000) / 1000
@@ -145,9 +185,21 @@ interface Lane {
   level: number // 0 = dichtst bij de as
 }
 
+/** Eén bezette plek in een lane (scherm-px), met de datum erbij zodat de lijst op
+ * datumvolgorde blijft — dát is wat kruisende leaders binnen een lane uitsluit. */
+interface LaneSlot {
+  anchorX: number
+  left: number
+  right: number
+  node: Node
+}
+
 interface Node {
   eventId: string
   synthetic: boolean // synthetische "Losse foto's"-bundel → geen grootte-curatie
+  /** Memory die de jaargrens kruist en dus in twee jaren staat: ankert op het uiteinde
+   * van de as en krijgt daar een krappere rand-marge (fase 7 vult dit). */
+  spansYears: boolean
   anchorX: number // wereld-x (de datum)
   hasCover: boolean
   isSpan: boolean
@@ -163,12 +215,23 @@ interface Node {
   offX: number // horizontale scherm-offset van de kaart t.o.v. zijn datum (± doel)
   curOffX: number // idem, geanimeerd (glijdt naar offX; geen sprong bij lane-wissel)
   vSlot: number // verticale slot 0..1 (bij één lane: verdeelt kaarten over de hoogte)
-  // Schermgroottes (px).
+  // Schermgroottes (px) — de INTRINSIEKE maat (belang + jitter). De packer verkleint
+  // deze nooit; die gebruikt `fitScale` (zie hieronder).
   cardW: number
   cardH: number
   baseScreenScale: number // cardH / THUMB_H (kaart in THUMB-eenheden getekend)
   // Packing-toestand (leeft mee over frames voor stabiliteit).
   lane: Lane | null // null = stip/overflow
+  /** Efemere krimpfactor (0..1] uit de packing: past een kaart alleen kleiner, dan
+   * krijgt hij die maat i.p.v. een stip te worden. Gekwantiseerd (FIT_STEPS) en bewust
+   * GEEN mutatie van cardH/cardW: dat zou het kader elk frame laten hertekenen en met
+   * de Shift-resize vechten. De kaart-inhoud (incl. titel) schaalt wél mee — een
+   * kleinere tegel hoort een kleiner bijschrift te hebben. */
+  fitScale: number
+  /** Geanimeerde versie van `fitScale` (lerpt ernaartoe), zodat een kaart die krimpt
+   * of terugveert niet in één frame van formaat springt. Het KADER wordt op de
+   * gekwantiseerde `fitScale` getekend, zodat dat zeldzaam blijft. */
+  curFitScale: number
   // Animatie-toestand (fase B): appear 0=stip, 1=kaart; curY = huidige scherm-y.
   appear: number
   curY: number
@@ -177,7 +240,7 @@ interface Node {
   frame: Graphics | null // de witte rand (dient als toetsenbord-focus-indicator)
   badge: Container | null // "in aanbouw"-ezelsoor (herplaatsen bij resize)
   borderAlpha: number // huidige rand-alpha (animeert weg voor niet-gefocuste tegels)
-  frameDrawnScale: number // baseScreenScale waarvoor de frame laatst getekend is (-1 = nog niet)
+  frameDrawnScale: number // baseScreenScale × fitScale waarvoor de frame laatst getekend is (-1 = nog niet)
   title: Text | null
   titleSide: number // laatst toegepaste titel-kant (om niet elke frame te herzetten)
   dot: Container | null // stip-marker (non-cover, of cover-overflow bij een niet-span)
@@ -192,6 +255,9 @@ interface Node {
   hitHalfW: number
   hitHalfH: number
   wasVisible: boolean
+  /** Index in de datumvolgorde van ALLE kaarten (constructor, onveranderlijk) — basis
+   * voor het stabiele hoogte-slot. */
+  dateRank: number
   // Slideshow-roulatie.
   photoIds: string[]
   photoIdx: number
@@ -268,6 +334,22 @@ export class YearScene implements Scene {
   // houdt alleen de gefocuste tegel z'n witte rand; de rest faadt weg.
   private kbFocusId: string | null = null
   private primed = false // eerste frame snapt naar de packing-toestand; daarna animeren
+  // Herpak-conditie: `repack` draait niet elk frame maar alleen als de layout-input
+  // wijzigde (camera/viewport/titelruimte/belang/filter). Scheelt werk én maakt de
+  // behoud-pass zinvol: bij een stilstaande camera is de layout per definitie stabiel.
+  private layoutDirty = true
+  private lastCamX = NaN
+  private lastZoom = NaN
+  private lastVpW = NaN
+  private lastVpH = NaN
+  // Overzicht-stand met dode zone: de rand-eis (geen kaart over de schermrand) geldt
+  // alleen als de as helemaal past. Zonder hysterese zou wielzoomen precies over de
+  // drempel een groep kaarten om-en-om in stippen laten veranderen.
+  private atFitSticky = true
+  // Event dat op dit moment met Shift gesleept wordt (belang bijstellen): die kaart
+  // mag de packer niet stil verkleinen, anders wordt hij kleiner terwijl je 'm groter
+  // sleept. Past hij écht niet, dan wordt hij een stip — dat is eerlijke feedback.
+  private resizingId: string | null = null
   private yearStart = 0
   private span = 1
   private year = 0 // kalenderjaar (voor maand-/week-/dag-streepjes)
@@ -428,9 +510,28 @@ export class YearScene implements Scene {
       this.nodes.push(node)
       this.cardNodes.push(node)
     }
-    // Packing-volgorde: strikt op belang aflopend, dan id-hash (deterministisch).
-    this.cardNodes.sort((a, b) => b.eff - a.eff || a.hash - b.hash)
-    this.cardNodes.forEach((n, i) => (n.prefSide = i % 2 === 0 ? -1 : 1))
+    // Hoogte-slot (bij één lane): een van-der-Corput-waarde op de DATUMVOLGORDE van
+    // alle kaarten — naburige datums krijgen sterk contrasterende hoogtes. De rang en
+    // de normalisatie staan bewust hier (constructor, vaste verzameling) en niet per
+    // frame over de "nu geplaatste" kaarten: anders verspringt de hoogte van élke
+    // kaart zodra er ergens één van kaart naar stip gaat.
+    const byDate = [...this.cardNodes].sort((a, b) => a.anchorX - b.anchorX || a.hash - b.hash)
+    byDate.forEach((n, i) => (n.dateRank = i))
+    if (byDate.length === 1) {
+      byDate[0]!.vSlot = 0.5 // één kaart hoort in het midden, niet tegen de as
+    } else {
+      const vdc = byDate.map((n) => vanDerCorput(n.dateRank + 1))
+      const vMinRaw = Math.min(...vdc)
+      const vSpan = Math.max(...vdc) - vMinRaw || 1
+      byDate.forEach((n, i) => (n.vSlot = (vdc[i]! - vMinRaw) / vSpan))
+    }
+    // Voorkeurskant afwisselend op DATUMvolgorde: exact 50/50 verdeeld én echt
+    // gecorreleerd met de datum, zodat een cluster memories rond dezelfde datum zich
+    // over beide kanten verdeelt i.p.v. scheef aan één kant te landen. (Een hash-bit
+    // of de belang-index zou net zo ongecorreleerd zijn als de oude `i % 2`.)
+    byDate.forEach((n, i) => (n.prefSide = i % 2 === 0 ? -1 : 1))
+    // Packing-volgorde: belang-tier eerst (zie admissionOrder).
+    this.cardNodes.sort(admissionOrder)
 
     if (detail.events.length === 0) {
       const hint = new Text({
@@ -612,7 +713,7 @@ export class YearScene implements Scene {
       // toont zijn gekozen accent); anders is gewoon grijs en belangrijk het
       // jaar-accent.
       const size = ev.size ?? 50
-      const tier = size >= 60 ? 2 : size >= 40 ? 1 : 0
+      const tier = sizeTier(size)
       const customAccent =
         ev.theme?.id || ev.theme?.accent ? resolveTheme(this.yearChoice, ev.theme).colors.accent : null
       const dotColor = customAccent ?? (tier === 0 ? this.T.colors.textMuted : this.T.colors.accent)
@@ -638,6 +739,7 @@ export class YearScene implements Scene {
     return {
       eventId: ev.id,
       synthetic: ev.synthetic ?? false,
+      spansYears: ev.spansYears ?? false,
       anchorX,
       hasCover,
       isSpan,
@@ -649,19 +751,20 @@ export class YearScene implements Scene {
       size: ev.size ?? 50,
       itemCount: ev.itemCount,
       hash: hashId(ev.id),
+      // Wordt in de constructor op datumvolgorde afwisselend gezet (zie boven).
       prefSide: -1,
-      // Zaad-offset (alleen voor de fit-camera vóór de eerste repack); repack zet de
-      // echte offX per frame. curOffX volgt offX geanimeerd.
-      offX:
-        ((hashId(ev.id) >>> 8) & 1 ? 1 : -1) *
-        CARD_OFFSET_PX *
-        (0.5 + 1.0 * (((hashId(ev.id) >>> 9) % 100) / 100)),
+      // repack zet de echte offX vóór het eerste gebruik (de priming van curOffX
+      // gebeurt ná repack), dus 0 is hier de juiste startwaarde.
+      offX: 0,
       curOffX: 0,
       vSlot: 0.5,
+      dateRank: 0,
       cardW,
       cardH,
       baseScreenScale: cardH / THUMB_H,
       lane: null,
+      fitScale: 1,
+      curFitScale: 1,
       appear: 0,
       curY: 0,
       card,
@@ -692,6 +795,17 @@ export class YearScene implements Scene {
     }
   }
 
+  /** Ruimte tussen de as en de eerste lane; bij strikt verticale leaders is de
+   * S-bocht-ruimte niet nodig, dus mag de eerste lane dichter op de as. */
+  private axisClear(): number {
+    return this.curvedLeaders ? AXIS_CLEAR_PX : AXIS_CLEAR_STRAIGHT
+  }
+
+  /** Afstand tussen twee lanes (kaarthoogte + tussenruimte). */
+  private lanePitch(): number {
+    return CARD_H_MAX + (this.curvedLeaders ? LANE_GAP_PX : LANE_GAP_STRAIGHT)
+  }
+
   /** Aantal lanes per kant dat in de viewporthoogte past (minimaal 1). Reserveert
    * de volle kaarthoogte + titelruimte in de buitenste lane, zodat een grote
    * kaart met titel niet boven/onder buiten beeld valt. */
@@ -701,12 +815,15 @@ export class YearScene implements Scene {
     // titel ("2024") wél aan, dan is meer nodig zodat een top-kaart of z'n (evt.
     // tweeregelige) label NOOIT door die titel heen loopt — ~138px met marge.
     const titleClear = this.titleInset > 0 ? 138 : 92
-    return Math.max(1, Math.floor((vpH / 2 - AXIS_CLEAR_PX - CARD_H_MAX - titleClear) / LANE_PITCH) + 1)
+    return Math.max(
+      1,
+      Math.floor((vpH / 2 - this.axisClear() - CARD_H_MAX - titleClear) / this.lanePitch()) + 1,
+    )
   }
 
   /** Scherm-y (px, t.o.v. de as) van het midden van een lane. */
   private laneCenterY(lane: Lane): number {
-    return lane.side * (AXIS_CLEAR_PX + CARD_H_MAX / 2 + lane.level * LANE_PITCH)
+    return lane.side * (this.axisClear() + CARD_H_MAX / 2 + lane.level * this.lanePitch())
   }
 
   /** "In aanbouw"-badge: een omgevouwen hoek ("ezelsoor") met een klokje,
@@ -766,15 +883,21 @@ export class YearScene implements Scene {
     // Iets 'krapper' passen: ruimere marge links/rechts van de as (jan/dec staan
     // niet tegen de rand) — 120 scherm-px per kant.
     let zoom = Math.max(this.engine.camera.minZoom, Math.min(vp.width / (AXIS_W + 240), 1))
-    // Initiële view altijd 'passend': de kaarten hebben een horizontale scherm-
-    // offset (offX) + breedte die NIET met de zoom meeschaalt, dus de buitenste
-    // kaarten (jan/dec) kunnen bij de axis-fit half buiten beeld vallen. Verlaag
-    // de zoom zonodig tot de breedste kaart-extent + comfortmarge binnen de
-    // viewport past.
-    const sideMargin = 60 // scherm-px speling per kant (was 20 → randkaarten kregen te weinig lucht)
+    // De rand-eis in `repack` garandeert dat geen kaart over de schermrand valt — maar
+    // die eis geldt alléén in de overzicht-stand. Dwing daarom af dat de fit-camera
+    // ook echt op die stand uitkomt (restMax === 0, zie update()); anders zou de
+    // basis-fitzoom er net boven blijven en zou de klem nooit draaien.
+    // FIT_SLACK geeft daar speling bij: precies op de drempel zou ~40px vensterkrimp
+    // (een geopend paneel, een smallere window) de rand-eis stil uitschakelen, en de
+    // jaar-scene herfit niet bij een resize.
+    const FIT_SLACK = 40
+    zoom = Math.min(zoom, (vp.width / 2 - EDGE_MARGIN - FIT_SLACK) / (AXIS_W / 2))
+    // Daarnaast de kaartbreedte zelf reserveren, zodat een rand-kaart (jan/dec) niet
+    // half buiten beeld begint. De DRIFT wordt hier bewust NIET gereserveerd: die
+    // hoort bij de klem in repack, en dubbel reserveren zou het jaar onnodig uitzoomen.
+    const sideMargin = 60 // scherm-px speling per kant
     for (const n of this.cardNodes) {
-      const off = this.curvedLeaders ? Math.abs(n.offX) : 0
-      const halfExtent = n.cardW / 2 + off // scherm-px (schaalt niet met zoom)
+      const halfExtent = n.cardW / 2 // scherm-px (schaalt niet met zoom)
       const anchorAbs = Math.abs(n.anchorX)
       if (anchorAbs < 1) continue
       const maxZoom = (vp.width / 2 - halfExtent - sideMargin) / anchorAbs
@@ -795,25 +918,6 @@ export class YearScene implements Scene {
     return -side * frac * 14 // beperkte jitter naar de as (alleen bij >1 lane)
   }
 
-  /** Verdeel de getoonde kaarten van één kant over de hoogte (slot 0..1). We gebruiken
-   * een van-der-Corput-reeks over de DATUMVOLGORDE: naburige datums krijgen sterk
-   * contrasterende hoogtes en de volle hoogte wordt gevuld — een fijne, niet-monotone
-   * spreiding (geen saaie ramp). Horizontaal zijn de kaarten al gescheiden ⇒ vrije y
-   * is veilig. `sideCards` staat al op datumvolgorde. */
-  private assignVSlots(sideCards: Node[]): void {
-    const laned = sideCards.filter((n) => n.lane)
-    const k = laned.length
-    if (k <= 1) {
-      if (k === 1) laned[0]!.vSlot = 0.5
-      return
-    }
-    const vals = laned.map((_, i) => vanDerCorput(i + 1))
-    const min = Math.min(...vals)
-    const max = Math.max(...vals)
-    const span = max - min || 1
-    laned.forEach((n, i) => (n.vSlot = (vals[i]! - min) / span))
-  }
-
   /** Scherm-y (t.o.v. de as) waar een kaart naartoe animeert. Bij MEER lanes: de
    * lane-y + een kleine jitter. Bij ÉÉN lane: de kaart-afstand tot de as volgens z'n
    * verdeelde slot (vMin..vMax) — zo vullen de kaarten de hoogte i.p.v. één lijn. */
@@ -824,133 +928,260 @@ export class YearScene implements Scene {
     return lane.side * (this.vMin + n.vSlot * (max - this.vMin))
   }
 
-  /** Kaart-layout: horizontale offset (offX t.o.v. de datum) + lane per kaart. Doel: een
-   * SPEELSE spreiding — is er ruimte, dan drijven kaarten zijwaarts (hash-bepaalde
-   * richting/afstand) en verdelen ze zich over de lanes (+ hoogte-jitter) voor variatie;
-   * een CLUSTER wordt netjes uit elkaar geschoven (order-preserving push binnen een lane
-   * ⇒ leaders binnen die lane kruisen niet). Te ver van de datum voor het budget → stip.
-   * Per frame herberekend; offX/curY glijden geanimeerd. */
+  /** Kaart-layout: lane + horizontale offset per kaart.
+   *
+   * TOELATING op belang (zie `admissionOrder`): eerst álle uitzonderlijke memories,
+   * dan de bijzondere, dan de gewone. Vroeger liep dit op datumvolgorde — wie eerst
+   * kwam kreeg de plek, waardoor een uitzonderlijke memory in november een stip werd
+   * terwijl een gewone in maart een kaart was.
+   *
+   * PLAATSING per lane in een op datum gesorteerde lijst bezette intervallen: een
+   * kaart komt tussen zijn datum-buren te staan, dus binnen een lane is de x-volgorde
+   * altijd gelijk aan de datumvolgorde ⇒ leaders in dezelfde lane kruisen niet, ook
+   * al is de invoegvolgorde nu op belang. Is er tussen die buren geen ruimte, dan valt
+   * de lane af (we klemmen niet in een leeg venster — dat zou beide buren overlappen).
+   *
+   * BEHOUD-PASS: een kaart die vorig frame een plek had, probeert die eerst opnieuw
+   * (met marge) zodat pannen/zoomen geen kaarten laat verspringen. Daarna pas de rest.
+   *
+   * Draait niet elk frame, maar alleen bij een gewijzigde camera/zoom/viewport of een
+   * expliciete `layoutDirty` (titelruimte, belang, filter) — zie `update()`. */
   private repack(vpW: number, vpH: number): void {
     const z = this.engine.camera.zoom
     const camX = this.engine.camera.x
     const halfW = vpW / 2
     const N = this.lanesPerSide(vpH)
     this.lanesN = N
+    const curved = this.curvedLeaders
     // Verticale spreiding (bij één lane): verdeel de kaarten over de VOLLE beschikbare
-    // hoogte i.p.v. een smalle band bij de as. vMax houdt rekening met de kaarthoogte,
-    // het memory-label en (bovenaan) de jaar-titel-ruimte. (Vóór de rechte-leader-tak
-    // berekend zodat cardTargetY in beide modi geldige grenzen heeft.)
+    // hoogte i.p.v. een smalle band bij de as.
     const V_EDGE = CARD_H_MAX / 2 + 42 + 12 // kaart-half + label + marge
     this.vMin = 118
     this.vMaxTop = Math.max(this.vMin + 70, vpH / 2 - this.titleInset - V_EDGE)
     this.vMaxBottom = Math.max(this.vMin + 70, vpH / 2 - V_EDGE)
-    if (!this.curvedLeaders) {
-      // Rechte leaders: geen horizontale offset — alleen lanes op datumvolgorde.
-      for (const side of [-1, 1] as const) {
-        const cards = this.cardNodes
-          .filter((n) => n.prefSide === side)
-          .sort((a, b) => a.anchorX - b.anchorX || a.hash - b.hash)
-        const laneRight = new Array<number>(N).fill(-Infinity)
-        for (const n of cards) {
-          const dx = (n.anchorX - camX) * z + halfW
-          const half = n.cardW / 2
-          let level = -1
-          for (let lvl = 0; lvl < N; lvl++) {
-            if (laneRight[lvl] === -Infinity || dx - half > laneRight[lvl] + CARD_GAP_PX) {
-              level = lvl
-              break
-            }
-          }
-          n.offX = 0
-          n.lane = level === -1 ? null : { side, level }
-          if (level !== -1) laneRight[level] = dx + half
-        }
-        if (N === 1) this.assignVSlots(cards)
+    // Hoe ver een kaart max van z'n datum mag afwijken (scherm-px). Bij rechte leaders
+    // 0: die staan strikt verticaal onder/boven hun datum.
+    const MAX_OFFSET = curved ? Math.min(vpW * 0.38, 440) : 0
+
+    // Overzicht-stand met dode zone (in SCHERM-px; restMax is een wereldmaat). Alleen
+    // hier geldt de rand-eis: op fit kán er niet gepand worden, dus is de klem
+    // pan-veilig. Ingezoomd zou een camera-afhankelijke klem kaarten zijwaarts laten
+    // kruipen t.o.v. hun eigen datum.
+    const restMax = Math.max(0, AXIS_W / 2 - (halfW - EDGE_MARGIN) / z)
+    if (restMax * z <= 0.5) this.atFitSticky = true
+    else if (restMax * z > 20) this.atFitSticky = false
+    const clampEdges = this.atFitSticky
+
+    // Strikt verticale leaders: offX is per definitie 0 — óók voor kaarten die stip
+    // worden of die pass 1 niet halen. De render/hit-box/culling gaten `curOffX` al op
+    // `curvedLeaders`, maar die invariant is dragend genoeg om hem hier hard te zetten
+    // in plaats van te vertrouwen op vijf losse gates.
+    if (!curved) for (const n of this.cardNodes) n.offX = 0
+
+    // Lege lanes: [kant][level] → op datum gesorteerde intervallen.
+    const lanes: LaneSlot[][][] = [[], []]
+    for (const s of [0, 1]) for (let l = 0; l < N; l++) lanes[s]![l] = []
+    const sideIdx = (side: number): number => (side < 0 ? 0 : 1)
+
+    /** Probeer `n` in (side, level) te plaatsen op `fit` van zijn grootte. `want` is de
+     * gewenste scherm-x; `slack` verruimt de toetsen in de behoud-pass. Geeft de
+     * definitieve x terug, of null als het niet past. */
+    const tryPlace = (
+      n: Node,
+      side: number,
+      level: number,
+      fit: number,
+      want: number,
+      slack: number,
+    ): number | null => {
+      const list = lanes[sideIdx(side)]![level]!
+      const half = (n.cardW * fit) / 2
+      const desired = (n.anchorX - camX) * z + halfW
+      // Invoegpositie op DATUM → venster tussen de datum-buren.
+      let i = 0
+      while (i < list.length && list[i]!.anchorX <= n.anchorX) i++
+      let lo = i > 0 ? list[i - 1]!.right + CARD_GAP_PX + half - slack : -Infinity
+      let hi = i < list.length ? list[i]!.left - CARD_GAP_PX - half + slack : Infinity
+      if (clampEdges) {
+        // Een cross-jaar-memory ankert dicht bij het uiteinde van de as en heeft daar
+        // minder lucht; die krijgt een krappere marge zodat hij een kaart blijft.
+        // De slack geldt hier BEWUST niet: dit is de harde "niets over de schermrand"-
+        // eis, en met slack zou een krappe marge er precies door opgeheven worden.
+        const pad = n.spansYears ? EDGE_PAD_AXIS_END : EDGE_PAD
+        lo = Math.max(lo, pad + half)
+        hi = Math.min(hi, vpW - pad - half)
       }
-      return
+      if (lo > hi) return null // leeg venster → deze lane valt af
+      let x: number
+      if (curved) {
+        x = Math.min(hi, Math.max(lo, want))
+        if (Math.abs(x - desired) > MAX_OFFSET + slack) return null
+      } else {
+        // Strikt verticaal: geen offset, dus de datum-x moet zélf vrij zijn.
+        x = desired
+        if (x < lo || x > hi) return null
+      }
+      return x
     }
-    // Hoe ver een kaart max van z'n datum mag afwijken (scherm-px). Ruim, zodat een
-    // cluster zich eerst breed in de vrije ruimte verspreidt; daarboven een lane hoger,
-    // anders een stip.
-    const MAX_OFFSET = Math.min(vpW * 0.38, 440)
-    for (const side of [-1, 1] as const) {
-      const cards = this.cardNodes
-        .filter((n) => n.prefSide === side)
-        .sort((a, b) => a.anchorX - b.anchorX || a.hash - b.hash)
-      const laneRight = new Array<number>(N).fill(-Infinity) // rechterrand per lane
-      for (const n of cards) {
-        const desired = (n.anchorX - camX) * z + halfW
-        const half = n.cardW / 2
-        // Speelse zijwaartse drift (deterministisch uit de hash): richting + afstand.
-        // Dit geeft de losse spreiding als er ruimte is; bij drukte neemt de overlap-
-        // push het over (en houdt de datumvolgorde per lane aan).
-        const dir = (n.hash >>> 8) & 1 ? 1 : -1
-        const drift = dir * CARD_OFFSET_PX * (0.85 + 1.5 * (((n.hash >>> 9) % 100) / 100))
-        const want = desired + drift
-        // Lane: begin bij een hash-lane (hoogte-variatie bij >1 lane), pak de eerste die
-        // past. Kaarten komen in datumvolgorde binnen ⇒ push per lane = order-preserving.
-        const start = N > 1 ? (n.hash >>> 12) % N : 0
-        let level = -1
-        let x = want
-        for (let k = 0; k < N; k++) {
-          const lvl = (start + k) % N
-          const cand =
-            laneRight[lvl] === -Infinity ? want : Math.max(want, laneRight[lvl] + half + CARD_GAP_PX)
-          if (cand - desired <= MAX_OFFSET) {
-            level = lvl
-            x = cand
-            break
+
+    const commit = (n: Node, side: number, level: number, fit: number, x: number): void => {
+      const list = lanes[sideIdx(side)]![level]!
+      const half = (n.cardW * fit) / 2
+      let i = 0
+      while (i < list.length && list[i]!.anchorX <= n.anchorX) i++
+      list.splice(i, 0, { anchorX: n.anchorX, left: x - half, right: x + half, node: n })
+      n.lane = { side, level }
+      n.fitScale = fit
+      n.offX = curved ? x - ((n.anchorX - camX) * z + halfW) : 0
+    }
+
+    /** Lane-volgorde voor een kaart: voorkeurskant eerst, dan de andere; binnen een
+     * kant vanaf een hash-lane (hoogte-variatie) rondlopend. */
+    const candidates = (n: Node): { side: number; level: number }[] => {
+      const out: { side: number; level: number }[] = []
+      const start = N > 1 ? (n.hash >>> 12) % N : 0
+      for (const side of [n.prefSide, -n.prefSide]) {
+        for (let k = 0; k < N; k++) out.push({ side, level: (start + k) % N })
+      }
+      return out
+    }
+
+    // --- Pass 1: behoud. In toelatingsvolgorde, zodat een hogere tier zijn plek
+    // claimt vóór een lagere die 'm zou kunnen innemen. De claim loopt door dezelfde
+    // datum-geordende venstertoets als een nieuwe kaart: bij uitzoomen kan de
+    // onderlinge x-volgorde omdraaien, en dan hoort de claim te vervallen i.p.v.
+    // kruisende leaders op te leveren.
+    const KEEP_SLACK = 10
+    const placed = new Set<string>()
+    for (const n of this.cardNodes) {
+      if (!n.lane || !this.primed) continue
+      const { side, level } = n.lane
+      if (level >= N) continue // minder lanes dan vorig frame (venster verkleind)
+      const desired = (n.anchorX - camX) * z + halfW
+      // Eerst één krimp-stap terugklimmen: krimpen is een noodgreep, dus zodra er
+      // ruimte vrijkomt hoort de kaart weer te groeien. Zonder deze stap zou de
+      // behoud-claim de gekrompen maat elk frame opnieuw bevestigen en bleef een
+      // kaart permanent klein.
+      // De GROEI-claim krijgt bewust géén slack: met slack zou een kaart die net
+      // gekrompen is meteen weer op ware grootte passen, en dan zakt de onderlinge
+      // tussenruimte structureel onder CARD_GAP_PX. Slack hoort alleen bij het
+      // behouden van de huidige maat (dat is de anti-flikker-marge).
+      const si = FIT_STEPS.indexOf(n.fitScale as (typeof FIT_STEPS)[number])
+      const bigger = si > 0 ? FIT_STEPS[si - 1]! : n.fitScale
+      let fit = bigger
+      let x = tryPlace(n, side, level, fit, desired + n.offX, bigger === n.fitScale ? KEEP_SLACK : 0)
+      if (x === null && bigger !== n.fitScale) {
+        fit = n.fitScale
+        x = tryPlace(n, side, level, fit, desired + n.offX, KEEP_SLACK)
+      }
+      if (x === null) continue
+      commit(n, side, level, fit, x)
+      placed.add(n.eventId)
+    }
+
+    // --- Pass 2: de rest, in toelatingsvolgorde. Eerst alle lanes op ware grootte,
+    // daarna pas krimpen — kleiner worden is een laatste redmiddel vóór een stip.
+    const pending = this.cardNodes.filter((n) => !placed.has(n.eventId))
+    let displaced = 0
+    const maxDisplace = this.cardNodes.length // harde bovengrens (termineert altijd)
+    for (let q = 0; q < pending.length; q++) {
+      const n = pending[q]!
+      if (placed.has(n.eventId)) continue
+      const desired = (n.anchorX - camX) * z + halfW
+      const want = desired + driftFor(n.hash)
+      const cands = candidates(n)
+      // Krimp-stappen die onder de minimum-kaarthoogte zouden duiken overslaan: een
+      // tegel van 40px hoog is geen tegel meer (en zou een naar verhouding dikke rand
+      // krijgen). Liever een stip dan onleesbaar klein.
+      const steps =
+        n.eventId === this.resizingId
+          ? ([1] as readonly number[]) // gesleepte kaart nooit stil laten krimpen
+          : FIT_STEPS.filter((f) => f === 1 || n.cardH * f >= CARD_H_MIN)
+      let done = false
+      for (const fit of steps) {
+        for (const c of cands) {
+          const x = tryPlace(n, c.side, c.level, fit, want, 0)
+          if (x === null) continue
+          commit(n, c.side, c.level, fit, x)
+          placed.add(n.eventId)
+          done = true
+          break
+        }
+        if (done) break
+      }
+      if (done) continue
+      // Verdringing: een belangrijkere memory mag een al geplaatste, STRIKT minder
+      // belangrijke uit zijn plek zetten — anders houdt een 'gewone' kaart die vorig
+      // frame toevallig eerder klaar was, een 'uitzonderlijke' voorgoed buiten beeld.
+      // Alleen neerwaarts in tier ⇒ twee kaarten kunnen elkaar niet om beurten
+      // verdringen; de teller is een harde bovengrens tegen een lange keten.
+      if (displaced >= maxDisplace) {
+        n.lane = null
+        n.fitScale = 1
+        continue
+      }
+      const tier = sizeTier(n.size)
+      // Bereik van `n`: het scherm-x-venster waarin hij zou kunnen landen (incl. de
+      // verplichte tussenruimte, anders valt een slot dat hem net wél blokkeert erbuiten).
+      const reachLo = desired - MAX_OFFSET - n.cardW / 2 - CARD_GAP_PX
+      const reachHi = desired + MAX_OFFSET + n.cardW / 2 + CARD_GAP_PX
+      let victim: { slot: LaneSlot; side: number; level: number; tier: number } | null = null
+      for (const c of cands) {
+        for (const slot of lanes[sideIdx(c.side)]![c.level]!) {
+          if (slot.right < reachLo || slot.left > reachHi) continue
+          const vt = sizeTier(slot.node.size)
+          if (vt >= tier) continue
+          if (!victim || vt < victim.tier || (vt === victim.tier && slot.node.eff < victim.slot.node.eff)) {
+            victim = { slot, side: c.side, level: c.level, tier: vt }
           }
         }
-        if (level === -1) {
-          n.lane = null // te ver van de datum in elke lane → stip (overflow)
-          continue
+      }
+      if (!victim) {
+        n.lane = null // nergens plek → stip (overflow)
+        n.fitScale = 1
+        continue
+      }
+      // Het slachtoffer wordt gekozen op belang binnen bereik, niet op "blokkeert
+      // aantoonbaar". Zet hem daarom voorwaardelijk uit: past `n` daarna alsnog niet,
+      // dan draaien we het volledig terug. Zonder die terugdraai zou een mislukte
+      // verdringing elk frame een kaart nodeloos wegzetten (en bij pannen zichtbaar
+      // laten knipperen).
+      const vNode = victim.slot.node
+      const vLane = { side: victim.side, level: victim.level }
+      const vFit = vNode.fitScale
+      const vOffX = vNode.offX
+      const list = lanes[sideIdx(victim.side)]![victim.level]!
+      const vIdx = list.indexOf(victim.slot)
+      list.splice(vIdx, 1)
+      placed.delete(vNode.eventId)
+      vNode.lane = null
+      displaced++
+      // Opnieuw proberen, nu de plek vrij is — in álle lanes, want de vrijgekomen
+      // ruimte kan ook een andere lane bruikbaar maken.
+      for (const fit of steps) {
+        for (const c of cands) {
+          const x = tryPlace(n, c.side, c.level, fit, want, 0)
+          if (x === null) continue
+          commit(n, c.side, c.level, fit, x)
+          placed.add(n.eventId)
+          done = true
+          break
         }
-        laneRight[level] = x + half
-        n.lane = { side, level }
-        n.offX = x - desired
+        if (done) break
       }
-      // Balanceer per lane: haal de gemiddelde offset eruit. De overlap-push duwt
-      // altijd naar RECHTS, dus een cluster hoopt anders scheef naar rechts op; door
-      // het gemiddelde af te trekken staat 'ie rond de datums verdeeld (links én
-      // rechts). De onderlinge speelse spreiding blijft; alleen de scheefstand weg.
-      for (let lvl = 0; lvl < N; lvl++) {
-        const laneCards = cards.filter((n) => n.lane && n.lane.level === lvl)
-        if (laneCards.length < 2) continue
-        const mean = laneCards.reduce((s, n) => s + n.offX, 0) / laneCards.length
-        for (const n of laneCards) n.offX -= mean
+      if (done) {
+        pending.push(vNode) // krijgt verderop een nieuwe kans (of wordt stip)
+      } else {
+        // Terugdraaien: het slachtoffer exact terug op zijn plek, `n` wordt een stip.
+        list.splice(vIdx, 0, victim.slot)
+        placed.add(vNode.eventId)
+        vNode.lane = vLane
+        vNode.fitScale = vFit
+        vNode.offX = vOffX
+        displaced--
+        n.lane = null
+        n.fitScale = 1
       }
-      // Rand-marge (alleen in de overzicht-stand, waar het hele jaar past): geen kaart
-      // mag door drift/centrering tegen of over de scherm-rand vallen. We klemmen ALLEEN
-      // als de kaarten écht binnen de marges passen (anders zou de klem ze op elkaar
-      // stapelen) — passen ze niet, dan laten we ze liever wat over de rand komen dan
-      // te overlappen. Order-preserving (links→rechts, dan rechts→links), gap behouden.
-      const atFit = AXIS_W / 2 <= (halfW - EDGE_MARGIN) / z
-      if (atFit) {
-        const laned = cards.filter((n) => n.lane)
-        const need =
-          laned.reduce((s, n) => s + n.cardW, 0) + Math.max(0, laned.length - 1) * CARD_GAP_PX
-        if (need <= vpW - 2 * EDGE_PAD) {
-          const baseX = (n: Node): number => (n.anchorX - camX) * z + halfW
-          let prevRight = -Infinity
-          for (const n of laned) {
-            const half = n.cardW / 2
-            const sx = Math.max(baseX(n) + n.offX, EDGE_PAD + half, prevRight + CARD_GAP_PX + half)
-            n.offX = sx - baseX(n)
-            prevRight = sx + half
-          }
-          let nextLeft = Infinity
-          for (let i = laned.length - 1; i >= 0; i--) {
-            const n = laned[i]!
-            const half = n.cardW / 2
-            let sx = Math.min(baseX(n) + n.offX, vpW - EDGE_PAD - half, nextLeft - CARD_GAP_PX - half)
-            sx = Math.max(sx, EDGE_PAD + half) // niet over de linkerrand terug
-            n.offX = sx - baseX(n)
-            nextLeft = sx - half
-          }
-        }
-      }
-      if (N === 1) this.assignVSlots(cards)
     }
   }
 
@@ -970,7 +1201,11 @@ export class YearScene implements Scene {
   /** Reserveer bovenaan ruimte voor de titel, zodat de dag-gids eronder begint.
    * `px` = scherm-pixels (0 als er geen titel staat). */
   setTitleInset(px: number): void {
+    if (this.titleInset === Math.max(0, px)) return
     this.titleInset = Math.max(0, px)
+    // Stuurt lanesPerSide + de verticale spreiding, en kan zonder camerabeweging
+    // wisselen (T-toets) → expliciet herpakken.
+    this.layoutDirty = true
     if (this.dayPicker && this.hoverWX !== null) {
       this.drawDayIndicator(this.engine.viewport(), 1 / this.engine.camera.zoom)
     }
@@ -1092,10 +1327,13 @@ export class YearScene implements Scene {
     const I = HOVER_INTENSITY
     const acc = this.T.colors.accent
     const dotX = n.anchorX * z
-    const cardXl = n.anchorX * z + n.curOffX
+    // Zelfde gating als de rest van de renderlus: bij rechte leaders staat de kaart
+    // strikt boven zijn datum, dus geen offset in het vonk-pad.
+    const cardXl = n.anchorX * z + (this.curvedLeaders ? n.curOffX : 0)
     const grow = 0.5 + 0.5 * n.appear
     const side = n.lane ? n.lane.side : n.curY < 0 ? -1 : 1
-    const cardYl = n.curY - side * (n.cardH / 2) * grow // leader-eind (kaart-onderrand), scherm-y
+    // leader-eind (kaart-onderrand), scherm-y
+    const cardYl = n.curY - side * ((n.cardH * n.curFitScale) / 2) * grow
 
     // Gloed terwijl je hovert: stip → zachte cirkel; periode → de balk licht op.
     if (n.isSpan) {
@@ -1247,8 +1485,24 @@ export class YearScene implements Scene {
     // op zijn plek blijft, 1px breed blijft en niet buiten beeld doorloopt.
     if (this.dayPicker && this.hoverWX !== null) this.drawDayIndicator(vp, invZ)
 
-    // Lane-toewijzing (kaart vs. stip) opnieuw bepalen.
-    this.repack(vp.width, vp.height)
+    // Lane-toewijzing (kaart vs. stip) opnieuw bepalen — alleen als de layout-input
+    // wijzigde. De camera-drempel staat in SCHERM-px (camera.x is een wereldmaat die
+    // repack zelf met z omrekent); zonder drempel zou de elastische terugveer een
+    // eindeloze stroom sub-pixel-deltas geven en werd de check nooit "clean".
+    if (
+      this.layoutDirty ||
+      !(Math.abs(camX - this.lastCamX) * z < 0.5) ||
+      !(Math.abs(z - this.lastZoom) / z < 1e-4) ||
+      vp.width !== this.lastVpW ||
+      vp.height !== this.lastVpH
+    ) {
+      this.lastCamX = camX
+      this.lastZoom = z
+      this.lastVpW = vp.width
+      this.lastVpH = vp.height
+      this.layoutDirty = false
+      this.repack(vp.width, vp.height)
+    }
 
     // Leader-laag op schermresolutie tekenen (scherp): counter-scale met 1/zoom en
     // teken in wereld×z-coördinaten (zie drawLeader).
@@ -1263,9 +1517,11 @@ export class YearScene implements Scene {
     for (const n of this.nodes) {
       const screenX = (n.anchorX - camX) * z + halfW
       // Culling dekt zowel de stip (op de as, screenX) als de kaart (met offset).
+      // `fitScale` is de krimpfactor uit de packing (1 = ware grootte).
       const cardOff = this.curvedLeaders ? n.curOffX : 0
-      const loX = screenX + Math.min(0, cardOff) - n.cardW / 2
-      const hiX = screenX + Math.max(0, cardOff) + n.cardW / 2
+      const halfCardW = (n.cardW * n.curFitScale) / 2
+      const loX = screenX + Math.min(0, cardOff) - halfCardW
+      const hiX = screenX + Math.max(0, cardOff) + halfCardW
       const inView = hiX > -marginPx && loX < vp.width + marginPx
       const wasVisible = n.wasVisible
       n.wasVisible = inView
@@ -1279,9 +1535,12 @@ export class YearScene implements Scene {
         n.appear = targetAppear
         n.curY = targetY
         n.curOffX = n.offX
+        n.curFitScale = n.fitScale
       } else {
         n.appear += (targetAppear - n.appear) * 0.16
         n.curY += (targetY - n.curY) * 0.16
+        // Krimpen/terugveren glijdt mee i.p.v. in één frame om te klappen.
+        n.curFitScale += (n.fitScale - n.curFitScale) * 0.16
         // offX glijdt naar z'n doel: een lane-/spreiding-wissel bij zoomen schuift
         // de kaart zacht opzij i.p.v. een sprong.
         n.curOffX += (n.offX - n.curOffX) * 0.16
@@ -1293,13 +1552,15 @@ export class YearScene implements Scene {
         const showCard = inView && n.appear > 0.01
         n.card.visible = showCard
         if (showCard) {
-          // Witte rand op CONSTANTE schermdikte (BORDER_PX) houden: de kaart wordt
-          // met baseScreenScale geschaald, dus teken de rand-breedte omgekeerd mee
-          // (b = BORDER_PX / baseScreenScale) → grote/belangrijke tegels krijgen
-          // geen dikkere rand. Alleen hertekenen als de schaal wijzigt (resize).
-          if (n.frame && n.frameDrawnScale !== n.baseScreenScale) {
-            n.frameDrawnScale = n.baseScreenScale
-            const b = BORDER_PX / n.baseScreenScale
+          // Witte rand op CONSTANTE schermdikte (BORDER_PX) houden: de kaart wordt met
+          // baseScreenScale × fitScale geschaald, dus teken de rand-breedte omgekeerd
+          // mee → grote/belangrijke tegels krijgen geen dikkere rand. Alleen
+          // hertekenen als die effectieve schaal wijzigt (resize of krimp-stap; de
+          // krimp is gekwantiseerd, dus dat blijft zeldzaam).
+          const drawScale = n.baseScreenScale * n.fitScale
+          if (n.frame && n.frameDrawnScale !== drawScale) {
+            n.frameDrawnScale = drawScale
+            const b = BORDER_PX / drawScale
             n.frame.clear()
             n.frame
               .rect(-THUMB_W / 2 - b, -THUMB_H / 2 - b, THUMB_W + b * 2, THUMB_H + b * 2)
@@ -1315,7 +1576,7 @@ export class YearScene implements Scene {
           const side = n.lane ? n.lane.side : n.curY < 0 ? -1 : 1
           const cardX = n.anchorX + (this.curvedLeaders ? n.curOffX : 0) * invZ
           n.card.position.set(cardX, n.curY * invZ)
-          n.card.scale.set(n.baseScreenScale * n.hover * grow * invZ)
+          n.card.scale.set(n.baseScreenScale * n.curFitScale * n.hover * grow * invZ)
           n.card.alpha = n.appear
 
           // Titel-kant volgt de (huidige) lane.
@@ -1327,7 +1588,7 @@ export class YearScene implements Scene {
 
           // Leader: van de datum op de as naar de onderrand van de (verschoven)
           // kaart; faadt met appear.
-          const innerY = (n.curY - side * (n.cardH / 2) * grow) * invZ
+          const innerY = (n.curY - side * ((n.cardH * n.curFitScale) / 2) * grow) * invZ
           this.drawLeader(n.anchorX, cardX, innerY, z, n.appear)
 
           // Texture (alleen zichtbare kaarten laden/warmen een texture).
@@ -1387,8 +1648,8 @@ export class YearScene implements Scene {
       } else if (n.appear > 0.5) {
         n.hitCx = n.anchorX + (this.curvedLeaders ? n.curOffX : 0) * invZ
         n.hitCy = n.curY * invZ
-        n.hitHalfW = (n.cardW / 2 + BORDER) * invZ
-        n.hitHalfH = (n.cardH / 2 + BORDER) * invZ
+        n.hitHalfW = ((n.cardW * n.curFitScale) / 2 + BORDER) * invZ
+        n.hitHalfH = ((n.cardH * n.curFitScale) / 2 + BORDER) * invZ
       } else if (n.dot) {
         n.hitCx = n.anchorX + off * invZ
         n.hitCy = 0
@@ -1548,17 +1809,34 @@ export class YearScene implements Scene {
         n.cardH = cardScreenH(n.eff, n.eventId)
         n.cardW = n.cardH * CARD_ASPECT
         n.baseScreenScale = n.cardH / THUMB_H
+        // Tijdens het slepen de kaart op ware grootte houden (zie `resizingId`):
+        // anders zou de packer 'm stil verkleinen terwijl je 'm groter sleept.
+        n.fitScale = 1
+        // Belang veranderde → de toelatingsvolgorde en de benodigde breedte ook.
+        this.cardNodes.sort(admissionOrder)
+        this.layoutDirty = true
+      }
+      this.resizingId = n.eventId
+      const release = (): void => {
+        this.resizingId = null
+        this.layoutDirty = true // packer mag hem nu weer verkleinen als het moet
       }
       return {
         moveTo: (mx, my) => {
           const f = Math.hypot(mx - cx, my - cy) / startDist
           apply(startSize * f)
           changed = true
-          // Belang veranderde → herorden de packing-prioriteit.
-          this.cardNodes.sort((a, b) => b.eff - a.eff || a.hash - b.hash)
         },
         end: () => {
+          release()
           if (changed) void this.backend.setEventSize(n.eventId, n.size)
+        },
+        // Afgebroken sleep (pointercancel / tweede vinger): niets persisteren én de
+        // kaart terug op zijn oorspronkelijke maat, zodat wat je ziet klopt met wat
+        // er is opgeslagen.
+        cancel: () => {
+          if (changed) apply(startSize)
+          release()
         },
       }
     }

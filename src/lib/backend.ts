@@ -50,6 +50,9 @@ export interface EventSummary {
   underConstruction?: boolean
   /** True = synthetische "Losse foto's"-bundel (curatie niet mogelijk). */
   synthetic?: boolean
+  /** True = deze memory loopt door in een ander jaar (start en eind in verschillende
+   * kalenderjaren) en wordt daarom in béide jaren getoond. */
+  spansYears?: boolean
   /** Thema-keuze van dit event. Afwezig = erven van het jaar. */
   theme?: ThemeChoice
 }
