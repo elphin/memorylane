@@ -213,6 +213,8 @@ impl VaultService {
 
     /// Leest de bewerkbare sidecar-metadata van een item + read-only ingebedde
     /// EXIF (voor de bewerk-UI). EXIF wordt tolerant gelezen (leeg bij geen data).
+    ///
+    /// Zie `place_display` voor de twee vormen die `place:` kan hebben.
     pub fn get_item_metadata(&self, item_id: &str) -> Result<ItemMetadata, String> {
         let vault = self.current_vault()?;
         let (_event_id, folder, slug, media) = {
@@ -246,7 +248,10 @@ impl VaultService {
         Ok(ItemMetadata {
             caption: p.get_str("caption").unwrap_or_default(),
             date: p.get_str("date").unwrap_or_default(),
-            place: p.get_str("place").unwrap_or_default(),
+            // `place` kan een scalar (handmatig getypt label) of een blok-map met
+            // lat/lng zijn (EXIF-import). Zonder deze tak toont het paneel bij de
+            // map-vorm een LEEG veld, en overschrijft opslaan de coördinaten.
+            place: place_display(&p),
             people: p.get("people").map(|v| v.as_string_list()).unwrap_or_default(),
             tags: p.get("tags").map(|v| v.as_string_list()).unwrap_or_default(),
             exif,
@@ -561,6 +566,29 @@ fn mtime_ms(meta: &std::fs::Metadata) -> i64 {
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+/// Weergavewaarde voor het `place:`-veld. Dat kent twee vormen:
+/// - een scalar: het label dat de gebruiker zelf typte;
+/// - een blok-map met `lat`/`lng` (+ optioneel `label`): zo schrijft de import de
+///   GPS uit de EXIF weg, want alléén die vorm leest de scanner (`read_location`).
+///
+/// Zonder deze functie zou het bewerk-paneel bij de map-vorm een leeg veld tonen —
+/// en dan wist opslaan de coördinaten, inclusief hun plek in de index.
+fn place_display(p: &crate::vault::frontmatter::Parsed) -> String {
+    if let Some(label) = p.get_str("place").filter(|s| !s.is_empty()) {
+        return label;
+    }
+    let Some(map) = p.get("place").and_then(|v| v.as_map()) else {
+        return String::new();
+    };
+    if let Some(label) = map.get("label").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+        return label;
+    }
+    match (map.get("lat").and_then(|v| v.as_f64()), map.get("lng").and_then(|v| v.as_f64())) {
+        (Some(lat), Some(lng)) => format!("{lat:.5}, {lng:.5}"),
+        _ => String::new(),
+    }
 }
 
 /// Eén read-only EXIF-veld (label + weergavewaarde).

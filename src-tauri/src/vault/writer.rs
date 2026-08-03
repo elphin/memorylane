@@ -125,6 +125,7 @@ pub fn media_item_markdown(
     media: &str,
     caption: Option<&str>,
     happened_at: Option<&str>,
+    place: Option<(f64, f64)>,
 ) -> String {
     let now = now_iso();
     let mut fm = format!("---\nid: {id}\ntype: {item_type}\nmedia: {}\n", yaml_str(media));
@@ -133,6 +134,11 @@ pub fn media_item_markdown(
     }
     if let Some(h) = happened_at {
         fm.push_str(&format!("happenedAt: {}\n", yaml_str(h)));
+    }
+    // `place` MOET een blok-map met lat+lng zijn: de scanner leest de scalar-vorm niet
+    // (zie `read_location`), en dan zou de locatie nooit in de index belanden.
+    if let Some((lat, lng)) = place {
+        fm.push_str(&format!("place:\n  lat: {lat}\n  lng: {lng}\n"));
     }
     fm.push_str(&format!("createdAt: {}\n", yaml_str(&now)));
     fm.push_str(&format!("updatedAt: {}\n", yaml_str(&now)));
@@ -576,6 +582,15 @@ fn flow_seq(items: &[String]) -> Option<String> {
 /// Werkt de bewerkbare metadata van een item bij: caption, datum, plaats, mensen
 /// en trefwoorden — geschreven in de sidecar-frontmatter (non-destructief:
 /// overige velden + body blijven behouden). Lege waarden verwijderen het veld.
+///
+/// **`place` is bijzonder.** Het veld kan een scalar (een zelfgetypt label) of een
+/// blok-map met `lat`/`lng` zijn (zo schrijft de import de GPS uit de EXIF weg, want
+/// alléén die vorm leest de scanner). Bestonden er coördinaten, dan blijven die ALTIJD
+/// staan; het tekstveld bewerkt uitsluitend het `label` erin, en leegmaken haalt dus
+/// alleen dat label weg. Coördinaten zijn niet terug te typen, dus ze mogen niet
+/// sneuvelen doordat je een bijschrift aanpast — zonder dit gooide één keer
+/// "Bewerken → Opslaan" de locatie uit zowel het bestand als de index. Er is
+/// (bewust) geen UI-weg om GPS te wissen; dat vergt handmatig de sidecar bewerken.
 #[allow(clippy::too_many_arguments)]
 pub fn update_item_meta(
     vault_root: &Path,
@@ -614,7 +629,7 @@ pub fn update_item_meta(
     };
     set_fm_block(&mut fm, "caption", scalar(caption));
     set_fm_block(&mut fm, "date", scalar(date));
-    set_fm_block(&mut fm, "place", scalar(place));
+    set_fm_block(&mut fm, "place", place_block(&original, place));
     set_fm_block(&mut fm, "people", flow_seq(people));
     set_fm_block(&mut fm, "tags", flow_seq(tags));
     set_fm_block(&mut fm, "updatedAt", Some(yaml_str(&now_iso())));
@@ -629,6 +644,44 @@ pub fn update_item_meta(
         out.push('\n');
     }
     write_atomic(&path, &out)
+}
+
+/// Bouwt de `place:`-waarde voor `update_item_meta`.
+///
+/// Bestaat er al een blok-map (zo schrijft de EXIF-import de GPS weg), dan blijven de
+/// scalaire sleutels daarvan staan — ook die dit paneel niet kent — en wordt alleen
+/// `label` bijgewerkt. (Een geneste map/lijst ónder `place:` komt in onze eigen data
+/// niet voor en wordt niet gereconstrueerd.) Coördinaten zijn data die je niet kunt terugtypen; ze mogen dus nooit
+/// sneuvelen doordat je een bijschrift aanpast. Zonder bestaande map blijft het gedrag
+/// wat het was: een scalar-label, of niets als het veld leeg is.
+fn place_block(original: &str, place: &str) -> Option<String> {
+    let label = place.trim();
+    let existing = crate::vault::frontmatter::parse(original)
+        .get("place")
+        .and_then(|v| v.as_map().cloned());
+    let Some(map) = existing.filter(|m| m.contains_key("lat") || m.contains_key("lng")) else {
+        return if label.is_empty() { None } else { Some(yaml_str(label)) };
+    };
+    // De automatische weergave ("52.37020, 4.89520") is geen echt label.
+    let auto = match (map.get("lat").and_then(|v| v.as_f64()), map.get("lng").and_then(|v| v.as_f64())) {
+        (Some(lat), Some(lng)) => format!("{lat:.5}, {lng:.5}"),
+        _ => String::new(),
+    };
+    let mut out = String::new();
+    for (k, v) in map.iter() {
+        if k == "label" {
+            continue; // hieronder, met de nieuwe waarde
+        }
+        if let Some(scalar) = v.as_str() {
+            out.push_str(&format!("
+  {k}: {}", yaml_str(&scalar)));
+        }
+    }
+    if !label.is_empty() && label != auto {
+        out.push_str(&format!("
+  label: {}", yaml_str(label)));
+    }
+    Some(out)
 }
 
 /// Zet (of wist bij `None`/leeg) de frame-stijl van een item in de sidecar-
@@ -1000,11 +1053,14 @@ fn unique_event_folder(vault_root: &Path, year_folder: &str, base_name: &str, id
 }
 
 /// Importeert een foto (drag&drop-pad): kopieert het bronbestand de eventmap in
-/// en schrijft een item-`.md` met de bestandsnaam-stam als caption, zonder
-/// `happenedAt`. Geeft het nieuwe item-id terug.
+/// en schrijft een item-`.md` met de bestandsnaam-stam als caption. Opnamemoment en
+/// GPS komen uit de ingebedde EXIF — dezelfde behandeling als het inbox-pad, zodat
+/// het niet uitmaakt hoe een foto binnenkomt. Geeft het nieuwe item-id terug.
 pub fn import_photo(vault_root: &Path, folder_path: &str, source: &Path) -> Result<String, String> {
     let name = source.file_name().and_then(|s| s.to_str()).unwrap_or("foto.jpg");
-    import_media_inner(vault_root, folder_path, source, name, true, None)
+    let meta = crate::media::exif_read::read_shot_meta(source);
+    let place = meta.lat.zip(meta.lng);
+    import_media_inner(vault_root, folder_path, source, name, true, meta.taken_at.as_deref(), place)
 }
 
 /// Importeert een mediabestand (inbox-pad): kopieert `source` de eventmap in met
@@ -1018,13 +1074,15 @@ pub fn import_media(
     source: &Path,
     original_name: &str,
     happened_at: &str,
+    place: Option<(f64, f64)>,
 ) -> Result<String, String> {
-    import_media_inner(vault_root, folder_path, source, original_name, false, Some(happened_at))
+    import_media_inner(vault_root, folder_path, source, original_name, false, Some(happened_at), place)
 }
 
 /// Gedeelde kern van `import_photo`/`import_media`. `name` levert extensie + stam
 /// (bepaalt het vault-bestandsnaam-patroon en het itemtype); `caption_from_stem`
 /// zet de stam als caption (drag&drop) of niet (inbox).
+#[allow(clippy::too_many_arguments)]
 fn import_media_inner(
     vault_root: &Path,
     folder_path: &str,
@@ -1032,6 +1090,7 @@ fn import_media_inner(
     name: &str,
     caption_from_stem: bool,
     happened_at: Option<&str>,
+    place: Option<(f64, f64)>,
 ) -> Result<String, String> {
     let name_path = Path::new(name);
     let ext = name_path
@@ -1061,7 +1120,7 @@ fn import_media_inner(
     // §9.3: leid het type af uit de extensie zodat een `.mp4` als `video` wordt
     // geïndexeerd, niet als `photo` (de scanner laat frontmatter-type winnen).
     let caption = if caption_from_stem { Some(stem) } else { None };
-    let md = media_item_markdown(&id, media_type_for_ext(&ext), &media, caption, happened_at);
+    let md = media_item_markdown(&id, media_type_for_ext(&ext), &media, caption, happened_at, place);
     write_atomic(&dir.join(format!("{slug}.md")), &md).map_err(|e| e.to_string())?;
     Ok(id)
 }
@@ -1219,7 +1278,7 @@ mod tests {
         assert_eq!(media_type_for_ext("heic"), "photo");
         assert_eq!(media_type_for_ext("xyz"), "photo");
 
-        let md = media_item_markdown("id1", media_type_for_ext("mp4"), "clip_ab12cd34.mp4", None, Some("2026-07-11T12:00:05Z"));
+        let md = media_item_markdown("id1", media_type_for_ext("mp4"), "clip_ab12cd34.mp4", None, Some("2026-07-11T12:00:05Z"), None);
         let parsed = crate::vault::frontmatter::parse(&md);
         assert_eq!(parsed.get_str("type").unwrap(), "video");
         assert_eq!(parsed.get_str("media").unwrap(), "clip_ab12cd34.mp4");
@@ -1319,7 +1378,7 @@ mod tests {
     }
 
     #[test]
-    fn update_item_meta_writes_fields_and_replaces_nested_place() {
+    fn update_item_meta_writes_fields_and_keeps_nested_coords() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
         std::fs::create_dir_all(root.join("2024/ev")).unwrap();
@@ -1350,14 +1409,20 @@ mod tests {
         // Nieuwe scalars.
         assert_eq!(p.get_str("caption").unwrap(), "Op het strand");
         assert_eq!(p.get_str("date").unwrap(), "2024-08-15");
-        // De geneste place-map is VERVANGEN door een scalar (geen orphaned lat/lng).
-        assert_eq!(p.get_str("place").unwrap(), "Scheveningen");
-        assert!(!content.contains("lat:"), "oude geneste place-regels moeten weg zijn");
+        // De geneste place-map BLIJFT (coördinaten zijn data die je niet kunt
+        // terugtypen); alleen het label wordt bijgewerkt. Wel netjes vervangen, dus
+        // geen verweesde regels van de oude map — de `caption:`-val hieronder is weg.
+        let place = p.get("place").unwrap().as_map().unwrap().clone();
+        assert_eq!(place.get("lat").unwrap().as_f64().unwrap(), 52.37);
+        assert_eq!(place.get("lng").unwrap().as_f64().unwrap(), 4.89);
+        assert_eq!(place.get("label").unwrap().as_str().unwrap(), "Scheveningen");
+        assert_eq!(content.matches("lat:").count(), 1, "geen verweesde regels: {content}");
         // Lijsten round-trippen.
         assert_eq!(p.get("people").unwrap().as_string_list(), vec!["Jim", "Wout"]);
         assert_eq!(p.get("tags").unwrap().as_string_list(), vec!["strand", "zomer"]);
 
-        // Leegmaken verwijdert de velden weer.
+        // Leegmaken verwijdert caption/date/people/tags weer. `place` is bijzonder:
+        // daar blijven de coördinaten staan (zie place_map_survives_metadata_edit).
         update_item_meta(root, "2024/ev", "foto", "", "", "", &[], &[]).unwrap();
         let p2 = crate::vault::frontmatter::parse(
             &std::fs::read_to_string(root.join("2024/ev/foto.md")).unwrap(),
@@ -1408,11 +1473,15 @@ mod tests {
 
         update_item_meta(root, "2024/ev", "foto", "", "", "Scheveningen", &[], &[]).unwrap();
         let content = std::fs::read_to_string(root.join("2024/ev/foto.md")).unwrap();
-        // De oude geneste regels (incl. die na de lege regel) moeten volledig weg.
-        assert!(!content.contains("lat:"), "oude geneste regel moet weg: {content}");
-        assert!(!content.contains("label:"), "verweesde regel na lege regel moet weg: {content}");
+        // Het oude blok is netjes vervangen: precies één `lat:` en één `label:`, dus
+        // geen verweesde regels na de lege regel. De coördinaat zelf blijft (die kun
+        // je niet terugtypen); alleen het label is bijgewerkt.
+        assert_eq!(content.matches("lat:").count(), 1, "geen verweesde regels: {content}");
+        assert_eq!(content.matches("label:").count(), 1, "geen verweesde regels: {content}");
         let p = crate::vault::frontmatter::parse(&content);
-        assert_eq!(p.get_str("place").unwrap(), "Scheveningen");
+        let place = p.get("place").unwrap().as_map().unwrap().clone();
+        assert_eq!(place.get("lat").unwrap().as_f64().unwrap(), 52.37);
+        assert_eq!(place.get("label").unwrap().as_str().unwrap(), "Scheveningen");
         // Velden vóór en ná het blok blijven behouden.
         assert_eq!(p.get_str("media").unwrap(), "foto.jpg");
         assert_eq!(p.get_str("category").unwrap(), "reizen");
@@ -1432,9 +1501,11 @@ mod tests {
 
         update_item_meta(root, "2024/ev", "foto", "Bijschrift", "", "Scheveningen", &[], &[]).unwrap();
         let content = std::fs::read_to_string(root.join("2024/ev/foto.md")).unwrap();
-        assert!(!content.contains("lat:"), "oude geneste regels moeten weg: {content}");
+        assert_eq!(content.matches("lat:").count(), 1, "geen verweesde regels: {content}");
         let p = crate::vault::frontmatter::parse(&content);
-        assert_eq!(p.get_str("place").unwrap(), "Scheveningen");
+        let place = p.get("place").unwrap().as_map().unwrap().clone();
+        assert_eq!(place.get("lat").unwrap().as_f64().unwrap(), 52.37);
+        assert_eq!(place.get("label").unwrap().as_str().unwrap(), "Scheveningen");
         assert_eq!(p.get_str("caption").unwrap(), "Bijschrift");
         assert_eq!(p.get_str("media").unwrap(), "foto.jpg");
         // Body blijft behouden.
@@ -2156,5 +2227,106 @@ mod tests {
         assert_eq!(parsed.len(), 2);
         assert_eq!(parsed[0].item_ref, "a");
         assert_eq!(parsed[1].x, 3.0);
+    }
+    /// EXIF-GPS wordt als blok-map weggeschreven (de enige vorm die de scanner leest),
+    /// en het bewerk-paneel mag die niet wissen — niet bij "opslaan zonder wijziging"
+    /// en niet bij het bijtypen van een label.
+    #[test]
+    fn place_map_survives_metadata_edit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("2024/ev")).unwrap();
+        let md = media_item_markdown(
+            "p1",
+            "photo",
+            "foto.jpg",
+            None,
+            Some("2024-07-11T14:23:05+02:00"),
+            Some((52.3702, 4.8952)),
+        );
+        std::fs::write(root.join("2024/ev/foto.md"), &md).unwrap();
+
+        // De scanner leest alleen de MAP-vorm; controleer dat we die schrijven.
+        let parsed = crate::vault::frontmatter::parse(&md);
+        let map = parsed.get("place").unwrap().as_map().unwrap().clone();
+        assert_eq!(map.get("lat").unwrap().as_f64().unwrap(), 52.3702);
+        assert_eq!(map.get("lng").unwrap().as_f64().unwrap(), 4.8952);
+
+        // (a) Opslaan zonder wijziging: het paneel toont "52.37020, 4.89520".
+        update_item_meta(root, "2024/ev", "foto", "", "", "52.37020, 4.89520", &[], &[]).unwrap();
+        let after = std::fs::read_to_string(root.join("2024/ev/foto.md")).unwrap();
+        let p2 = crate::vault::frontmatter::parse(&after);
+        let m2 = p2.get("place").unwrap().as_map().unwrap().clone();
+        assert_eq!(m2.get("lat").unwrap().as_f64().unwrap(), 52.3702);
+        assert!(!m2.contains_key("label"), "de automatische weergave is geen label");
+
+        // (b) Label bijtypen: coördinaten blijven.
+        update_item_meta(root, "2024/ev", "foto", "", "", "Amsterdam", &[], &[]).unwrap();
+        let after = std::fs::read_to_string(root.join("2024/ev/foto.md")).unwrap();
+        let p3 = crate::vault::frontmatter::parse(&after);
+        let m3 = p3.get("place").unwrap().as_map().unwrap().clone();
+        assert_eq!(m3.get("lat").unwrap().as_f64().unwrap(), 52.3702);
+        assert_eq!(m3.get("lng").unwrap().as_f64().unwrap(), 4.8952);
+        assert_eq!(m3.get("label").unwrap().as_str().unwrap(), "Amsterdam");
+
+        // (c) Het label leegmaken haalt ALLEEN het label weg; de coördinaten blijven.
+        // Die kun je niet terugtypen, dus een bijschrift wissen mag ze niet meenemen.
+        update_item_meta(root, "2024/ev", "foto", "", "", "", &[], &[]).unwrap();
+        let after = std::fs::read_to_string(root.join("2024/ev/foto.md")).unwrap();
+        let m4 = crate::vault::frontmatter::parse(&after).get("place").unwrap().as_map().unwrap().clone();
+        assert_eq!(m4.get("lat").unwrap().as_f64().unwrap(), 52.3702);
+        assert!(!m4.contains_key("label"));
+    }
+
+    /// Zonder coördinaten blijft `place` gewoon een scalar-label (bestaand gedrag).
+    #[test]
+    fn place_scalar_without_coords_roundtrips() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("2024/ev")).unwrap();
+        std::fs::write(root.join("2024/ev/foto.md"), "---
+id: p1
+type: photo
+---
+").unwrap();
+        update_item_meta(root, "2024/ev", "foto", "", "", "Strand", &[], &[]).unwrap();
+        let after = std::fs::read_to_string(root.join("2024/ev/foto.md")).unwrap();
+        let p = crate::vault::frontmatter::parse(&after);
+        assert_eq!(p.get_str("place").as_deref(), Some("Strand"));
+    }
+    /// Drag&drop moet dezelfde metadata oppikken als de inbox-import: opnametijd en
+    /// GPS uit de EXIF, weggeschreven in de vorm die de scanner leest.
+    #[test]
+    fn import_photo_takes_datetime_and_gps_from_exif() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("2024/ev")).unwrap();
+        let src = tmp.path().join("bron.jpg");
+        std::fs::write(
+            &src,
+            crate::media::exif_read::tests::jpeg_with_exif(
+                "2024:07:11 14:23:05",
+                Some("+02:00"),
+                Some(('N', 'E')),
+            ),
+        )
+        .unwrap();
+
+        let id = import_photo(root, "2024/ev", &src).unwrap();
+        let md = std::fs::read_dir(root.join("2024/ev"))
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .find(|e| e.path().extension().and_then(|x| x.to_str()) == Some("md"))
+            .unwrap();
+        let content = std::fs::read_to_string(md.path()).unwrap();
+        let p = crate::vault::frontmatter::parse(&content);
+        assert_eq!(p.get_str("id").unwrap(), id);
+        assert_eq!(p.get_str("happenedAt").unwrap(), "2024-07-11T14:23:05+02:00");
+        let place = p.get("place").unwrap().as_map().unwrap().clone();
+        assert!((place.get("lat").unwrap().as_f64().unwrap() - 52.3702).abs() < 1e-6);
+        assert!((place.get("lng").unwrap().as_f64().unwrap() - 4.8952).abs() < 1e-6);
+        // Map-vorm met f64's is precies wat `scanner::read_location` eist; een scalar
+        // zou daar stil wegvallen en nooit in de index belanden.
+        assert!(place.get("lat").unwrap().as_f64().is_some());
     }
 }

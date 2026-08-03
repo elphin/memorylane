@@ -277,7 +277,9 @@ fn import_one(
     // anders slaan we de hele memory over (géén ack) — een kapotte server mag niet
     // stilletjes bestanden laten wegvallen.
     let fc = env.files.len();
-    let mut plains: Vec<(u32, String, PathBuf, String)> = Vec::with_capacity(fc); // (order, naam, pad, happenedAt)
+    // (order, vault-naam, temp-pad, fallback-happenedAt, opname-metadata uit de EXIF)
+    let mut plains: Vec<(u32, String, PathBuf, String, crate::media::exif_read::ShotMeta)> =
+        Vec::with_capacity(fc);
     for (fi, f) in env.files.iter().enumerate() {
         emit(window, memory_id, idx, count, "download", fi, fc);
         let url = urls.get(&f.file_id).ok_or_else(|| format!("bestand ontbreekt op de server: {}", f.name))?;
@@ -298,8 +300,12 @@ fn import_one(
         // 12:00:00 + order → monotone volgorde (Z verplicht voor to_millis). `mm/ss`
         // blijft geldig zolang order < 3600; de server begrenst media/memory
         // (LIMITS.maxFilesPerMemory = 50), dus dat kan niet worden overschreden.
+        // Dit is de FALLBACK; hieronder wint de echte opnametijd uit de EXIF.
         let happened = format!("{}T12:{:02}:{:02}Z", env.start_at, f.order / 60, f.order % 60);
-        plains.push((f.order, name, plain_path, happened));
+        // De envelope draagt geen EXIF mee, maar de foto-bytes zelf wél — lees ze hier
+        // uit het zojuist ontsleutelde bestand.
+        let shot = crate::media::exif_read::read_shot_meta(&plain_path);
+        plains.push((f.order, name, plain_path, happened, shot));
     }
 
     // Vault-import via de writer-laag.
@@ -330,8 +336,29 @@ fn import_one(
 
     // Media in envelope-volgorde.
     plains.sort_by_key(|f| f.0);
-    for (_, name, plain_path, happened) in &plains {
-        writer::import_media(vault_root, &folder, plain_path, name, happened)?;
+    // Opnamemoment: de EXIF-tijd is de waarheid over WANNEER een foto genomen is, dus
+    // die wint van de volgorde waarin je ze in de telefoon-app zette (keuze van Jim).
+    // Heeft géén enkel bestand een opnametijd, dan houdt de hele memory het geschatte
+    // `T12:MM:SS`-schema — een half geschatte reeks is verwarrender dan een consequent
+    // geschatte. Bestanden zonder EXIF (video, screenshot, doorgestuurde foto) worden
+    // tússen hun buren geïnterpoleerd, zodat ze op hun gekozen plek blijven staan.
+    let times: Vec<Option<chrono::DateTime<chrono::FixedOffset>>> = plains
+        .iter()
+        .map(|(_, _, _, _, shot)| {
+            shot.taken_at
+                .as_deref()
+                .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+        })
+        .collect();
+    let use_exif = times.iter().any(Option::is_some);
+    let stamps = interpolate_times(&times);
+    for (i, (_, name, plain_path, happened, shot)) in plains.iter().enumerate() {
+        let when = match stamps.get(i).copied().flatten().filter(|_| use_exif) {
+            Some(t) => t.to_rfc3339(),
+            None => happened.clone(),
+        };
+        let place = shot.lat.zip(shot.lng);
+        writer::import_media(vault_root, &folder, plain_path, name, &when, place)?;
     }
 
     // Ledger 'imported' → dan pas acken. Mislukt de ack (netwerk), dan repareert
@@ -353,6 +380,66 @@ fn decrypt_file(ct: &Path, plain: &Path, master: &[u8; 32], memory_id: &str, fil
     let w = std::io::BufWriter::new(std::fs::File::create(plain).map_err(|e| e.to_string())?);
     crypto::decrypt_stream(r, w, master, memory_id, file_id).map(|_| ())
 }
+
+/// Vult de gaten in een reeks opnametijden: een bestand zonder EXIF komt tússen zijn
+/// buren te liggen (gelijk verdeeld), vóór de eerste of ná de laatste bekende tijd als
+/// het aan een uiteinde staat. Zo blijft de door de gebruiker gekozen volgorde intact
+/// én is de reeks oplopend — dat laatste is wat `ORDER BY timestamp_ms` nodig heeft.
+///
+/// Zijn er helemaal geen tijden, dan blijft alles `None` (de aanroeper valt dan terug
+/// op het geschatte schema).
+fn interpolate_times(
+    times: &[Option<chrono::DateTime<chrono::FixedOffset>>],
+) -> Vec<Option<chrono::DateTime<chrono::FixedOffset>>> {
+    let mut out = times.to_vec();
+    if !times.iter().any(Option::is_some) {
+        return out;
+    }
+    const TAIL_STEP: i64 = 1; // seconden per bestand ná de laatste bekende tijd
+    let mut i = 0;
+    while i < out.len() {
+        if out[i].is_some() {
+            i += 1;
+            continue;
+        }
+        // Gat [i, j) zoeken en de randen erbij pakken.
+        let mut j = i;
+        while j < out.len() && out[j].is_none() {
+            j += 1;
+        }
+        let before = if i == 0 { None } else { out[i - 1] };
+        let after = if j < out.len() { out[j] } else { None };
+        let gap = (j - i) as i64;
+        match (before, after) {
+            (Some(a), Some(b)) => {
+                // Gelijk verdelen over de beschikbare ruimte. Is die er niet (burst:
+                // beide buren in dezelfde seconde), dan krijgt het gat de tijd van de
+                // linkerbuur: gelijke stempels zijn prima — `ORDER BY timestamp_ms,
+                // slug` heeft een deterministische tie-break — maar een stempel NÁ de
+                // rechterbuur zou het bestand achter zijn eigen opvolger zetten.
+                let span = (b - a).num_milliseconds().max(0);
+                for k in 0..gap {
+                    let ms = span * (k + 1) / (gap + 1);
+                    out[i + k as usize] = Some(a + chrono::Duration::milliseconds(ms));
+                }
+            }
+            (Some(a), None) => {
+                for k in 0..gap {
+                    out[i + k as usize] = Some(a + chrono::Duration::seconds((k + 1) * TAIL_STEP));
+                }
+            }
+            (None, Some(b)) => {
+                for k in 0..gap {
+                    out[k as usize] = Some(b - chrono::Duration::seconds(gap - k));
+                }
+            }
+            (None, None) => unreachable!("er is minstens één bekende tijd"),
+        }
+        i = j;
+    }
+    out
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -379,5 +466,46 @@ mod tests {
     fn master_from_hex_validates_length() {
         assert!(master_from_hex("00").is_err());
         assert_eq!(master_from_hex(&"ab".repeat(32)).unwrap()[0], 0xab);
+    }
+    /// Bestanden zonder EXIF (video, screenshot) horen tússen hun buren te belanden,
+    /// zodat de door de gebruiker gekozen volgorde intact blijft én de reeks oplopend
+    /// is — `ORDER BY timestamp_ms` heeft dat laatste nodig.
+    #[test]
+    fn interpolate_times_fills_gaps_monotonically() {
+        let t = |s: &str| chrono::DateTime::parse_from_rfc3339(s).unwrap();
+        // Gat in het midden: gelijk verdeeld tussen de buren.
+        let out = interpolate_times(&[
+            Some(t("2024-07-11T10:00:00+02:00")),
+            None,
+            None,
+            Some(t("2024-07-11T10:00:30+02:00")),
+        ]);
+        let v: Vec<_> = out.iter().map(|o| o.unwrap()).collect();
+        assert_eq!(v[1], t("2024-07-11T10:00:10+02:00"));
+        assert_eq!(v[2], t("2024-07-11T10:00:20+02:00"));
+        assert!(v.windows(2).all(|w| w[0] <= w[1]), "moet oplopend zijn: {v:?}");
+
+        // Burst (beide buren in dezelfde seconde): er is geen ruimte te verdelen, dus
+        // gelijke stempels — maar NOOIT ná de rechterbuur, want dan zou het bestand
+        // achter zijn eigen opvolger belanden.
+        let out = interpolate_times(&[
+            Some(t("2024-07-11T10:00:00+02:00")),
+            None,
+            Some(t("2024-07-11T10:00:00+02:00")),
+        ]);
+        let v: Vec<_> = out.iter().map(|o| o.unwrap()).collect();
+        assert!(v.windows(2).all(|w| w[0] <= w[1]), "mag niet omkeren: {v:?}");
+
+        // Kop en staart zonder EXIF.
+        let out = interpolate_times(&[None, Some(t("2024-07-11T10:00:00+02:00")), None]);
+        let v: Vec<_> = out.iter().map(|o| o.unwrap()).collect();
+        assert!(v[0] < v[1] && v[1] < v[2], "kop vóór, staart ná: {v:?}");
+
+        // Helemaal geen tijden → niets ingevuld (aanroeper valt terug op de schatting).
+        let out = interpolate_times(&[None, None]);
+        assert!(out.iter().all(Option::is_none));
+
+        // Lege lijst mag niet paniekeren.
+        assert!(interpolate_times(&[]).is_empty());
     }
 }
