@@ -3,7 +3,7 @@
 // terug-knoppen): tik op een jaar → in; ver uitzoomen in een jaar → terug.
 // DOM wordt alleen gebruikt voor overlays (loading, first-run, leeg).
 
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { AnimatePresence, domAnimation, LazyMotion, m } from 'motion/react'
 import type {
   Backend,
@@ -22,7 +22,7 @@ import { ACCENT_SWATCHES, FRAME_STYLES, TITLE_FONTS, resolveTheme, type ThemeCho
 import { BACKGROUNDS, BACKGROUND_NONE, loadBackgroundTexture } from '../theme/textures'
 import { THEME, setActiveTheme, type ResolvedTheme } from '../theme/tokens'
 import { UI_DARK, UI_LIGHT, ui, type UiPalette } from '../theme/ui'
-import { IconEigen, IconGrid, IconScatter, IconImage, IconNote, IconSliders, IconPalette, IconPencil, IconPlus, IconTrash, IconCrop } from './icons'
+import { IconEigen, IconGrid, IconScatter, IconImage, IconNote, IconSliders, IconPalette, IconPencil, IconPlus, IconTrash, IconCrop, IconCover } from './icons'
 import { EventScene } from '../render/scenes/event'
 import type { NodePosition } from '../render/scenes/scene'
 import { Screensaver } from './Screensaver'
@@ -47,6 +47,9 @@ interface EventForm {
   atDate?: boolean
   /** "In aanbouw"-status van de memory (alleen in bewerk-modus). */
   underConstruction?: boolean
+  /** Item-id van de gekozen omslagfoto (alleen bewerk-modus). `undefined` = nog geen
+   * vaste keuze; de tijdlijn toont dan een willekeurige foto uit de memory. */
+  coverItemId?: string
 }
 
 /** Drie startwaarden voor het belang van een nieuw event (de gebruiker kan het
@@ -357,6 +360,51 @@ export function AppShell() {
   // (in grid) sortering. Als open overlay geregistreerd zodat Escape 'm sluit
   // i.p.v. uit te zoomen.
   const [weergaveOpen, setWeergaveOpen] = useState(false)
+  // Brug tussen de React-state en de gesture-handlers (die buiten React draaien).
+  const syncRingsRef = useRef<() => void>(() => {})
+  const setCoverPickModeRef = useRef<(on: boolean) => void>(() => {})
+  // Formulier dat op "kies een omslagfoto" tijdelijk opzij is gezet, zodat de dialoog
+  // ná het kiezen terugkomt met alles wat je al had ingevuld.
+  const pendingEditFormRef = useRef<EventForm | null>(null)
+  // Plakkende "kies de omslagfoto"-modus: dezelfde actie als Ctrl+klik, maar zonder
+  // een toets vast te houden — en mét zichtbare uitleg in beeld, want de Ctrl-weg
+  // was onvindbaar. Een ref ernaast omdat de gesture-handlers buiten React draaien.
+  const [coverPick, setCoverPick] = useState(false)
+  const coverPickRef = useRef(false)
+  const [coverHint, setCoverHint] = useState<string | null>(null)
+  const coverHintTimerRef = useRef<number>(0)
+
+  /** Plakkende kies-modus aan/uit. Houdt de ref, de randen op het canvas en de
+   * uitleg-balk in beeld synchroon. */
+  const setCoverPickMode = useCallback((on: boolean): void => {
+    if (on && levelRef.current !== 'event') return // kiezen kan alleen op het canvas
+    if (coverPickRef.current === on) return
+    coverPickRef.current = on
+    setCoverPick(on)
+    setCoverHint(null)
+    window.clearTimeout(coverHintTimerRef.current)
+    syncRingsRef.current()
+    // Kwam je hier vanuit "Memory bewerken"? Dan gaat de dialoog weer open zodra het
+    // kiezen klaar is — mét de titel/datums die je al had ingevuld, en met de nieuwe
+    // omslag erin. Anders zou één klik op het thumbnail-blok je bewerking wissen.
+    if (!on && pendingEditFormRef.current) {
+      const form = pendingEditFormRef.current
+      pendingEditFormRef.current = null
+      // Sloot het kiezen doordat je iets ánders opende (dialoog, instellingen, zoeken,
+      // diavoorstelling) of doordat je naar de kijk-modus ging? Dan die keuze
+      // respecteren en niet alsnog een bewerk-dialoog eroverheen zetten.
+      if (dialogOpenRef.current || overlayOpenRef.current || settingsRef.current.viewMode) return
+      const featured = currentEventInfoRef.current?.featuredPhoto
+      setEventForm({
+        ...form,
+        coverItemId: featured
+          ? currentItemsRef.current.find((it) => it.slug === featured || it.id === featured)?.id
+          : undefined,
+      })
+    }
+  }, [])
+  setCoverPickModeRef.current = setCoverPickMode
+
   const [settings, setSettings] = useState<Settings>(loadSettings)
   const [settingsOpen, setSettingsOpen] = useState(false)
   // Thema-kiezer voor het huidige jaar (L1) of event (L2): klein overlay-paneel,
@@ -465,7 +513,10 @@ export function AppShell() {
       void enterEventRef.current(currentEventRef.current)
     }
     // Kijk-modus: het notitie-sleep-hoekje hoort weg zolang bewerken uit staat.
-    if (patch.viewMode !== undefined) sceneRef.current?.setEditable?.(!next.viewMode)
+    if (patch.viewMode !== undefined) {
+      sceneRef.current?.setEditable?.(!next.viewMode)
+      if (next.viewMode) setCoverPickMode(false) // kijk-modus → niets te kiezen
+    }
     // Randdikte: een live setter, géén scene-herbouw. De schuif vuurt per pixel en
     // `enterYear`/`enterEvent` slaan gelijktijdige aanroepen stil over (enteringRef),
     // waardoor de instelling niet zou aankomen.
@@ -1086,6 +1137,7 @@ export function AppShell() {
         engine.syncElastic()
         levelRef.current = 'event'
         setUiLevel('event')
+        syncRingsRef.current() // verse scene: omslag-randen tonen als de kies-modus aan staat
         setHeader({ text: detail.event.title || detail.event.startAt, dir })
         applyPanLock()
         currentEventRef.current = eventId
@@ -1256,7 +1308,7 @@ export function AppShell() {
 
     // Ctrl+klik op een foto (L2): togglet de uitgelichte foto (jaar-omslag).
     // Optimistisch: markering + info meteen bij, schrijf async weg.
-    const toggleFeatured = (ref: string): void => {
+    const toggleFeatured = (ref: string, force = false): void => {
       const backend = backendRef.current
       const eventId = currentEventRef.current
       if (!backend || !eventId) return
@@ -1267,7 +1319,10 @@ export function AppShell() {
         return
       }
       const current = currentEventInfoRef.current?.featuredPhoto ?? null
-      const next = current === ref ? null : ref
+      // Ctrl+klik is een toggle (nogmaals klikken = omslag loslaten). In de expliciete
+      // "kies de omslagfoto"-modus is dat fout: je klikt om te KIEZEN, en de foto die
+      // al de omslag is aanklikken zou 'm dan stil wissen.
+      const next = !force && current === ref ? null : ref
       if (currentEventInfoRef.current) {
         currentEventInfoRef.current = { ...currentEventInfoRef.current, featuredPhoto: next ?? undefined }
       }
@@ -1322,6 +1377,12 @@ export function AppShell() {
         else sceneRef.current?.zoomToDefault?.()
         return
       }
+      // Plakkende kies-modus: Escape sluit eerst die modus, niet het niveau.
+      if (e.key === 'Escape' && coverPickRef.current && levelRef.current === 'event') {
+        e.preventDefault()
+        setCoverPickModeRef.current(false)
+        return
+      }
       if (e.key === 'Escape' || e.key === 'Backspace') {
         // Een open dialog (formulier/bevestiging) vangt Escape zelf af — hier
         // nooit onder de dialog door navigeren (de INPUT-guard hierboven dekt
@@ -1339,6 +1400,17 @@ export function AppShell() {
     }
     window.addEventListener('keydown', onKeyDown)
 
+    // Eén bron voor de featured-randen op het canvas: de live Ctrl/Shift-toetsen
+    // ÓF de plakkende kies-modus. Zonder deze bundeling zou een Ctrl-tik of een
+    // Alt-Tab de gouden rand doven terwijl de kies-modus gewoon aan blijft.
+    let shiftDown = false
+    const syncRings = (): void => {
+      if (levelRef.current !== 'event') return
+      const pick = coverPickRef.current
+      sceneRef.current?.setRingKeys?.(ctrlDown || pick, shiftDown && !pick)
+    }
+    syncRingsRef.current = syncRings
+
     // Ctrl (in-/uitdrukken) toont/verbergt de dag-indicator op de jaar-tijdlijn.
     const onCtrlKey = (e: KeyboardEvent): void => {
       if (e.key !== 'Control' && e.key !== 'Shift') return
@@ -1349,20 +1421,24 @@ export function AppShell() {
           if (levelRef.current === 'year') sceneRef.current?.setDayPicker?.(down)
         }
       }
+      shiftDown = e.shiftKey
       // Event-canvas: featured-randen (goud = Ctrl, blauw jaar-cover = Ctrl+Shift)
       // tonen zolang de toets(en) ingedrukt zijn.
-      if (levelRef.current === 'event') sceneRef.current?.setRingKeys?.(e.ctrlKey, e.shiftKey)
+      syncRings()
     }
     window.addEventListener('keydown', onCtrlKey)
     window.addEventListener('keyup', onCtrlKey)
 
     // Vensterfocus verliezen (bijv. Alt-Tab met Ctrl ingedrukt) → de keyup mist,
-    // waardoor de indicator/tap-modus "aan" zou blijven. Reset op blur.
+    // waardoor de indicator/tap-modus "aan" zou blijven. Reset op blur. De plakkende
+    // kies-modus blijft wél staan: die hangt niet aan een toets.
     const onBlur = (): void => {
-      if (levelRef.current === 'event') sceneRef.current?.setRingKeys?.(false, false)
+      shiftDown = false
+      syncRings()
       if (!ctrlDown) return
       ctrlDown = false
       if (levelRef.current === 'year') sceneRef.current?.setDayPicker?.(false)
+      syncRings()
     }
     window.addEventListener('blur', onBlur)
 
@@ -1629,16 +1705,25 @@ export function AppShell() {
         // (jaar-omslag). Via een handle zodat Ctrl bij pointerdown "vastgezet"
         // wordt (robuust als Ctrl tussen down en up wordt losgelaten), en geen
         // item-drag start. `end()` togglet en onderdrukt de naloop-tap→L3.
-        if (levelRef.current === 'event' && ctrlDown && scene?.refAt) {
+        if (levelRef.current === 'event' && (ctrlDown || coverPickRef.current) && scene?.refAt) {
           const ref = scene.refAt(wx, wy)
-          const yearPin = mods.shift // Ctrl+Shift = vaste jaar-cover i.p.v. event-cover
+          // In de plakkende kies-modus gaat Shift NIET stiekem de jaar-cover zetten:
+          // je koos expliciet "thumbnail van deze memory".
+          const yearPin = coverPickRef.current ? false : mods.shift
+          const sticky = coverPickRef.current
           return {
             moveTo: () => {},
             end: () => {
               rangeJustEnded = true
               if (ref) {
                 if (yearPin) toggleYearCover(ref)
-                else toggleFeatured(ref)
+                else toggleFeatured(ref, sticky)
+                if (sticky) setCoverPickModeRef.current(false)
+              } else if (sticky) {
+                // Mis: zonder terugkoppeling lijkt de app te bevriezen.
+                setCoverHint('Klik op een fóto om die als omslag te kiezen.')
+                window.clearTimeout(coverHintTimerRef.current)
+                coverHintTimerRef.current = window.setTimeout(() => setCoverHint(null), 2600)
               }
             },
             cancel: () => {
@@ -1768,6 +1853,7 @@ export function AppShell() {
       window.removeEventListener('keyup', onCtrlKey)
       window.removeEventListener('blur', onBlur)
       if (searchTimerRef.current) window.clearTimeout(searchTimerRef.current)
+      window.clearTimeout(coverHintTimerRef.current)
       sceneRef.current?.destroy()
       sceneRef.current = null
       engine?.destroy()
@@ -1777,8 +1863,24 @@ export function AppShell() {
   }, [])
 
   // Houd de gesture-closure op de hoogte of er een blokkerende dialog open staat.
+  // De kies-modus hoort uitsluitend bij het memory-canvas. Eén effect op het niveau
+  // is waterdicht: élk pad dat je ergens anders brengt (terug, inzoomen naar één foto,
+  // een ander jaar, een vault-herbouw) zet `uiLevel`, terwijl losse resets per functie
+  // er altijd eentje missen — en een onzichtbaar actieve modus slikt daarna je Escape.
+  useEffect(() => {
+    if (uiLevel === 'event') return
+    // Weg van het canvas = het kiezen is afgebroken. Het opzij gezette formulier hoort
+    // dan NIET terug te komen: het gaat over een memory waar je niet meer in zit, en
+    // een volgende klik zou de omslag van de verkeerde memory zetten.
+    pendingEditFormRef.current = null
+    setCoverPickMode(false)
+  }, [uiLevel, setCoverPickMode])
+
   useEffect(() => {
     dialogOpenRef.current = !!(modal || editing || eventForm || metaForm || confirmBox)
+    // Een open dialoog dekt het canvas af → de kies-modus zou onbereikbaar aan blijven
+    // (en de balk zou over de dialoog liegen dat Esc 'm sluit).
+    if (dialogOpenRef.current) setCoverPickMode(false)
   }, [modal, editing, eventForm, metaForm, confirmBox])
 
   // Haal de asset-URL van de gefocuste video op (pad → convertFileSrc). Async,
@@ -2102,6 +2204,15 @@ export function AppShell() {
       // (undefined = standaard 50, tonen we als "Bijzonder").
       size: info.size,
       underConstruction: info.underConstruction ?? false,
+      // `featuredPhoto` is een SLUG of een id; `backend.thumb()` wil een id. Resolven
+      // via de items van dit event. Geen expliciete keuze → undefined, en dan toont
+      // de dialoog bewust de grijze "kies er een"-box (de tijdlijn kiest zelf wel
+      // een willekeurige foto, maar dat is geen keuze die jij gemaakt hebt).
+      coverItemId: info.featuredPhoto
+        ? currentItemsRef.current.find(
+            (it) => it.slug === info.featuredPhoto || it.id === info.featuredPhoto,
+          )?.id
+        : undefined,
     })
   }
 
@@ -2498,6 +2609,18 @@ export function AppShell() {
           </button>
         )}
       {toast && <div style={toastStyle(u)}>{toast}</div>}
+      {/* Kies-modus: duidelijk in beeld dát je in die modus zit. Zonder deze balk was
+          de enige aanwijzing een gouden rand die je pas ziet als je al hovert. */}
+      {coverPick && uiLevel === 'event' && !screensaverIds && (
+        <div style={coverBannerStyle}>
+          <IconCover size={18} />
+          <span>
+            <b>Kies de omslagfoto</b> — klik een foto in deze memory
+          </span>
+          <span style={{ opacity: 0.65 }}>Esc om te stoppen</span>
+          {coverHint && <span style={{ color: '#ffd479' }}>{coverHint}</span>}
+        </div>
+      )}
       {matReport && <MaterializationOverlay report={matReport} onClose={() => setMatReport(null)} />}
       {phase === 'ready' && !anyDialog && !searchOpen && !settingsOpen && !settings.viewMode && (
         <Fab
@@ -2522,6 +2645,8 @@ export function AppShell() {
           onToggleSquarePhotos={() => updateSettings({ squarePhotos: !settingsRef.current.squarePhotos })}
           weergaveOpen={weergaveOpen}
           onToggleWeergave={() => setWeergaveOpen((v) => !v)}
+          coverPick={coverPick}
+          onToggleCoverPick={() => setCoverPickMode(!coverPickRef.current)}
         />
       )}
       <AnimatePresence>
@@ -2561,6 +2686,19 @@ export function AppShell() {
             onChange={(patch) => setEventForm({ ...eventForm, ...patch })}
             onSubmit={() => void submitEventForm()}
             onCancel={() => setEventForm(null)}
+            thumbUrl={
+              eventForm.coverItemId
+                ? backendRef.current?.thumb(eventForm.coverItemId, 256).url
+                : undefined
+            }
+            onPickCover={() => {
+              // Kiezen gebeurt op het canvas zelf (daar zie je de foto's groot). Het
+              // formulier gaat opzij en komt na het kiezen terug — inclusief wat je
+              // al had ingevuld en de zojuist gekozen omslag.
+              pendingEditFormRef.current = eventForm
+              setEventForm(null)
+              setCoverPickMode(true)
+            }}
           />
         )}
       </AnimatePresence>
@@ -3719,6 +3857,8 @@ function Fab({
   onToggleSquarePhotos,
   weergaveOpen,
   onToggleWeergave,
+  coverPick,
+  onToggleCoverPick,
 }: {
   uiLevel: 'lifeline' | 'year' | 'event' | 'focus'
   layoutMode: 'custom' | 'grid' | 'scatter'
@@ -3741,6 +3881,8 @@ function Fab({
   onToggleSquarePhotos: () => void
   weergaveOpen: boolean
   onToggleWeergave: () => void
+  coverPick: boolean
+  onToggleCoverPick: () => void
 }) {
   const u = ui()
   // Gecentreerd onderaan: alle niveaus delen dezelfde plek en knoppentaal. De
@@ -3879,6 +4021,12 @@ function Fab({
         <div style={dockBar}>
           <DockIconBtn title="Foto's toevoegen" icon={<IconImage />} onClick={onAddPhotos} />
           <DockIconBtn title="Notitie toevoegen" icon={<IconNote />} onClick={onAddNote} />
+          <DockIconBtn
+            title="Thumbnail selecteren — kies welke foto de omslag van deze memory is"
+            icon={<IconCover />}
+            onClick={onToggleCoverPick}
+            active={coverPick}
+          />
           <DockIconBtn title="Weergave aanpassen" icon={<IconSliders />} onClick={onToggleWeergave} active={weergaveOpen} domId="weergave-toggle-btn" />
           <DockIconBtn title="Thema & sfeer" icon={<IconPalette />} onClick={onEventTheme} />
           {divider}
@@ -3961,12 +4109,18 @@ function EventDialog({
   onChange,
   onSubmit,
   onCancel,
+  thumbUrl,
+  onPickCover,
 }: {
   form: EventForm
   busy: boolean
   onChange: (patch: Partial<EventForm>) => void
   onSubmit: () => void
   onCancel: () => void
+  /** Thumbnail-URL van de gekozen omslagfoto, of undefined als er geen keuze is. */
+  thumbUrl?: string
+  /** Sluit de dialoog en start het kiezen van een omslagfoto op het canvas. */
+  onPickCover: () => void
 }) {
   const u = ui()
   useEscape(onCancel)
@@ -4084,6 +4238,76 @@ function EventDialog({
             })}
           </div>
         </div>
+        {form.mode === 'edit' && (
+          <div style={{ marginTop: 18 }}>
+            <div style={fieldLabel}>Thumbnail</div>
+            <button
+              type="button"
+              onClick={onPickCover}
+              title="Kies welke foto de omslag van deze memory is"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 14,
+                width: '100%',
+                padding: 10,
+                borderRadius: 13,
+                cursor: 'pointer',
+                textAlign: 'left',
+                border: `1px solid ${u.borderSoft}`,
+                background: u.choiceBg,
+                color: u.chipText,
+              }}
+            >
+              {thumbUrl ? (
+                <img
+                  src={thumbUrl}
+                  alt=""
+                  onError={(e) => {
+                    // Thumbnail nog niet gegenereerd (verse import): liever niets dan
+                    // een gebroken-plaatje-icoon.
+                    e.currentTarget.style.visibility = 'hidden'
+                  }}
+                  style={{
+                    width: 84,
+                    height: 62,
+                    objectFit: 'cover',
+                    borderRadius: 8,
+                    flex: '0 0 auto',
+                    background: u.cardAlt,
+                  }}
+                />
+              ) : (
+                <div
+                  aria-hidden
+                  style={{
+                    width: 84,
+                    height: 62,
+                    flex: '0 0 auto',
+                    borderRadius: 8,
+                    background: u.cardAlt,
+                    border: `1px dashed ${u.border}`,
+                    display: 'grid',
+                    placeItems: 'center',
+                    color: u.textFaint,
+                  }}
+                >
+                  <IconCover size={22} />
+                </div>
+              )}
+              <span style={{ display: 'grid', gap: 3 }}>
+                <span style={{ fontWeight: 600, fontSize: 14 }}>
+                  {thumbUrl ? 'Andere omslagfoto kiezen' : 'Kies een omslagfoto'}
+                </span>
+                <span style={{ fontSize: 11, color: u.hintMuted, lineHeight: 1.35 }}>
+                  {thumbUrl
+                    ? 'Dit is de foto die deze memory op de tijdlijn toont. Een nieuwe keuze geldt meteen.'
+                    : 'Nog geen vaste keuze — de tijdlijn toont nu telkens een andere foto uit deze memory. Een keuze geldt meteen.'}
+                </span>
+              </span>
+            </button>
+          </div>
+        )}
         {form.mode === 'edit' && (
           <div
             style={{
@@ -5026,6 +5250,32 @@ const toastStyle = (u: UiPalette): React.CSSProperties => ({
   zIndex: 1100,
   pointerEvents: 'none',
 })
+
+/** Balk bovenin tijdens de "kies de omslagfoto"-modus. Bewust bovenaan (de dock
+ * staat onderin) en in het goud van de omslag-rand, zodat balk en rand één verhaal
+ * vertellen. */
+const coverBannerStyle: React.CSSProperties = {
+  position: 'absolute',
+  // Onder de memory-titel (die staat op top 18 en is even breed gecentreerd).
+  top: 72,
+  left: '50%',
+  transform: 'translateX(-50%)',
+  display: 'flex',
+  alignItems: 'center',
+  gap: 10,
+  padding: '9px 16px',
+  borderRadius: 999,
+  background: 'rgba(24,20,10,0.92)',
+  border: '1px solid rgba(255,194,75,0.55)',
+  color: '#ffe6b0',
+  font: '13px sans-serif',
+  boxShadow: '0 6px 24px rgba(0,0,0,0.55)',
+  zIndex: 1100,
+  pointerEvents: 'none',
+  maxWidth: '92vw',
+  flexWrap: 'wrap',
+  justifyContent: 'center',
+}
 
 const gearBtn = (u: UiPalette): React.CSSProperties => ({
   position: 'absolute',

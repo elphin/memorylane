@@ -113,6 +113,22 @@ export function IconSliders({ size = 20, style }: IconProps) {
   )
 }
 
+/** Thumbnail selecteren: een stapeltje foto's waarvan de voorste is aangevinkt —
+ * "welke van deze foto's is de omslag?". */
+export function IconCover({ size = 20, style }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" style={svgBase(style)}>
+      {/* Achterste foto's van het stapeltje */}
+      <path d="M8 3.4h11a1.8 1.8 0 0 1 1.8 1.8v9.4" />
+      <path d="M5.4 6.4h11a1.8 1.8 0 0 1 1.8 1.8v9.4" />
+      {/* Voorste foto */}
+      <rect x="2.6" y="9.4" width="13" height="11.2" rx="1.8" />
+      {/* Vinkje = deze is gekozen */}
+      <path d="M5.6 15.2l2.6 2.6 4.6-5" />
+    </svg>
+  )
+}
+
 /** Thema & sfeer: palet met kleurstippen. */
 export function IconPalette({ size = 20, style }: IconProps) {
   return (
