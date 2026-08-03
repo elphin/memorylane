@@ -1344,6 +1344,18 @@ export function AppShell() {
       const next = currentYearCoverRef.current === item.id ? null : item.id
       currentYearCoverRef.current = next
       sceneRef.current?.setYearFeatured?.(next)
+      // Een memory die de jaargrens kruist staat in twee jaren, maar de vaste
+      // jaar-omslag hoort bij het jaar waar de memory WOONT (zijn map). Kom je hier
+      // vanuit het buurjaar, dan is het onduidelijk welk jaar je zojuist prikte —
+      // benoem het dan expliciet in plaats van het stil te doen.
+      if (currentYearRef.current && currentYearRef.current !== info.yearId) {
+        const owner = yearsRef.current.find((y) => y.id === info.yearId)
+        setToast(
+          next
+            ? `Vaste omslag gezet voor ${owner?.title ?? 'het eigen jaar'} — deze memory hoort daarbij`
+            : `Vaste omslag van ${owner?.title ?? 'het eigen jaar'} losgelaten`,
+        )
+      }
       void backend
         .setYearCover(info.yearId, next)
         .then(async () => {
@@ -2258,9 +2270,20 @@ export function AppShell() {
         // Een datum-edit kan het event naar een ander jaar verplaatsen. Houd
         // `currentYearRef` in de pas met de nieuwe startdatum, anders landt
         // uitzoomen (goBack) op het oude — nu lege — jaar.
-        const newYear = Number(f.startAt.slice(0, 4))
-        const matched = yearsRef.current.find((y) => y.year === newYear)
-        if (matched) currentYearRef.current = matched.id
+        //
+        // Maar NIET als het jaar waar je vandaan kwam nog steeds bij deze memory
+        // hoort: een memory die de jaargrens kruist staat in twee jaren, en dan zou
+        // een titel-wijziging je bij het uitzoomen stil naar het ándere jaar sturen.
+        const startYear = Number(f.startAt.slice(0, 4))
+        const endYear = Number((end ?? f.startAt).slice(0, 4))
+        const cur = yearsRef.current.find((y) => y.id === currentYearRef.current)
+        const stillHere = cur != null && cur.year >= startYear && cur.year <= endYear
+        if (!stillHere) {
+          // Het doeljaar kan zojuist zijn aangemaakt door de verhuizing → verse lijst.
+          yearsRef.current = await backend.listYears()
+          const matched = yearsRef.current.find((y) => y.year === startYear)
+          if (matched) currentYearRef.current = matched.id
+        }
         enterEventRef.current(f.eventId) // ververs event-info
       }
       setEventForm(null)

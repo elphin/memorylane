@@ -53,9 +53,6 @@ const AXIS_CLEAR_STRAIGHT = 64
 const LANE_GAP_STRAIGHT = 28
 const CARD_GAP_PX = 16 // min. horizontale scherm-ruimte tussen kaarten in een lane
 const EDGE_PAD = 34 // min. scherm-px tussen een kaart en de linker-/rechterrand (overzicht)
-// Kaarten van een memory die de jaargrens kruist ankeren op het uiteinde van de as en
-// hebben daar minder lucht; een krappere rand-marge houdt ze een kaart i.p.v. een stip.
-const EDGE_PAD_AXIS_END = 10
 // Krimp-om-te-passen: past een kaart nergens op ware grootte, dan proberen we deze
 // stappen vóór hij een stip wordt. Gekwantiseerd (niet continu) zodat het frame-kader
 // niet elk frame opnieuw getekend hoeft te worden en een kaart niet zichtbaar "pompt".
@@ -202,9 +199,6 @@ interface LaneSlot {
 interface Node {
   eventId: string
   synthetic: boolean // synthetische "Losse foto's"-bundel → geen grootte-curatie
-  /** Memory die de jaargrens kruist en dus in twee jaren staat: ankert op het uiteinde
-   * van de as en krijgt daar een krappere rand-marge (fase 7 vult dit). */
-  spansYears: boolean
   anchorX: number // wereld-x (de datum)
   hasCover: boolean
   isSpan: boolean
@@ -316,9 +310,11 @@ function fitCover(sprite: Sprite, tex: Texture): void {
   sprite.setSize(tex.width * s, tex.height * s)
 }
 
-/** Parse een `YYYY-MM-DD`-datum LOKAAL (niet als UTC). */
+/** Parse een datum LOKAAL (niet als UTC). Alleen de datum-prefix: `start_at`/`end_at`
+ * mogen een tijd bevatten (`2024-12-31T08:00:00Z`), en zonder deze afkapping wordt de
+ * dag `NaN` → dan landt zo'n memory stil op de 1e van de maand. */
 function parseLocalDate(iso: string): number {
-  const [y, m, d] = iso.split('-').map(Number)
+  const [y, m, d] = iso.slice(0, 10).split('-').map(Number)
   return new Date(y || 1970, (m || 1) - 1, d || 1).getTime()
 }
 
@@ -756,7 +752,6 @@ export class YearScene implements Scene {
     return {
       eventId: ev.id,
       synthetic: ev.synthetic ?? false,
-      spansYears: ev.spansYears ?? false,
       anchorX,
       hasCover,
       isSpan,
@@ -1052,12 +1047,10 @@ export class YearScene implements Scene {
       let lo = i > 0 ? list[i - 1]!.right + gap + half - slack : -Infinity
       let hi = i < list.length ? list[i]!.left - gap - half + slack : Infinity
       if (clampEdges) {
-        // Een cross-jaar-memory ankert dicht bij het uiteinde van de as en heeft daar
-        // minder lucht; die krijgt een krappere marge zodat hij een kaart blijft.
         // De slack geldt hier BEWUST niet: dit is de harde "niets over de schermrand"-
-        // eis, en met slack zou een krappe marge er precies door opgeheven worden.
-        // Voor de schermrand telt de ZICHTBARE breedte (incl. de getekende rand).
-        const pad = (n.spansYears ? EDGE_PAD_AXIS_END : EDGE_PAD) + this.borderSurplus()
+        // eis, en met slack zou de marge er precies door opgeheven worden. Voor de
+        // schermrand telt de ZICHTBARE breedte (incl. de getekende rand).
+        const pad = EDGE_PAD + this.borderSurplus()
         lo = Math.max(lo, pad + half)
         hi = Math.min(hi, vpW - pad - half)
       }

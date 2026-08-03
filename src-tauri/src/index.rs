@@ -313,7 +313,12 @@ pub fn list_years(conn: &Connection) -> rusqlite::Result<Vec<YearSummary>> {
     // "Losse foto's"-bundel (synthetic = 1) telt NIET mee: dat is geen echte memory.
     let mut stmt = conn.prepare(
         "SELECT y.id, y.year, y.title, y.start_at, y.end_at,
-             (SELECT count(*) FROM events e WHERE e.year_id = y.id AND e.synthetic = 0),
+             -- Zelfde verzameling als `get_year` toont, inclusief memories die vanuit
+             -- een ander jaar doorlopen: anders zegt de tegel 9 en telt het scherm er 10.
+             (SELECT count(*) FROM events e WHERE e.synthetic = 0 AND (e.year_id = y.id
+                OR (e.end_at IS NOT NULL
+                    AND substr(e.start_at, 1, 10) <= y.year || '-12-31'
+                    AND substr(e.end_at, 1, 10) >= y.year || '-01-01'))),
              (SELECT count(*) FROM items i JOIN events e ON i.event_id = e.id WHERE e.year_id = y.id),
              COALESCE(
                (SELECT i.id FROM items i JOIN events e ON i.event_id = e.id
@@ -401,10 +406,22 @@ pub fn get_year(conn: &Connection, year_id: &str) -> rusqlite::Result<Option<Yea
                (SELECT id FROM items WHERE event_id = e.id AND item_type = 'photo'
                     ORDER BY (timestamp_ms IS NULL), timestamp_ms LIMIT 24)),
              e.size, e.under_construction, e.synthetic, e.theme
-         FROM events e WHERE e.year_id = ?1 ORDER BY e.start_at",
+         FROM events e
+         WHERE e.year_id = ?1
+            -- Een memory die de jaargrens kruist hoort in BEIDE jaren te staan. Het
+            -- jaar van een event komt uit zijn map (zie writer::update_event), dus
+            -- zonder deze tak zou hij alleen in zijn startjaar zichtbaar zijn.
+            -- `substr(...,1,10)` omdat start_at/end_at ook een tijd mogen bevatten:
+            -- lexicografisch is '2024-12-31T08:00:00Z' <= '2024-12-31' onwaar.
+            OR (e.end_at IS NOT NULL
+                AND substr(e.start_at, 1, 10) <= ?2
+                AND substr(e.end_at, 1, 10) >= ?3)
+         ORDER BY e.start_at",
     )?;
+    let jan1 = format!("{:04}-01-01", year.year);
+    let dec31 = format!("{:04}-12-31", year.year);
     let events = stmt
-        .query_map(params![year_id], |r| {
+        .query_map(params![year_id, dec31, jan1], |r| {
             let kind: String = r.get(1)?;
             Ok(EventSummary {
                 id: r.get(0)?,
@@ -1628,5 +1645,71 @@ mod tests {
         assert_eq!(cover("evB").as_deref(), Some("b1"), "verwijderde featured → val terug op foto");
         assert_eq!(cover("evC").as_deref(), Some("c1"), "tekst-featured → val terug op foto (nooit de tekst)");
         assert!(cover("evD").is_none(), "event zonder foto's heeft geen omslag");
+    }
+    /// Een memory die de jaargrens kruist hoort in BEIDE jaren te staan: het jaar komt
+    /// uit de map waar de event-map fysiek in ligt, dus zonder de overlap-tak zou hij
+    /// alleen in zijn startjaar zichtbaar zijn.
+    #[test]
+    fn cross_year_event_shows_in_both_years() {
+        let mut m = VaultModel::default();
+        let mk_year = |id: &str, year: i32| Year {
+            id: id.into(),
+            year,
+            title: year.to_string(),
+            start_at: format!("{year}-01-01"),
+            end_at: None,
+            folder_name: year.to_string(),
+            cover: None,
+            size_factor: None,
+            theme: None,
+        };
+        let mk_event = |id: &str, yid: &str, start: &str, end: Option<&str>| Event {
+            id: id.into(),
+            kind: EventKind::Event,
+            title: Some(id.into()),
+            description: None,
+            start_at: start.into(),
+            end_at: end.map(str::to_string),
+            location: None,
+            featured_photo: None,
+            tags: vec![],
+            size: None,
+            under_construction: None,
+            theme: None,
+            year_id: yid.into(),
+            folder_path: format!("{yid}/{id}"),
+            synthetic: false,
+        };
+        m.years.push(mk_year("y2024", 2024));
+        m.years.push(mk_year("y2025", 2025));
+        // Kruist de grens (ligt fysiek in 2024).
+        m.events.push(mk_event("oud-nieuw", "y2024", "2024-12-28", Some("2025-01-03")));
+        // Meerdaags maar binnen één jaar → mag niet in het buurjaar opduiken.
+        m.events.push(mk_event("kerst", "y2024", "2024-12-20", Some("2024-12-26")));
+        // Zonder einddatum → nooit doorlopend.
+        m.events.push(mk_event("los", "y2024", "2024-12-31", None));
+        // Met een TIJD erin: lexicografisch is '2024-12-31T08:00:00Z' <= '2024-12-31'
+        // onwaar, dus zonder substr() zou deze uit het buurjaar vallen.
+        m.events.push(mk_event("oudjaar", "y2024", "2024-12-31T08:00:00Z", Some("2025-01-02T23:00:00Z")));
+
+        let mut conn = open_in_memory().unwrap();
+        load(&mut conn, &m).unwrap();
+        let ids = |yid: &str| -> Vec<String> {
+            get_year(&conn, yid).unwrap().unwrap().events.iter().map(|e| e.id.clone()).collect()
+        };
+
+        let y24 = ids("y2024");
+        assert!(y24.contains(&"oud-nieuw".to_string()), "eigen jaar toont 'm altijd");
+        assert!(y24.contains(&"kerst".to_string()));
+        assert!(y24.contains(&"los".to_string()));
+        assert_eq!(y24.len(), 4, "geen dubbelen in het eigen jaar");
+
+        let y25 = ids("y2025");
+        assert!(y25.contains(&"oud-nieuw".to_string()), "doorlopende memory ook in het buurjaar");
+        assert!(y25.contains(&"oudjaar".to_string()), "tijd-component mag de overlap niet breken");
+        assert!(!y25.contains(&"kerst".to_string()), "binnen één jaar → niet in het buurjaar");
+        assert!(!y25.contains(&"los".to_string()), "zonder einddatum → nooit doorlopend");
+        assert_eq!(y25.len(), 2);
+
     }
 }

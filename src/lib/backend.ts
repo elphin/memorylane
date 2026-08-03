@@ -50,9 +50,6 @@ export interface EventSummary {
   underConstruction?: boolean
   /** True = synthetische "Losse foto's"-bundel (curatie niet mogelijk). */
   synthetic?: boolean
-  /** True = deze memory loopt door in een ander jaar (start en eind in verschillende
-   * kalenderjaren) en wordt daarom in béide jaren getoond. */
-  spansYears?: boolean
   /** Thema-keuze van dit event. Afwezig = erven van het jaar. */
   theme?: ThemeChoice
 }
@@ -687,6 +684,22 @@ class MockBackend implements Backend {
           underConstruction: e % 3 === 0 || undefined,
         }
       })
+      // Eén memory per jaar loopt door in het volgende jaar (28 dec → 3 jan), zodat
+      // het "in beide jaren zichtbaar"-pad in de mock net zo goed te zien is als in
+      // de echte vault.
+      if (i + 1 < specs.length) {
+        events.push({
+          id: `${id}-nye`,
+          kind: 'period',
+          title: 'Oud & nieuw',
+          startAt: `${y}-12-28`,
+          endAt: `${y + 1}-01-03`,
+          itemCount: 4,
+          coverItemId: `${id}-nye-i0`,
+          photoIds: [],
+          size: 70,
+        })
+      }
       const points: DensityPoint[] = []
       for (let k = 0; k < itemCount; k++) {
         const ev = events[k % events.length]
@@ -714,6 +727,12 @@ class MockBackend implements Backend {
         .filter((x): x is string => !!x)
       return { id, year: y, title: String(y), startAt: `${y}-01-01`, endAt: `${y}-12-31`, eventCount, itemCount, coverItemId: `${id}-i0`, photoIds, featuredIds }
     })
+    // De tegel moet hetzelfde tellen als het jaar-scherm laat zien — inclusief de
+    // doorlopende memory die het volgende jaar erbij krijgt (zie `carriedEvents`).
+    for (const y of this.years) {
+      const detail = this.details.get(y.id)
+      if (detail) y.eventCount = detail.events.length + this.carriedEvents(detail).length
+    }
   }
 
   async getVaultPath(): Promise<string | null> {
@@ -776,13 +795,33 @@ class MockBackend implements Backend {
     if (clean) this.eventThemes.set(eventId, clean)
     else this.eventThemes.delete(eventId)
   }
+  /** Memories uit ándere jaren die dit kalenderjaar overlappen — zelfde predicaat als
+   * de `get_year`-query in Rust (pure datum-overlap). Gedeeld door `getYear` en de
+   * jaartegel-telling, zodat de tegel niet minder zegt dan het scherm toont. */
+  private carriedEvents(detail: YearDetail): EventSummary[] {
+    return [...this.details.values()]
+      .flatMap((d) => d.events)
+      .filter(
+        (e) =>
+          !detail.events.some((own) => own.id === e.id) &&
+          e.endAt != null &&
+          e.startAt.slice(0, 10) <= `${detail.year.year}-12-31` &&
+          e.endAt.slice(0, 10) >= `${detail.year.year}-01-01`,
+      )
+  }
+
   async getYear(yearId: string): Promise<YearDetail | null> {
     const detail = this.details.get(yearId)
     if (!detail) return null
     const sizeFactor = this.yearFactors.get(yearId)
+    // Doorlopende memories uit het VORIGE jaar horen hier óók (zie get_year in Rust,
+    // dat op de datum-overlap filtert i.p.v. alleen op de jaarmap).
+    const carried = this.carriedEvents(detail)
     // Cover per event: featured indien gekozen, anders elke keer een WILLEKEURIGE
     // foto (i=1..n-1; i=0 is de tekstkaart) — demonstreert "elke keer een andere".
-    const events = detail.events.map((ev) => {
+    const events = [...detail.events, ...carried]
+      .sort((a, b) => (a.startAt < b.startAt ? -1 : a.startAt > b.startAt ? 1 : 0))
+      .map((ev) => {
       const n = 6 + (hueFor(ev.id) % 7)
       // Foto's van dit event (i=1..n-1; i=0 is de tekstkaart) — voor de slideshow.
       const photoIds = Array.from({ length: Math.max(0, n - 1) }, (_, k) => `${ev.id}-i${k + 1}`)
