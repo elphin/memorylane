@@ -383,6 +383,77 @@ impl VaultService {
         Ok(())
     }
 
+    /// Werkt titel/artiest/link van een liedje bij (file first, dan rescan).
+    /// Synthetische items (losse media zonder `.md`) worden geweigerd — zelfde
+    /// gedrag als `update_item`.
+    pub fn set_song_meta(
+        &self,
+        item_id: &str,
+        title: Option<&str>,
+        artist: Option<&str>,
+        url: Option<&str>,
+    ) -> Result<(), String> {
+        let vault = self.current_vault()?;
+        let index::ItemFiles { folder_path: folder, slug, .. } = {
+            let conn = self.conn.lock().map_err(lock_err)?;
+            index::item_files(&conn, item_id)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("item {item_id} niet gevonden"))?
+        };
+        let slug = slug.ok_or_else(|| "dit item heeft geen bewerkbaar bestand".to_string())?;
+        writer::set_song_meta(&vault, &folder, &slug, title, artist, url)
+            .map_err(|e| e.to_string())?;
+        self.rescan()?;
+        Ok(())
+    }
+
+    /// Voegt een liedje toe aan een memory. `audio` is optioneel: een liedje mag
+    /// ook alleen een streaming-link of alleen een getypte titel zijn.
+    /// Geeft het nieuwe item-id terug.
+    pub fn add_song(
+        &self,
+        event_id: &str,
+        audio: Option<&str>,
+        song: &writer::SongInput,
+    ) -> Result<String, String> {
+        let vault = self.current_vault()?;
+        let folder = {
+            let conn = self.conn.lock().map_err(lock_err)?;
+            // Een synthetische "Losse foto's"-bundel heeft de JAARMAP als
+            // folder_path, en daar leest de scanner geen sidecar-`.md` (alleen
+            // losse mediabestanden). Een liedje zou daar stil verdwijnen: met een
+            // mp3 duikt die op als losse `audio` zonder titel of artiest, en een
+            // liedje dat alleen een link of een getypte titel is verschijnt
+            // helemaal niet -- terwijl `add_song` netjes Ok teruggeeft.
+            let synthetic: bool = conn
+                .query_row(
+                    "SELECT synthetic FROM events WHERE id = ?1",
+                    [event_id],
+                    |r| r.get::<_, i64>(0),
+                )
+                .map_err(|_| format!("event {event_id} niet gevonden"))?
+                != 0;
+            if synthetic {
+                return Err(
+                    "losse foto's kunnen geen liedje dragen; maak er eerst een echte memory van"
+                        .into(),
+                );
+            }
+            index::event_folder(&conn, event_id)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("event {event_id} niet gevonden"))?
+        };
+        let id = writer::import_song(
+            &vault,
+            &folder,
+            audio.map(std::path::Path::new),
+            None, // hoesje komt in fase 3 (uit de tag van het bestand of van het net)
+            song,
+        )?;
+        self.rescan()?;
+        Ok(id)
+    }
+
     /// Importeert foto's (bronpaden van de bestandskiezer) in een event.
     pub fn import_photos(&self, event_id: &str, sources: &[String]) -> Result<usize, String> {
         let vault = self.current_vault()?;
@@ -977,6 +1048,47 @@ pub fn set_item_frame(
     state.set_item_frame(&item_id, frame.as_deref())
 }
 
+/// Werkt titel/artiest/link van een liedje bij.
+#[tauri::command]
+pub fn set_song_meta(
+    state: State<VaultService>,
+    item_id: String,
+    title: Option<String>,
+    artist: Option<String>,
+    url: Option<String>,
+) -> Result<(), String> {
+    state.set_song_meta(&item_id, title.as_deref(), artist.as_deref(), url.as_deref())
+}
+
+/// Voegt een liedje toe aan een memory. Alle velden optioneel behalve `event_id`:
+/// een liedje mag een bestand zijn, een link, of alleen een getypte titel.
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+pub fn add_song(
+    state: State<VaultService>,
+    event_id: String,
+    audio: Option<String>,
+    title: Option<String>,
+    artist: Option<String>,
+    url: Option<String>,
+    isrc: Option<String>,
+    duration_secs: Option<u64>,
+    happened_at: Option<String>,
+) -> Result<String, String> {
+    state.add_song(
+        &event_id,
+        audio.as_deref(),
+        &writer::SongInput {
+            title: title.as_deref(),
+            artist: artist.as_deref(),
+            url: url.as_deref(),
+            isrc: isrc.as_deref(),
+            duration_secs,
+            happened_at: happened_at.as_deref(),
+        },
+    )
+}
+
 #[tauri::command]
 pub fn import_photos(
     state: State<VaultService>,
@@ -1154,6 +1266,119 @@ mod tests {
         assert!(err.contains("geen bewerkbaar bestand"), "geweigerd zoals update_item: {err}");
         // En er is niet stiekem een sidecar aangemaakt.
         assert!(!root.join("2024/2024-01-01 test/los.md").exists());
+    }
+
+    /// Een liedje toevoegen moet METEEN zichtbaar zijn, zonder herstart. Dit is
+    /// het vangnet onder `self.rescan()` in `add_song` en `set_song_meta`: haal
+    /// die weg en het schrijven naar schijf slaagt nog steeds, maar de index
+    /// blijft stale — de kaart, de titel in L3 en het zoekresultaat veranderen
+    /// niet. Groene gate, echte gebruikersbug.
+    #[test]
+    fn add_song_and_edit_are_visible_without_a_restart() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("2019/2019-07-14 Zomer")).unwrap();
+        std::fs::write(
+            root.join("2019/2019-07-14 Zomer/_event.md"),
+            "---\nid: ev1\ntype: event\ntitle: Zomer\nstartAt: 2019-07-14\n---\n",
+        )
+        .unwrap();
+        let service = VaultService::new().unwrap();
+        service.reindex_path(root, false).unwrap();
+
+        let id = service
+            .add_song(
+                "ev1",
+                None,
+                &writer::SongInput {
+                    title: Some("Blinding Lights"),
+                    artist: Some("The Weeknd"),
+                    url: Some("https://open.spotify.com/track/x"),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        let find = |id: &str| {
+            let conn = service.conn.lock().unwrap();
+            index::get_event(&conn, "ev1")
+                .unwrap()
+                .unwrap()
+                .items
+                .into_iter()
+                .find(|i| i.id == id)
+        };
+        let song = find(&id).expect("het liedje staat direct in de index");
+        assert_eq!(song.item_type, crate::model::ItemType::Song);
+        assert_eq!(song.caption.as_deref(), Some("Blinding Lights"));
+        assert_eq!(song.artist.as_deref(), Some("The Weeknd"));
+
+        // Bewerken is óók meteen zichtbaar.
+        service.set_song_meta(&id, Some("Dreams"), Some("Fleetwood Mac"), None).unwrap();
+        let song = find(&id).unwrap();
+        assert_eq!(song.caption.as_deref(), Some("Dreams"));
+        assert_eq!(song.artist.as_deref(), Some("Fleetwood Mac"));
+        assert_eq!(song.url, None, "lege link is gewist");
+    }
+
+    /// Synthetische items (los mediabestand zonder `.md`) hebben geen bewerkbaar
+    /// bestand — zelfde weigering als `update_item`/`set_item_frame`.
+    #[test]
+    fn song_meta_refuses_a_synthetic_item() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("2024/2024-01-01 test")).unwrap();
+        std::fs::write(
+            root.join("2024/2024-01-01 test/_event.md"),
+            "---\nid: ev1\ntype: event\ntitle: Test\nstartAt: 2024-01-01\n---\n",
+        )
+        .unwrap();
+        std::fs::write(root.join("2024/2024-01-01 test/los.mp3"), b"x").unwrap();
+        let service = VaultService::new().unwrap();
+        service.reindex_path(root, false).unwrap();
+        let id: String = {
+            let conn = service.conn.lock().unwrap();
+            conn.query_row("SELECT id FROM items WHERE synthetic = 1", [], |r| r.get(0)).unwrap()
+        };
+
+        let err = service.set_song_meta(&id, Some("Titel"), None, None).unwrap_err();
+        assert!(err.contains("geen bewerkbaar bestand"), "geweigerd: {err}");
+        assert!(!root.join("2024/2024-01-01 test/los.md").exists());
+    }
+
+    /// Een synthetische "Losse foto's"-memory heeft de JAARMAP als folder_path, en
+    /// daar leest de scanner geen sidecar-`.md`. Een liedje zou daar stil
+    /// verdwijnen terwijl `add_song` netjes Ok teruggaf — dus expliciet weigeren.
+    #[test]
+    fn add_song_refuses_the_loose_photos_bundle() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("2019")).unwrap();
+        std::fs::write(root.join("2019/los.jpg"), b"x").unwrap();
+        let service = VaultService::new().unwrap();
+        service.reindex_path(root, false).unwrap();
+        let ev: String = {
+            let conn = service.conn.lock().unwrap();
+            conn.query_row("SELECT id FROM events WHERE synthetic = 1", [], |r| r.get(0)).unwrap()
+        };
+
+        let err = service
+            .add_song("ev-bestaat-niet", None, &writer::SongInput::default())
+            .unwrap_err();
+        assert!(err.contains("niet gevonden"), "onbekend event: {err}");
+
+        let err = service
+            .add_song(&ev, None, &writer::SongInput { title: Some("X"), ..Default::default() })
+            .unwrap_err();
+        assert!(err.contains("echte memory"), "duidelijke weigering: {err}");
+        // En er is geen weesbestand in de jaarmap achtergebleven.
+        let stray: Vec<_> = std::fs::read_dir(root.join("2019"))
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n.ends_with(".md"))
+            .collect();
+        assert!(stray.is_empty(), "geen sidecar in de jaarmap: {stray:?}");
     }
 
     #[test]

@@ -170,6 +170,8 @@ pub fn run() {
             commands::get_item_metadata,
             commands::update_item_metadata,
             commands::set_item_frame,
+            commands::set_song_meta,
+            commands::add_song,
             commands::import_photos,
             commands::search,
             commands::get_screensaver_photos,

@@ -61,8 +61,41 @@ fn sanitize_folder(name: &str) -> String {
     }
 }
 
+/// Haalt regeleinden en andere control-tekens uit een YAML-scalar.
+///
+/// Dit is een veiligheidsgrens, geen opmaak. Quoten escapet een newline NIET (hij
+/// blijft letterlijk staan) en de parser decodeert alleen `\"`, dus escapen kan ook
+/// niet. Een waarde met een regeleinde injecteert daardoor een echte
+/// frontmatter-sleutel -- `titel\ntype: photo` overschrijft het type -- en een
+/// waarde met `\n---\n` scheurt het bestand doormidden: alles erna wordt body.
+///
+/// Zonder control-tekens blijft de waarde 100% ongemoeid, inclusief dubbele en
+/// randspaties. Zo herformatteert een bewerking nooit stilzwijgend bestaande tekst.
+///
+/// MOET gebruikt worden door élke schrijver van een frontmatter-waarde -- ook door
+/// `flow_seq`, dat zijn eigen quoting doet.
+fn flatten(v: &str) -> std::borrow::Cow<'_, str> {
+    if !v.chars().any(char::is_control) {
+        return std::borrow::Cow::Borrowed(v);
+    }
+    let replaced: String = v.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+    std::borrow::Cow::Owned(replaced.split_whitespace().collect::<Vec<_>>().join(" "))
+}
+
 /// Quote een YAML-scalar als nodig (spiegelt v1 formatYamlValue).
+///
+/// Regeleinden en control-tekens worden eerst verwijderd. Dat is een
+/// veiligheidsgrens, geen opmaak: quoten escapet een newline NIET (hij blijft
+/// letterlijk staan) en de parser decodeert alleen `\"`, dus escapen kan ook niet.
+/// Een waarde met een regeleinde injecteert daardoor een echte frontmatter-sleutel
+/// -- `titel\ntype: photo` overschrijft het type -- en een waarde met `\n---\n`
+/// scheurt het bestand doormidden: alles erna wordt body. De vault is de bron van
+/// waarheid, en vanaf fase 3 komen titel/artiest uit oEmbed-JSON en uit de tags
+/// van een willekeurig audiobestand. Geen enkele legitieme scalar bevat een
+/// regeleinde, dus dit kan niets bestaands breken.
 fn yaml_str(v: &str) -> String {
+    let flat = flatten(v);
+    let v: &str = &flat;
     let needs = v.contains(':')
         || v.contains('#')
         || v.contains('\n')
@@ -144,6 +177,173 @@ pub fn media_item_markdown(
     fm.push_str(&format!("updatedAt: {}\n", yaml_str(&now)));
     fm.push_str("---\n");
     fm
+}
+
+/// Wat we van een liedje weten. Alles optioneel: een liedje mag alleen een titel
+/// hebben (getypt), alleen een link, of alleen een bestand.
+#[derive(Debug, Default, Clone)]
+pub struct SongInput<'a> {
+    /// Titel. Landt in `caption`, zodat de bestaande zoekfunctie hem meeneemt.
+    pub title: Option<&'a str>,
+    pub artist: Option<&'a str>,
+    /// Streaming-link (Spotify/YouTube/…). Bewaard zoals geplakt.
+    pub url: Option<&'a str>,
+    /// Internationale track-code uit een lokale tag. Puur archief: hiermee vindt
+    /// een toekomstige jij het nummer terug op een dienst die nu nog niet bestaat.
+    /// Wordt NIET geïndexeerd; `update_item_meta` laat onbekende velden staan.
+    pub isrc: Option<&'a str>,
+    /// Speelduur in hele seconden (uit de tag). Ook puur archief.
+    pub duration_secs: Option<u64>,
+    pub happened_at: Option<&'a str>,
+}
+
+/// Leeg/whitespace telt als afwezig — zo belandt er nooit een lege string in de
+/// vault. Dat is geen kosmetiek: `cover: ""` zou de frontend en de backend het
+/// oneens maken over de vraag of dit item een afbeelding heeft.
+fn clean(v: Option<&str>) -> Option<&str> {
+    v.map(str::trim).filter(|s| !s.is_empty())
+}
+
+/// Maakt een bestandsextensie veilig om in een bestandsnaam te plakken.
+///
+/// Dit is een beveiligingsgrens, geen opmaak: vanaf fase 3 komt de extensie van
+/// een albumhoes van het internet (de URL van een oEmbed-thumbnail). Ongefilterd
+/// zou `jpg/../../../evil` uit de eventmap breken. Alleen ASCII-letters en
+/// -cijfers blijven over; is er niets bruikbaars, dan wordt het `jpg`.
+fn sanitize_ext(ext: &str, fallback: &str) -> String {
+    let cleaned: String = ext
+        .trim_start_matches('.')
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .take(8)
+        .collect::<String>()
+        .to_ascii_lowercase();
+    if cleaned.is_empty() { fallback.to_string() } else { cleaned }
+}
+
+/// `sanitize_ext` voor een albumhoes: valt terug op `jpg`.
+fn safe_ext(ext: &str) -> String {
+    sanitize_ext(ext, "jpg")
+}
+
+/// Markdown voor een liedje-item (`<slug>.md`).
+///
+/// `media` (audiobestand) en `cover` (albumhoes) zijn allebei optioneel: een
+/// liedje kan alleen een streaming-link zijn, of alleen een titel die je typte.
+pub fn song_markdown(
+    id: &str,
+    media: Option<&str>,
+    cover: Option<&str>,
+    song: &SongInput,
+) -> String {
+    let now = now_iso();
+    let mut fm = format!("---\nid: {id}\ntype: song\n");
+    for (key, value) in [
+        ("media", clean(media)),
+        ("cover", clean(cover)),
+        ("caption", clean(song.title)),
+        ("artist", clean(song.artist)),
+        ("url", clean(song.url)),
+        ("isrc", clean(song.isrc)),
+        ("happenedAt", clean(song.happened_at)),
+    ] {
+        if let Some(v) = value {
+            fm.push_str(&format!("{key}: {}\n", yaml_str(v)));
+        }
+    }
+    if let Some(d) = song.duration_secs {
+        fm.push_str(&format!("duration: {d}\n"));
+    }
+    fm.push_str(&format!("createdAt: {}\n", yaml_str(&now)));
+    fm.push_str(&format!("updatedAt: {}\n", yaml_str(&now)));
+    fm.push_str("---\n");
+    fm
+}
+
+/// Zet een liedje in de eventmap: kopieert het audiobestand (als er een is) en
+/// schrijft de albumhoes weg (als we die hebben), plus de `<slug>.md`.
+///
+/// Eigen schrijfpad, bewust niet `import_media_inner`: die leidt het type af uit
+/// de extensie en zou een mp3 `type: audio` geven — en dan is het een
+/// geluidsopname, geen liedje, met alle gevolgen voor automatisch afspelen.
+///
+/// `cover` zijn ruwe bytes + extensie, want een hoesje komt óf uit de tag van het
+/// audiobestand óf van het net; in geen van beide gevallen is het een bestand op
+/// schijf. Audio en hoesje krijgen dezelfde stam, zodat ze bij elkaar horen in de map.
+pub fn import_song(
+    vault_root: &Path,
+    folder_path: &str,
+    audio: Option<&Path>,
+    cover: Option<(&[u8], &str)>,
+    song: &SongInput,
+) -> Result<String, String> {
+    let id = uuid::Uuid::new_v4().to_string();
+    let short: String = id.chars().filter(|c| *c != '-').take(8).collect();
+    // Stam uit de titel, anders uit de bestandsnaam, anders een neutrale naam.
+    let stem = clean(song.title)
+        .map(|t| t.to_string())
+        .or_else(|| {
+            audio
+                .and_then(|p| p.file_stem())
+                .and_then(|s| s.to_str())
+                .map(|s| s.to_string())
+        })
+        .unwrap_or_else(|| "liedje".to_string());
+    let base = generate_slug(&stem, 40);
+    let slug = format!("{base}_{short}");
+
+    let dir = vault_root.join(folder_path);
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+
+    // Alles wat we aanmaken, zodat we bij een fout halverwege niets achterlaten:
+    // een half gekopieerd audiobestand zou de scanner als losse media oppikken.
+    let mut written: Vec<std::path::PathBuf> = Vec::new();
+    let cleanup = |written: &[std::path::PathBuf]| {
+        for p in written {
+            let _ = std::fs::remove_file(p);
+        }
+    };
+
+    let media_name = audio.map(|src| {
+        // Ook de audio-extensie saneren, en nooit `md`: het audiodoel zou dan exact
+        // het sidecarpad zijn, en `write_atomic` schrijft de markdown er meteen
+        // overheen -- het geïmporteerde bestand weg, `media:` wijzend naar zichzelf,
+        // en `Ok` teruggegeven. `add_song` is een IPC-oppervlak zonder padvalidatie.
+        let raw = src.extension().and_then(|e| e.to_str()).unwrap_or_default();
+        let ext = sanitize_ext(raw, "mp3");
+        let ext = if ext == "md" { "mp3".to_string() } else { ext };
+        format!("{base}_{short}.{ext}")
+    });
+    if let (Some(src), Some(name)) = (audio, media_name.as_deref()) {
+        let dest = dir.join(name);
+        if let Err(e) = std::fs::copy(src, &dest) {
+            let _ = std::fs::remove_file(&dest);
+            return Err(format!("kopiëren mislukt: {e}"));
+        }
+        written.push(dest);
+    }
+
+    // Eigen achtervoegsel `_cover`: zonder dat onderscheidt alleen de extensie het
+    // hoesje van het audiobestand, en een hoesje met extensie "mp3" (de mime uit
+    // een tag of een thumbnail-URL) zou de mp3 overschrijven. Het onvervangbare
+    // bestand van de twee stil kwijtraken mag niet van een extensie afhangen.
+    let cover_name = cover.map(|(_, ext)| format!("{base}_{short}_cover.{}", safe_ext(ext)));
+    if let (Some((bytes, _)), Some(name)) = (cover, cover_name.as_deref()) {
+        let dest = dir.join(name);
+        if let Err(e) = std::fs::write(&dest, bytes) {
+            let _ = std::fs::remove_file(&dest);
+            cleanup(&written);
+            return Err(format!("hoesje opslaan mislukt: {e}"));
+        }
+        written.push(dest);
+    }
+
+    let md = song_markdown(&id, media_name.as_deref(), cover_name.as_deref(), song);
+    if let Err(e) = write_atomic(&dir.join(format!("{slug}.md")), &md) {
+        cleanup(&written);
+        return Err(e.to_string());
+    }
+    Ok(id)
 }
 
 /// Itemtype-string voor een media-extensie; valt terug op "photo" voor onbekende
@@ -576,7 +776,11 @@ fn flow_seq(items: &[String]) -> Option<String> {
         .iter()
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
-        .map(|s| format!("\"{}\"", s.replace('"', "\\\"")))
+        // `flatten` ook hier: deze eigen quoting escapet net zo min een newline.
+        // Een trefwoord met een regeleinde plus een fence-regel zou de frontmatter
+        // doormidden scheuren, en een trefwoord met een regeleinde plus "type:"
+        // zou het itemtype overschrijven. Zelfde grens als `yaml_str`, ander pad.
+        .map(|s| format!("\"{}\"", flatten(s).replace('"', "\\\"")))
         .collect();
     if cleaned.is_empty() {
         None
@@ -722,6 +926,59 @@ pub fn set_item_frame(
     // Leeg/whitespace telt als wissen ("geërfd" laat geen spoor achter).
     set_fm_field(&mut fm, "frame", frame.map(str::trim).filter(|s| !s.is_empty()));
     set_fm_field(&mut fm, "updatedAt", Some(&now_iso()));
+
+    let body = lines[close + 1..].join("\n").trim().to_string();
+    let mut out = String::from("---\n");
+    out.push_str(&fm.join("\n"));
+    out.push_str("\n---\n");
+    if !body.is_empty() {
+        out.push('\n');
+        out.push_str(&body);
+        out.push('\n');
+    }
+    write_atomic(&path, &out)
+}
+
+/// Werkt titel/artiest/link van een liedje bij (file first, dan rescan door de
+/// aanroeper). Leeg/whitespace wist het veld.
+///
+/// Via `set_fm_block`, niet `set_fm_field`: een handgeschreven of v1-bestand kan
+/// een blok-vorm hebben, en alleen de sleutelregel vervangen laat de vervolgregels
+/// verweesd achter — waarna de parser daar stopt en álle sleutels erna uit de index
+/// vallen. `update_item_meta` schrijft `caption` al zo, en twee schrijvers mogen
+/// hetzelfde veld niet verschillend behandelen.
+///
+/// Raakt `media`, `cover`, `isrc` en `duration` bewust niet: dat is bestandsbeheer
+/// en archief, geen bewerkbare tekst.
+pub fn set_song_meta(
+    vault_root: &Path,
+    folder_path: &str,
+    slug: &str,
+    title: Option<&str>,
+    artist: Option<&str>,
+    url: Option<&str>,
+) -> std::io::Result<()> {
+    let path = vault_root.join(folder_path).join(format!("{slug}.md"));
+    let original = std::fs::read_to_string(&path)?;
+    let normalized = original.replace("\r\n", "\n");
+    let lines: Vec<&str> = normalized.split('\n').collect();
+    let open = lines.iter().position(|l| l.trim() == "---");
+    let close = open.and_then(|o| {
+        lines
+            .iter()
+            .enumerate()
+            .skip(o + 1)
+            .find(|(_, l)| l.trim() == "---")
+            .map(|(i, _)| i)
+    });
+    let (Some(open), Some(close)) = (open, close) else {
+        return write_atomic(&path, &normalized);
+    };
+    let mut fm: Vec<String> = lines[open + 1..close].iter().map(|s| s.to_string()).collect();
+    for (key, value) in [("caption", title), ("artist", artist), ("url", url)] {
+        set_fm_block(&mut fm, key, clean(value).map(yaml_str));
+    }
+    set_fm_block(&mut fm, "updatedAt", Some(yaml_str(&now_iso())));
 
     let body = lines[close + 1..].join("\n").trim().to_string();
     let mut out = String::from("---\n");
@@ -2156,6 +2413,457 @@ mod tests {
         let c2 = std::fs::read_to_string(root.join(&folder2).join("_event.md")).unwrap();
         assert!(c1.contains(&id1));
         assert!(c2.contains(&id2));
+    }
+
+    /// Een liedje met bestand én hoesje: beide belanden in de eventmap met
+    /// dezelfde stam, en de scanner ziet er precies één item (het hoesje wordt
+    /// geclaimd en promoveert niet tot losse fototegel).
+    #[test]
+    fn import_song_writes_audio_cover_and_markdown() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("2019/Zomer")).unwrap();
+        let src = tmp.path().join("bron.mp3");
+        std::fs::write(&src, b"audio-bytes").unwrap();
+
+        let id = import_song(
+            root,
+            "2019/Zomer",
+            Some(&src),
+            Some((b"jpeg-bytes", "jpg")),
+            &SongInput {
+                title: Some("Blinding Lights"),
+                artist: Some("The Weeknd"),
+                url: Some("https://open.spotify.com/track/x"),
+                isrc: Some("USUG11904206"),
+                duration_secs: Some(201),
+                happened_at: Some("2019-07-14"),
+            },
+        )
+        .unwrap();
+
+        let dir = root.join("2019/Zomer");
+        let md_name = format!("{}.md", find_slug(&dir));
+        let content = std::fs::read_to_string(dir.join(&md_name)).unwrap();
+        let p = crate::vault::frontmatter::parse(&content);
+        assert_eq!(p.get_str("id").unwrap(), id);
+        assert_eq!(p.get_str("type").unwrap(), "song");
+        assert_eq!(p.get_str("caption").unwrap(), "Blinding Lights");
+        assert_eq!(p.get_str("artist").unwrap(), "The Weeknd");
+        assert_eq!(p.get_str("isrc").unwrap(), "USUG11904206");
+        assert_eq!(p.get_str("duration").unwrap(), "201");
+        let media = p.get_str("media").unwrap();
+        let cover = p.get_str("cover").unwrap();
+        assert!(media.ends_with(".mp3") && cover.ends_with(".jpg"));
+        assert!(dir.join(&media).exists() && dir.join(&cover).exists());
+        // Zelfde stam plus `_cover`: ze staan naast elkaar in de map en horen
+        // zichtbaar bij elkaar, maar kunnen elkaar nooit overschrijven.
+        assert_eq!(cover, format!("{}_cover.jpg", media.trim_end_matches(".mp3")));
+
+        // Het type mag NIET uit de extensie komen: een mp3 zou dan `audio` worden
+        // en als spraakmemo behandeld worden in plaats van als muziek.
+        let model = crate::vault::scanner::scan(root);
+        let items: Vec<_> = model.items.iter().filter(|i| !i.synthetic).collect();
+        assert_eq!(items.len(), 1, "één item, niet het liedje plus het hoesje");
+        assert_eq!(items[0].item_type, crate::model::ItemType::Song);
+        assert!(model.items.iter().all(|i| !i.synthetic), "hoesje en mp3 zijn geclaimd");
+        assert!(model.errors.is_empty(), "geen waarschuwingen: {:?}", model.errors);
+    }
+
+    /// Zonder bestand en zonder hoesje: alleen een link en een titel. Er mag dan
+    /// geen lege `media:`/`cover:` in de frontmatter staan — `cover: ""` zou de
+    /// frontend en de backend het oneens maken over "heeft dit een afbeelding".
+    #[test]
+    fn import_song_without_files_writes_no_empty_fields() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("2019/Zomer")).unwrap();
+
+        import_song(
+            root,
+            "2019/Zomer",
+            None,
+            None,
+            &SongInput {
+                title: Some("  Dreams  "),
+                artist: Some("   "),
+                url: Some("https://open.spotify.com/track/y"),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let dir = root.join("2019/Zomer");
+        let content = std::fs::read_to_string(dir.join(format!("{}.md", find_slug(&dir)))).unwrap();
+        assert!(!content.contains("media:"), "geen lege media: {content}");
+        assert!(!content.contains("cover:"), "geen lege cover: {content}");
+        assert!(!content.contains("artist:"), "whitespace-artiest telt als afwezig");
+        assert!(!content.contains("duration:"));
+        let p = crate::vault::frontmatter::parse(&content);
+        assert_eq!(p.get_str("caption").unwrap(), "Dreams", "titel getrimd");
+
+        let model = crate::vault::scanner::scan(root);
+        let it = model.items.iter().find(|i| !i.synthetic).expect("liedje");
+        assert_eq!(it.item_type, crate::model::ItemType::Song);
+        assert_eq!(it.media, None);
+        assert_eq!(it.cover, None);
+        assert_eq!(it.url.as_deref(), Some("https://open.spotify.com/track/y"));
+    }
+
+    /// De extensie van een albumhoes komt vanaf fase 3 van het internet. Een
+    /// poging tot pad-traversal moet als gewone bestandsnaam binnen de eventmap
+    /// landen, niet erbuiten.
+    #[test]
+    fn import_song_sanitizes_a_hostile_cover_extension() {
+        assert_eq!(safe_ext("jpg"), "jpg");
+        assert_eq!(safe_ext(".PNG"), "png");
+        assert_eq!(safe_ext(""), "jpg", "niets bruikbaars → veilige default");
+        assert_eq!(safe_ext("../../evil"), "evil", "separators verdwijnen");
+        assert_eq!(safe_ext("jpg?x=1&y=2"), "jpgx1y2");
+
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let dir = root.join("2019/Zomer");
+        std::fs::create_dir_all(&dir).unwrap();
+        // Een bestand net buiten de eventmap dat niet overschreven mag worden.
+        std::fs::write(root.join("2019/kostbaar.jpg"), b"origineel").unwrap();
+
+        import_song(
+            root,
+            "2019/Zomer",
+            None,
+            Some((b"kwaadaardig", "jpg/../kostbaar.jpg")),
+            &SongInput { title: Some("Test"), ..Default::default() },
+        )
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read(root.join("2019/kostbaar.jpg")).unwrap(),
+            b"origineel",
+            "het bestand buiten de eventmap is niet aangeraakt"
+        );
+        let names: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(names.len(), 2, "alleen de .md en het hoesje: {names:?}");
+        let cover = names.iter().find(|n| !n.ends_with(".md")).unwrap();
+        // Assert op de GESANEERDE naam, niet op de afwezigheid van separators:
+        // zonder sanering wordt het pad `…/stam.jpg/../kostbaar.jpg`, wat lexicaal
+        // BINNEN de eventmap valt en dus een bestandsnaam zonder `/` of `..`
+        // oplevert. Die assert zou dan ook slagen met een no-op `safe_ext`.
+        assert!(
+            cover.ends_with("_cover.jpgkostb"),
+            "extensie samengeperst tot letters/cijfers, gekapt op 8: {cover}"
+        );
+    }
+
+    /// Een echt ontsnappende extensie mag niets buiten de eventmap aanmaken.
+    #[test]
+    fn import_song_cover_extension_cannot_escape_the_event_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("2019/Zomer")).unwrap();
+        let before = std::fs::read_dir(root.join("2019")).unwrap().count();
+
+        import_song(
+            root,
+            "2019/Zomer",
+            None,
+            Some((b"x", "../../evil")),
+            &SongInput { title: Some("Test"), ..Default::default() },
+        )
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read_dir(root.join("2019")).unwrap().count(),
+            before,
+            "geen nieuwe entries één map hoger"
+        );
+        assert!(!root.join("evil").exists() && !root.join("2019/evil").exists());
+        // Assert óók op de eventmap zelf. Zonder dat bewijst deze test niets op
+        // Windows: Win32 lost `..` lexicaal op vóór het filesystem, dus een
+        // ongesaneerde `../../evil` landt als `2019/Zomer/evil` -- binnen de map,
+        // en dus onzichtbaar voor de asserts hierboven.
+        let names: Vec<String> = std::fs::read_dir(root.join("2019/Zomer"))
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        assert!(
+            names.iter().all(|n| n.ends_with(".md") || n.contains("_cover.")),
+            "alleen de sidecar en een `_cover.`-bestand: {names:?}"
+        );
+    }
+
+    /// Een audiobron met extensie `md` zou exact het sidecarpad opleveren: de
+    /// kopie wordt daarna door de markdown overschreven, `media:` wijst naar
+    /// zichzelf en `import_song` geeft toch `Ok` terug. Zelfde faalklasse als het
+    /// hoesje dat de audio overschreef, maar dan audio-vs-sidecar.
+    #[test]
+    fn import_song_audio_extension_cannot_collide_with_the_sidecar() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let dir = root.join("2019/Zomer");
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = tmp.path().join("nummer.md");
+        std::fs::write(&src, b"ECHTE-AUDIO").unwrap();
+
+        import_song(
+            root,
+            "2019/Zomer",
+            Some(&src),
+            None,
+            &SongInput { title: Some("Test"), ..Default::default() },
+        )
+        .unwrap();
+
+        let names: Vec<String> = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(names.len(), 2, "sidecar én audiobestand, niet één: {names:?}");
+        let content = std::fs::read_to_string(dir.join(format!("{}.md", find_slug(&dir)))).unwrap();
+        let p = crate::vault::frontmatter::parse(&content);
+        let media = p.get_str("media").unwrap();
+        assert!(!media.ends_with(".md"), "media wijst niet naar de sidecar: {media}");
+        assert_eq!(std::fs::read(dir.join(&media)).unwrap(), b"ECHTE-AUDIO");
+    }
+
+    /// `flow_seq` (mensen + trefwoorden) doet zijn eigen quoting en omzeilde
+    /// daarmee de afvlakking van `yaml_str`. Een trefwoord met `\n---\n` scheurde
+    /// de frontmatter doormidden; een trefwoord met `\ntype: photo` overschreef
+    /// het itemtype.
+    #[test]
+    fn a_newline_in_a_tag_cannot_inject_frontmatter() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let dir = root.join("2024/Reis");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("foto.md"),
+            "---\nid: it1\ntype: photo\nmedia: foto.jpg\n---\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("foto.jpg"), b"x").unwrap();
+
+        update_item_meta(
+            root,
+            "2024/Reis",
+            "foto",
+            "Bijschrift",
+            "",
+            "",
+            &["oma\ntype: text".to_string()],
+            &["vakantie\n---\nbody".to_string()],
+        )
+        .unwrap();
+
+        let content = std::fs::read_to_string(dir.join("foto.md")).unwrap();
+        let p = crate::vault::frontmatter::parse(&content);
+        assert_eq!(p.get_str("type").unwrap(), "photo", "type niet overschreven");
+        assert!(p.get_str("updatedAt").is_some(), "frontmatter niet afgekapt");
+        assert_eq!(content.matches("\n---").count(), 1, "precies één sluitende fence");
+
+        let model = crate::vault::scanner::scan(root);
+        let it = model.items.iter().find(|i| i.slug.as_deref() == Some("foto")).unwrap();
+        assert_eq!(it.item_type, crate::model::ItemType::Photo);
+        assert_eq!(it.tags, vec!["vakantie --- body".to_string()]);
+        assert_eq!(it.people, vec!["oma type: text".to_string()]);
+    }
+
+    /// Een hoesje mag het audiobestand nooit overschrijven, ook niet als de
+    /// extensie toevallig gelijk is (een mime uit een tag of een thumbnail-URL).
+    #[test]
+    fn import_song_cover_never_overwrites_the_audio() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let dir = root.join("2019/Zomer");
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = tmp.path().join("bron.mp3");
+        std::fs::write(&src, b"ECHTE-AUDIO").unwrap();
+
+        import_song(
+            root,
+            "2019/Zomer",
+            Some(&src),
+            Some((b"HOESJE", "mp3")),
+            &SongInput { title: Some("Test"), ..Default::default() },
+        )
+        .unwrap();
+
+        let content = std::fs::read_to_string(dir.join(format!("{}.md", find_slug(&dir)))).unwrap();
+        let p = crate::vault::frontmatter::parse(&content);
+        let media = p.get_str("media").unwrap();
+        let cover = p.get_str("cover").unwrap();
+        assert_ne!(media, cover, "twee verschillende bestanden");
+        assert_eq!(std::fs::read(dir.join(&media)).unwrap(), b"ECHTE-AUDIO");
+        assert_eq!(std::fs::read(dir.join(&cover)).unwrap(), b"HOESJE");
+    }
+
+    /// Zonder titel valt de bestandsnaam terug op de stam van het audiobestand,
+    /// en zonder allebei op een neutrale naam. Beide zijn realistisch: een bestand
+    /// kiezen zonder bruikbare tags is het normale geval.
+    #[test]
+    fn import_song_falls_back_for_the_file_stem() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("2019/A")).unwrap();
+        std::fs::create_dir_all(root.join("2019/B")).unwrap();
+        let src = tmp.path().join("Mijn Nummer.mp3");
+        std::fs::write(&src, b"a").unwrap();
+
+        import_song(root, "2019/A", Some(&src), None, &SongInput::default()).unwrap();
+        assert!(
+            find_slug(&root.join("2019/A")).starts_with("mijn-nummer_"),
+            "stam uit de bestandsnaam"
+        );
+
+        import_song(root, "2019/B", None, None, &SongInput::default()).unwrap();
+        assert!(find_slug(&root.join("2019/B")).starts_with("liedje_"), "neutrale stam");
+    }
+
+    /// Een regeleinde in een scalar mag de frontmatter niet kunnen injecteren.
+    /// Quoten helpt niet (de newline blijft letterlijk staan) en escapen kan niet
+    /// (de parser decodeert alleen `\"`), dus control-tekens worden verwijderd.
+    /// Vanaf fase 3 komen titel en artiest uit oEmbed-JSON en uit de tags van een
+    /// willekeurig audiobestand — dat is onvertrouwde invoer.
+    #[test]
+    fn a_newline_in_a_title_cannot_inject_frontmatter() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let dir = root.join("2019/Zomer");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        import_song(
+            root,
+            "2019/Zomer",
+            None,
+            None,
+            &SongInput {
+                // Zou zonder de fix het bestand doormidden scheuren: alles na de
+                // tweede `---` wordt body, en artist/url/updatedAt verdwijnen.
+                title: Some("abc\n---\ndef"),
+                // Zou zonder de fix een echte sleutel `foo` toevoegen.
+                artist: Some("regel1\nfoo: bar"),
+                url: Some("https://open.spotify.com/track/x"),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let content = std::fs::read_to_string(dir.join(format!("{}.md", find_slug(&dir)))).unwrap();
+        let p = crate::vault::frontmatter::parse(&content);
+        assert_eq!(p.get_str("caption").unwrap(), "abc --- def");
+        assert_eq!(p.get_str("artist").unwrap(), "regel1 foo: bar");
+        assert_eq!(p.get_str("foo"), None, "geen geïnjecteerde sleutel");
+        assert_eq!(p.get_str("url").unwrap(), "https://open.spotify.com/track/x");
+        assert!(p.get_str("updatedAt").is_some(), "de frontmatter is niet afgekapt");
+        assert_eq!(content.matches("\n---").count(), 1, "precies één sluitende fence");
+
+        // En de scanner leest het ongeschonden terug.
+        let model = crate::vault::scanner::scan(root);
+        let it = model.items.iter().find(|i| !i.synthetic).unwrap();
+        assert_eq!(it.item_type, crate::model::ItemType::Song);
+        assert_eq!(it.caption.as_deref(), Some("abc --- def"));
+        assert_eq!(it.artist.as_deref(), Some("regel1 foo: bar"));
+    }
+
+    /// Bewerken raakt alleen titel/artiest/link. Archiefvelden (`isrc`,
+    /// `duration`) en bestandsverwijzingen (`media`, `cover`) blijven staan, en
+    /// leeg wist het veld.
+    #[test]
+    fn set_song_meta_edits_text_and_keeps_files_and_archive_fields() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let dir = root.join("2019/Zomer");
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = tmp.path().join("bron.mp3");
+        std::fs::write(&src, b"a").unwrap();
+        import_song(
+            root,
+            "2019/Zomer",
+            Some(&src),
+            Some((b"x", "jpg")),
+            &SongInput {
+                title: Some("Verkeerde titel"),
+                artist: Some("Onbekend"),
+                url: Some("https://oud"),
+                isrc: Some("USUG11904206"),
+                duration_secs: Some(201),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let slug = find_slug(&dir);
+
+        set_song_meta(
+            root,
+            "2019/Zomer",
+            &slug,
+            Some("Blinding Lights"),
+            Some("The Weeknd"),
+            Some(""), // leeg = wissen
+        )
+        .unwrap();
+
+        let content = std::fs::read_to_string(dir.join(format!("{slug}.md"))).unwrap();
+        let p = crate::vault::frontmatter::parse(&content);
+        assert_eq!(p.get_str("caption").unwrap(), "Blinding Lights");
+        assert_eq!(p.get_str("artist").unwrap(), "The Weeknd");
+        assert_eq!(p.get_str("url"), None, "lege link wist het veld");
+        assert_eq!(p.get_str("isrc").unwrap(), "USUG11904206", "archiefveld blijft");
+        assert_eq!(p.get_str("duration").unwrap(), "201", "archiefveld blijft");
+        assert!(p.get_str("media").is_some() && p.get_str("cover").is_some());
+
+        // En het liedje komt nog gewoon door de scanner heen.
+        let model = crate::vault::scanner::scan(root);
+        let it = model.items.iter().find(|i| !i.synthetic).unwrap();
+        assert_eq!(it.caption.as_deref(), Some("Blinding Lights"));
+        assert_eq!(it.artist.as_deref(), Some("The Weeknd"));
+        assert_eq!(it.url, None);
+    }
+
+    /// `set_song_meta` moet een BLOK-vorm aankunnen. Een handgeschreven
+    /// `caption:` met vervolgregels zou met `set_fm_field` verweesd achterblijven,
+    /// waarna de parser daar stopt en alle sleutels erna uit de index vallen.
+    #[test]
+    fn set_song_meta_drains_a_block_style_caption() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let dir = root.join("2019/Zomer");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("handgeschreven.md"),
+            "---\nid: x1\ntype: song\ncaption:\n  - regel een\n  - regel twee\n\
+             artist: Oud\nisrc: ABC\n---\n",
+        )
+        .unwrap();
+
+        set_song_meta(root, "2019/Zomer", "handgeschreven", Some("Nieuw"), Some("Nieuwe artiest"), None)
+            .unwrap();
+
+        let content = std::fs::read_to_string(dir.join("handgeschreven.md")).unwrap();
+        assert!(!content.contains("regel een"), "blok gedraineerd: {content}");
+        assert!(!content.contains("regel twee"), "blok gedraineerd: {content}");
+        let p = crate::vault::frontmatter::parse(&content);
+        assert_eq!(p.get_str("caption").unwrap(), "Nieuw");
+        assert_eq!(p.get_str("artist").unwrap(), "Nieuwe artiest");
+        assert_eq!(p.get_str("isrc").unwrap(), "ABC", "sleutel ná het blok overleeft");
+    }
+
+    /// Vindt de slug van het enige `.md`-bestand in een map (de uuid-suffix maakt
+    /// de naam onvoorspelbaar).
+    fn find_slug(dir: &Path) -> String {
+        std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .find(|n| n.ends_with(".md"))
+            .map(|n| n.trim_end_matches(".md").to_string())
+            .expect("een .md in de map")
     }
 
     #[test]
