@@ -22,7 +22,7 @@ import { ACCENT_SWATCHES, FRAME_STYLES, TITLE_FONTS, resolveTheme, type ThemeCho
 import { BACKGROUNDS, BACKGROUND_NONE, loadBackgroundTexture } from '../theme/textures'
 import { THEME, setActiveTheme, type ResolvedTheme } from '../theme/tokens'
 import { UI_DARK, UI_LIGHT, ui, type UiPalette } from '../theme/ui'
-import { IconEigen, IconGrid, IconScatter, IconImage, IconNote, IconSliders, IconPalette, IconPencil, IconPlus, IconTrash, IconCrop, IconCover, IconExternal } from './icons'
+import { IconEigen, IconGrid, IconScatter, IconImage, IconNote, IconSliders, IconPalette, IconPencil, IconPlus, IconTrash, IconCrop, IconCover, IconExternal, IconMusicPlus } from './icons'
 import { EventScene } from '../render/scenes/event'
 import type { NodePosition } from '../render/scenes/scene'
 import { Screensaver } from './Screensaver'
@@ -96,6 +96,9 @@ interface MetaForm {
 
 /** App-voorkeuren (UI, geen vault-data) — bewaard in localStorage. */
 interface Settings {
+  /** Mag de app bij een geplakte link online de titel, artiest en albumhoes
+   * opzoeken? Standaard aan; uit betekent: alleen wat je zelf typt. */
+  musicLookup: boolean
   /** Actief thema (id uit de thema-registry): kleuren/fonts van de tijdlijn. */
   themeId: string
   /** Weergave waarin een event-canvas standaard opent. */
@@ -159,6 +162,7 @@ interface Settings {
 }
 
 const DEFAULT_SETTINGS: Settings = {
+  musicLookup: true,
   themeId: 'classic-dark',
   defaultLayout: 'custom',
   slideshow: true,
@@ -367,6 +371,7 @@ export function AppShell() {
   const [eventForm, setEventForm] = useState<null | EventForm>(null)
   const [metaForm, setMetaForm] = useState<null | MetaForm>(null)
   const [songForm, setSongForm] = useState<null | SongForm>(null)
+  const [addSong, setAddSong] = useState<null | AddSongForm>(null)
   // https-link van het gefocuste liedje (L3), of null. Stuurt de "Openen"-knop.
   const [focusSourceUrl, setFocusSourceUrl] = useState<string | null>(null)
   // Gestylede bevestigings-dialoog voor destructieve acties (i.p.v. het
@@ -1982,11 +1987,11 @@ export function AppShell() {
   }, [uiLevel, setCoverPickMode])
 
   useEffect(() => {
-    dialogOpenRef.current = !!(modal || editing || eventForm || metaForm || songForm || confirmBox)
+    dialogOpenRef.current = !!(modal || editing || eventForm || metaForm || songForm || addSong || confirmBox)
     // Een open dialoog dekt het canvas af → de kies-modus zou onbereikbaar aan blijven
     // (en de balk zou over de dialoog liegen dat Esc 'm sluit).
     if (dialogOpenRef.current) setCoverPickMode(false)
-  }, [modal, editing, eventForm, metaForm, songForm, confirmBox])
+  }, [modal, editing, eventForm, metaForm, songForm, addSong, confirmBox])
 
   // Haal de asset-URL van de gefocuste video op (pad → convertFileSrc). Async,
   // dus buiten de render; leeg bij geen video of tijdens het laden.
@@ -2525,6 +2530,97 @@ export function AppShell() {
       })
   }
 
+  /** Kiest een audiobestand en leest meteen de tags. Geen netwerk. */
+  const pickSongFile = async (): Promise<void> => {
+    const backend = backendRef.current
+    if (!backend) return
+    const path = await backend.pickAudioFile().catch(() => null)
+    if (!path) return
+    setAddSong((f) => (f ? { ...f, audio: path, busy: true } : f))
+    const found = await backend.lookupSongMeta(path, true).catch(() => null)
+    setAddSong((f) =>
+      f
+        ? {
+            ...f,
+            busy: false,
+            looked: true,
+            // Alleen invullen wat nog leeg is: wat je zelf typte wint van een tag.
+            title: f.title || found?.title || '',
+            artist: f.artist || found?.artist || '',
+            isrc: found?.isrc ?? f.isrc,
+            durationSecs: found?.durationSecs ?? f.durationSecs,
+          }
+        : f,
+    )
+  }
+
+  /** Zoekt de gegevens op bij de geplakte link. Alleen als de instelling aan staat. */
+  const lookupSong = async (): Promise<void> => {
+    const backend = backendRef.current
+    const f = addSong
+    if (!backend || !f) return
+    const url = normalizeLink(f.input)
+    if (!url.startsWith('https://')) return
+    setAddSong((x) => (x ? { ...x, busy: true } : x))
+    const found = settingsRef.current.musicLookup
+      ? await backend.lookupSongMeta(url, false).catch(() => null)
+      : null
+    setAddSong((x) =>
+      x
+        ? {
+            ...x,
+            busy: false,
+            looked: true,
+            title: x.title || found?.title || '',
+            artist: x.artist || found?.artist || '',
+          }
+        : x,
+    )
+  }
+
+  const submitAddSong = async (): Promise<void> => {
+    const backend = backendRef.current
+    const f = addSong
+    const eventId = currentEventRef.current
+    if (!backend || !f || !eventId || mutatingRef.current) return
+    // Het ene veld is óf een link óf een titel; wat je typte telt als titel als
+    // het geen link is. Zo hoef je niet te weten welk soort invoer we verwachten.
+    //
+    // Uitsluitend uit `input` afgeleid, nooit uit een onthouden lookup-resultaat:
+    // anders blijft een opgezochte link achter nadat je 'm hebt weggehaald of
+    // vervangen, en sla je een liedje op met de link van een ánder nummer.
+    const url = normalizeLink(f.input)
+    const typed = url.startsWith('https://') ? '' : f.input.trim()
+    const title = f.title.trim() || typed
+    if (!title && !url && !f.audio) return
+    mutatingRef.current = true
+    setBusy(true)
+    try {
+      await backend.addSong(
+        eventId,
+        {
+          audio: f.audio,
+          title: title || null,
+          artist: f.artist.trim() || null,
+          url: url.startsWith('https://') ? url : null,
+          isrc: f.isrc,
+          durationSecs: f.durationSecs,
+        },
+        settingsRef.current.musicLookup,
+      )
+      setAddSong(null)
+      // Zelfde verversing als bij foto's importeren: de scene opnieuw opbouwen
+      // zodat het nieuwe liedje meteen op het canvas staat.
+      enterEventRef.current(eventId)
+    } catch (e) {
+      setMessage(String(e))
+      setPhase('error')
+    } finally {
+      mutatingRef.current = false
+      setBusy(false)
+    }
+  }
+
   const submitSong = async (): Promise<void> => {
     const backend = backendRef.current
     const f = songForm
@@ -2622,7 +2718,7 @@ export function AppShell() {
   // Eén afleiding voor "staat er een blokkerende dialog open?" — gebruikt in
   // alle render-guards én (via dialogOpenRef) in de key-/gesture-closures, zodat
   // een nieuwe dialog-soort nooit op één plek vergeten kan worden.
-  const anyDialog = !!(modal || editing || eventForm || metaForm || songForm || confirmBox)
+  const anyDialog = !!(modal || editing || eventForm || metaForm || songForm || addSong || confirmBox)
 
   const backVisible =
     phase === 'ready' &&
@@ -2850,6 +2946,7 @@ export function AppShell() {
           onAddEvent={openNewEvent}
           onAddYear={openNewYear}
           onAddNote={() => setModal('note')}
+          onAddSong={() => setAddSong({ input: '', title: '', artist: '', audio: null, isrc: null, durationSecs: null, busy: false, looked: false })}
           onAddPhotos={() => void addPhotos()}
           onEditEvent={openEditEvent}
           onYearTheme={() => openThemePanel('year')}
@@ -2928,6 +3025,18 @@ export function AppShell() {
         )}
       </AnimatePresence>
       <AnimatePresence>
+        {addSong && (
+          <AddSongPanel
+            key="addsongpanel"
+            form={addSong}
+            lookupAllowed={settings.musicLookup}
+            onChange={(patch) => setAddSong((f) => (f ? { ...f, ...patch } : f))}
+            onPickFile={() => void pickSongFile()}
+            onLookup={() => void lookupSong()}
+            onSubmit={() => void submitAddSong()}
+            onCancel={() => setAddSong(null)}
+          />
+        )}
         {songForm && (
           <SongPanel
             key="songpanel"
@@ -3039,7 +3148,29 @@ function normalizeLink(raw: string): string {
   // Controltekens midden in de URL: `open` spawnt zonder foutmelding, dus die
   // zouden een stille no-op opleveren.
   if (/[\u0000-\u0020]/.test(url)) return ''
+  // Een scheme-loze plak-vorm (`www.youtube.com/...`) is heel gewoon -- Chrome
+  // kopieert vaak zo. Zonder aanvullen zou die als TITEL van het liedje worden
+  // opgeslagen en de link definitief verdwijnen.
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(url)) {
+    return /^www\./i.test(url) ? `https://${url}` : ''
+  }
   return url.replace(/^https?:\/\//i, 'https://')
+}
+
+/** Toevoeg-dialoog voor muziek. Eén veld waar je een link plakt, een bestand
+ * kiest of gewoon een titel typt; wat je gaf bepaalt wat er gebeurt. */
+interface AddSongForm {
+  /** Wat er in het ene veld staat: een link of een getypte titel. */
+  input: string
+  title: string
+  artist: string
+  /** Pad naar een gekozen audiobestand, of null. */
+  audio: string | null
+  isrc: string | null
+  durationSecs: number | null
+  busy: boolean
+  /** Is er al een keer opgezocht? Stuurt de tekst onder het veld. */
+  looked: boolean
 }
 
 interface SongForm {
@@ -3047,6 +3178,126 @@ interface SongForm {
   title: string
   artist: string
   url: string
+}
+
+/** Muziek toevoegen. Eén invoerveld dat zelf uitzoekt wat je gaf: een link, een
+ * gekozen bestand, of gewoon een getypte titel. Alle voorgevulde velden blijven
+ * bewerkbaar -- een mislukte of uitgeschakelde opzoekpoging is nooit blokkerend,
+ * want de titel en artiest zijn wat er over 20 jaar nog toe doet. */
+function AddSongPanel({
+  form,
+  lookupAllowed,
+  onChange,
+  onPickFile,
+  onLookup,
+  onSubmit,
+  onCancel,
+}: {
+  form: AddSongForm
+  lookupAllowed: boolean
+  onChange: (patch: Partial<AddSongForm>) => void
+  onPickFile: () => void
+  onLookup: () => void
+  onSubmit: () => void
+  onCancel: () => void
+}) {
+  const u = ui()
+  useEscape(onCancel)
+  const looksLikeLink = /^\s*(https?:\/\/|www\.)/i.test(form.input)
+  // Debounce op de WAARDE, geen `onBlur`. Met onBlur verplaatste een muisklik op
+  // "Toevoegen" eerst de focus, wat de lookup startte en `busy` synchroon op true
+  // zette -- de knop was daardoor `disabled` vóórdat de klik zelf landde, dus de
+  // eerste klik werd ingeslikt. Precies het hoofdpad van deze dialoog.
+  const lookupRef = useRef(onLookup)
+  lookupRef.current = onLookup
+  useEffect(() => {
+    if (!looksLikeLink || !lookupAllowed) return
+    const t = window.setTimeout(() => lookupRef.current(), 700)
+    return () => window.clearTimeout(t)
+  }, [form.input, looksLikeLink, lookupAllowed])
+  const fileName = form.audio ? form.audio.split(/[\\/]/).pop() : null
+  const canSave = !!(form.title.trim() || form.input.trim() || form.audio)
+  return (
+    <AnimatedModal
+      onBackdrop={onCancel}
+      panelStyle={{ width: 480, maxWidth: '92%', background: u.card, color: u.text, borderRadius: 12, padding: 20 }}
+    >
+      <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 4 }}>Muziek toevoegen</div>
+      <div style={{ fontSize: 13, opacity: 0.65, marginBottom: 14, lineHeight: 1.45 }}>
+        Plak een link, kies een audiobestand, of typ gewoon welk nummer het was.
+      </div>
+
+      <label style={metaLabel(u)}>
+        Link of titel
+        <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+          <input
+            autoFocus
+            value={form.input}
+            onChange={(e) => onChange({ input: e.target.value })}
+            placeholder="https://open.spotify.com/track/…  of  Blinding Lights"
+            style={{ ...field(u), flex: 1 }}
+          />
+          {looksLikeLink && lookupAllowed && (
+            <button type="button" onClick={onLookup} disabled={form.busy} style={ghostBtn(u)}>
+              {form.busy ? 'Bezig…' : 'Opzoeken'}
+            </button>
+          )}
+        </div>
+      </label>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 12 }}>
+        <button type="button" onClick={onPickFile} disabled={form.busy} style={ghostBtn(u)}>
+          Audiobestand kiezen…
+        </button>
+        <div style={{ fontSize: 12, opacity: 0.7, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {fileName ?? 'Geen bestand — het liedje is dan alleen te openen bij de bron'}
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', gap: 12, marginTop: 14 }}>
+        <label style={{ ...metaLabel(u), flex: 1 }}>
+          Titel
+          <input
+            value={form.title}
+            onChange={(e) => onChange({ title: e.target.value })}
+            placeholder={looksLikeLink ? 'Wordt opgezocht' : 'Uit het veld hierboven'}
+            style={{ ...field(u), marginTop: 4 }}
+          />
+        </label>
+        <label style={{ ...metaLabel(u), flex: 1 }}>
+          Artiest
+          <input
+            value={form.artist}
+            onChange={(e) => onChange({ artist: e.target.value })}
+            placeholder="The Weeknd"
+            style={{ ...field(u), marginTop: 4 }}
+          />
+        </label>
+      </div>
+
+      <div style={{ fontSize: 12, opacity: 0.6, marginTop: 12, lineHeight: 1.45 }}>
+        {!lookupAllowed
+          ? 'Online opzoeken staat uit in de instellingen — vul titel en artiest zelf in.'
+          : form.looked
+            ? 'Alles nog aan te passen. Titel en artiest blijven bewaard, ook als de dienst waar de link naartoe wijst ooit verdwijnt.'
+            : 'Bij een link halen we eenmalig de titel, artiest en albumhoes op.'}
+      </div>
+
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
+        <button type="button" onClick={onCancel} style={ghostBtn(u)}>
+          Annuleren
+        </button>
+        <button
+          type="button"
+          onClick={onSubmit}
+          disabled={form.busy || !canSave}
+          style={{ ...primaryBtn(u), opacity: form.busy || !canSave ? 0.5 : 1 }}
+        >
+          Toevoegen
+        </button>
+      </div>
+    </AnimatedModal>
+  )
 }
 
 /** Bewerkscherm voor een liedje: titel, artiest en de streaming-link.
@@ -3273,7 +3524,7 @@ function SettingsPanel({
   onImported: () => void
 }) {
   const [tab, setTab] = useState<
-    'thema' | 'weergave' | 'navigatie' | 'tijdlijn' | 'dia' | 'beheer' | 'telefoon' | 'sneltoetsen' | 'over'
+    'thema' | 'weergave' | 'navigatie' | 'tijdlijn' | 'dia' | 'muziek' | 'beheer' | 'telefoon' | 'sneltoetsen' | 'over'
   >('thema')
   useEscape(onClose)
   // Versie runtime uit de app-bundle halen (klopt zo automatisch met de installer);
@@ -3417,6 +3668,7 @@ function SettingsPanel({
             {navBtn('navigatie', 'Navigatie')}
             {navBtn('tijdlijn', 'Tijdlijn & canvas')}
             {navBtn('dia', 'Diavoorstelling')}
+            {navBtn('muziek', 'Muziek')}
             {navBtn('beheer', 'Beheer')}
             {navBtn('telefoon', 'Telefoon')}
             {navBtn('sneltoetsen', 'Sneltoetsen')}
@@ -3719,6 +3971,29 @@ function SettingsPanel({
             </>
           )}
 
+          {tab === 'muziek' && (
+            <>
+              {subhead('Gegevens opzoeken')}
+              <label style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={settings.musicLookup}
+                  onChange={(e) => onChange({ musicLookup: e.target.checked })}
+                />
+                <span>Gegevens van liedjes online opzoeken</span>
+              </label>
+              {desc(
+                'Plak je een Spotify- of YouTube-link, dan halen we eenmalig de titel, de artiest en de albumhoes op. ' +
+                  'Dat is de enige keer dat MemoryLane voor muziek contact met internet maakt: daarna staat alles lokaal in je vault. ' +
+                  'Zet je dit uit, dan vul je titel en artiest zelf in.',
+              )}
+              {subhead('Waarom we de tekst bewaren')}
+              {desc(
+                'De titel en de artiest zijn wat er over twintig jaar nog toe doet. Die staan als gewone tekst in je vault, ' +
+                  'dus ook als de dienst waar je link naartoe wijst ooit verdwijnt, weet je nog steeds welk nummer bij deze herinnering hoorde.',
+              )}
+            </>
+          )}
           {tab === 'dia' && (
             <>
               {subhead('Weergave')}
@@ -4193,6 +4468,7 @@ function Fab({
   onAddEvent,
   onAddYear,
   onAddNote,
+  onAddSong,
   onAddPhotos,
   onEditEvent,
   onYearTheme,
@@ -4218,6 +4494,7 @@ function Fab({
   onAddEvent: () => void
   onAddYear: () => void
   onAddNote: () => void
+  onAddSong: () => void
   onAddPhotos: () => void
   onEditEvent: () => void
   onYearTheme: () => void
@@ -4376,6 +4653,7 @@ function Fab({
         <div style={dockBar}>
           <DockIconBtn title="Foto's toevoegen" icon={<IconImage />} onClick={onAddPhotos} />
           <DockIconBtn title="Notitie toevoegen" icon={<IconNote />} onClick={onAddNote} />
+          <DockIconBtn title="Muziek toevoegen" icon={<IconMusicPlus />} onClick={onAddSong} />
           <DockIconBtn
             title="Thumbnail selecteren — kies welke foto de omslag van deze memory is"
             icon={<IconCover />}

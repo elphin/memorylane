@@ -42,6 +42,8 @@ sha2 = "0.10"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "blocking"] }
 base64 = "0.22"
 rand = "0.8"
+lofty = "0.24.0"
+percent-encoding = "2.3.2"
 
 # `keyring` per platform: elke OS heeft een eigen native backend. Windows →
 # Credential Manager, macOS → Keychain. De code (`inbox/store.rs`) gebruikt de

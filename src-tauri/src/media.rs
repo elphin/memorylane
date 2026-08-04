@@ -9,6 +9,7 @@ pub mod decode;
 pub mod exif_read;
 pub mod hash;
 pub mod serve;
+pub mod song_meta;
 pub mod thumbs;
 
 #[cfg(test)]

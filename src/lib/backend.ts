@@ -144,6 +144,30 @@ export function soundLabel(item: Item): { title: string; artist: string | null }
   return { title, artist: item.artist?.trim() || null }
 }
 
+/** Wat er over een liedje gevonden is, uit de tags van een bestand of uit een
+ * geplakte link. Alles optioneel: de gebruiker mag elk veld corrigeren, en een
+ * mislukte opzoekpoging levert gewoon een leeg resultaat op -- nooit een fout. */
+export interface SongMetaFound {
+  title?: string
+  artist?: string
+  isrc?: string
+  durationSecs?: number
+  /** Of er een albumhoes gevonden is. De bytes zelf gaan nooit door de IPC-laag;
+   * die worden bij het toevoegen aan de Rust-kant opnieuw opgehaald. */
+  hasCover: boolean
+}
+
+/** Invoer voor het toevoegen van een liedje. */
+export interface SongDraft {
+  /** Pad naar een lokaal audiobestand, of null (link-only / alleen getypt). */
+  audio: string | null
+  title: string | null
+  artist: string | null
+  url: string | null
+  isrc: string | null
+  durationSecs: number | null
+}
+
 export interface CanvasItem {
   eventId: string
   itemRef: string
@@ -330,6 +354,13 @@ export interface Backend {
   updateEvent(eventId: string, title: string, startAt: string, endAt: string | null): Promise<void>
   /** Opent een bestandskiezer en importeert de gekozen foto's; geeft het aantal. */
   importPhotos(eventId: string): Promise<number>
+  /** Opent de bestandskiezer voor audio; geeft het gekozen pad of null. */
+  pickAudioFile(): Promise<string | null>
+  /** Zoekt titel/artiest/hoes op bij een bestandspad of een geplakte link. */
+  lookupSongMeta(source: string, isFile: boolean): Promise<SongMetaFound>
+  /** Voegt een liedje toe aan een memory. `lookupCover` stuurt of er voor de
+   * albumhoes een netwerk-call gedaan mag worden. Geeft het nieuwe item-id. */
+  addSong(eventId: string, draft: SongDraft, lookupCover: boolean): Promise<string>
   deleteItem(itemId: string): Promise<void>
   /** Werkt caption en/of body van een item bij. `null` = veld ongemoeid laten;
    * lege caption-string verwijdert de caption. */
@@ -592,6 +623,36 @@ class TauriBackend implements Backend {
     if (paths.length === 0) return 0
     const invoke = await this.api()
     return await invoke<number>('import_photos', { eventId, sources: paths })
+  }
+
+  async pickAudioFile(): Promise<string | null> {
+    const dialog = await import('@tauri-apps/plugin-dialog')
+    const picked = await dialog.open({
+      multiple: false,
+      directory: false,
+      filters: [{ name: 'Audio', extensions: ['mp3', 'm4a', 'flac', 'ogg', 'wav', 'aac'] }],
+    })
+    return typeof picked === 'string' ? picked : null
+  }
+
+  async lookupSongMeta(source: string, isFile: boolean): Promise<SongMetaFound> {
+    const invoke = await this.api()
+    return await invoke<SongMetaFound>('lookup_song_meta', { source, isFile })
+  }
+
+  async addSong(eventId: string, draft: SongDraft, lookupCover: boolean): Promise<string> {
+    const invoke = await this.api()
+    return await invoke<string>('add_song', {
+      eventId,
+      audio: draft.audio,
+      title: draft.title,
+      artist: draft.artist,
+      url: draft.url,
+      isrc: draft.isrc,
+      durationSecs: draft.durationSecs,
+      happenedAt: null,
+      lookupCover,
+    })
   }
 
   async deleteItem(itemId: string): Promise<void> {
@@ -1206,6 +1267,46 @@ class MockBackend implements Backend {
     const clean = frame?.trim()
     if (clean) this.frames.set(itemId, clean)
     else this.frames.delete(itemId)
+  }
+
+  async pickAudioFile(): Promise<string | null> {
+    // Geen bestandskiezer in de browser: doe alsof er een bestand gekozen is,
+    // zodat de dialoog-flow wel te doorlopen is.
+    return 'C:/mock/Blinding Lights.mp3'
+  }
+
+  async lookupSongMeta(source: string, isFile: boolean): Promise<SongMetaFound> {
+    // Vaste data, geen netwerk. Bewust NIET altijd compleet: de dialoog moet ook
+    // werken als er niets gevonden wordt.
+    if (isFile) {
+      return { title: 'Blinding Lights', artist: 'The Weeknd', durationSecs: 201, hasCover: true }
+    }
+    if (/spotify|youtube|youtu\.be/i.test(source)) {
+      return { title: 'Dreams', artist: 'Fleetwood Mac', hasCover: true }
+    }
+    return { hasCover: false }
+  }
+
+  async addSong(eventId: string, draft: SongDraft): Promise<string> {
+    const id = `${eventId}-song${(this.adds.get(eventId)?.length ?? 0)}`
+    const list = this.adds.get(eventId) ?? []
+    list.push({
+      id,
+      eventId,
+      itemType: 'song',
+      caption: draft.title ?? undefined,
+      artist: draft.artist ?? undefined,
+      url: draft.url ?? undefined,
+      media: draft.audio ? 'mock.mp3' : undefined,
+      // Alleen een hoes als er een bron is om er een uit te halen. Anders ziet
+      // "alleen een titel getypt" er in de mock goed uit terwijl het in de echte
+      // app de muzieknoot-placeholder krijgt -- `thumb()` verzint hier immers
+      // voor elk item-id een gradient.
+      cover: draft.audio || draft.url ? 'hoes.jpg' : undefined,
+      slug: id,
+    })
+    this.adds.set(eventId, list)
+    return id
   }
 
   async setSongMeta(

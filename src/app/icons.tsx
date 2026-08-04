@@ -192,3 +192,15 @@ export function IconExternal({ size = 18, style }: IconProps) {
     </svg>
   )
 }
+
+/** Muzieknoot met een plusje: muziek toevoegen aan een memory. */
+export function IconMusicPlus({ size = 18, style }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} strokeLinecap="round" strokeLinejoin="round" style={svgBase(style)}>
+      <circle cx="7" cy="17.5" r="2.8" />
+      <path d="M9.8 17.5V5.2l7.4-1.7v9.1" fill="none" />
+      <circle cx="14.4" cy="12.6" r="2.8" />
+      <path d="M19.5 17v5M17 19.5h5" />
+    </svg>
+  )
+}

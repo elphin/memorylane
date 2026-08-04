@@ -415,6 +415,7 @@ impl VaultService {
         event_id: &str,
         audio: Option<&str>,
         song: &writer::SongInput,
+        cover: Option<(Vec<u8>, String)>,
     ) -> Result<String, String> {
         let vault = self.current_vault()?;
         let folder = {
@@ -447,7 +448,7 @@ impl VaultService {
             &vault,
             &folder,
             audio.map(std::path::Path::new),
-            None, // hoesje komt in fase 3 (uit de tag van het bestand of van het net)
+            cover.as_ref().map(|(b, e)| (b.as_slice(), e.as_str())),
             song,
         )?;
         self.rescan()?;
@@ -1064,8 +1065,8 @@ pub fn set_song_meta(
 /// een liedje mag een bestand zijn, een link, of alleen een getypte titel.
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
-pub fn add_song(
-    state: State<VaultService>,
+pub async fn add_song(
+    state: State<'_, VaultService>,
     event_id: String,
     audio: Option<String>,
     title: Option<String>,
@@ -1074,7 +1075,42 @@ pub fn add_song(
     isrc: Option<String>,
     duration_secs: Option<u64>,
     happened_at: Option<String>,
+    // `lookup_cover`: mag er voor de albumhoes een netwerk-call gedaan worden?
+    // Stuurt de instelling "gegevens van liedjes online opzoeken".
+    lookup_cover: bool,
 ) -> Result<String, String> {
+    // De albumhoes komt uit het bestand zelf of van het net; de bytes gaan nooit
+    // door de IPC-laag, dus we halen ze hier op en geven ze direct door.
+    // `lookup` is wat de gebruiker in de dialoog gezien en eventueel gecorrigeerd
+    // heeft -- we vragen het niet nog eens op, we halen alleen de hoes.
+    // Eerst het bestand, dan pas het net -- en TERUGVALLEN, niet kiezen: een mp3
+    // zonder ingebedde hoes is heel gewoon, en dan hoort de hoes die de dialoog
+    // via de link al gevonden heeft alsnog gebruikt te worden.
+    // Beide takken in `spawn_blocking`: tags parsen is net zo blokkerend als een
+    // netwerk-call, en dit command draait sinds het async werd op de runtime.
+    let from_file = match audio.clone() {
+        Some(path) => tauri::async_runtime::spawn_blocking(move || {
+            media::song_meta::read_tags(std::path::Path::new(&path)).cover
+        })
+        .await
+        .ok()
+        .flatten(),
+        None => None,
+    };
+    let cover = match (from_file, url.as_deref()) {
+        (Some(c), _) => Some(c),
+        // `cover_for` pakt de hoes uit de cache van de lookup in de dialoog; alleen
+        // als die er niet is doet hij alsnog een verse call.
+        (None, Some(u)) if lookup_cover => {
+            let u = u.to_string();
+            tauri::async_runtime::spawn_blocking(move || media::song_meta::cover_for(&u))
+                .await
+                .ok()
+                .flatten()
+        }
+        _ => None,
+    };
+
     state.add_song(
         &event_id,
         audio.as_deref(),
@@ -1086,7 +1122,31 @@ pub fn add_song(
             duration_secs,
             happened_at: happened_at.as_deref(),
         },
+        cover,
     )
+}
+
+/// Zoekt de gegevens van een liedje op: uit de tags van een bestand (lokaal,
+/// geen netwerk) of uit een geplakte link (één call, 5s time-out).
+///
+/// `async fn` + `spawn_blocking`: `reqwest::blocking` direct in een sync command
+/// paniekt binnen de tokio-runtime. Faalt zacht -- bij geen internet of een
+/// rate-limit krijg je een leeg antwoord terug, geen fout, en houdt de gebruiker
+/// de URL plus wat hij zelf typte.
+#[tauri::command]
+pub async fn lookup_song_meta(
+    source: String,
+    is_file: bool,
+) -> Result<media::song_meta::SongMetaFound, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        if is_file {
+            media::song_meta::read_tags(std::path::Path::new(&source))
+        } else {
+            media::song_meta::lookup_link(&source)
+        }
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1296,6 +1356,7 @@ mod tests {
                     url: Some("https://open.spotify.com/track/x"),
                     ..Default::default()
                 },
+                None,
             )
             .unwrap();
 
@@ -1363,12 +1424,12 @@ mod tests {
         };
 
         let err = service
-            .add_song("ev-bestaat-niet", None, &writer::SongInput::default())
+            .add_song("ev-bestaat-niet", None, &writer::SongInput::default(), None)
             .unwrap_err();
         assert!(err.contains("niet gevonden"), "onbekend event: {err}");
 
         let err = service
-            .add_song(&ev, None, &writer::SongInput { title: Some("X"), ..Default::default() })
+            .add_song(&ev, None, &writer::SongInput { title: Some("X"), ..Default::default() }, None)
             .unwrap_err();
         assert!(err.contains("echte memory"), "duidelijke weigering: {err}");
         // En er is geen weesbestand in de jaarmap achtergebleven.
