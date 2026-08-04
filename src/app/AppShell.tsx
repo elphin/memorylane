@@ -103,6 +103,11 @@ interface Settings {
   musicLookup: boolean
   /** Volume van de muziek (0-100). Achtergrondmuziek, geen concert. */
   musicVolume: number
+  /** Wanneer muziek VANZELF begint. Oplopende schaal; standaard alleen bij een
+   * diavoorstelling, want geluid dat begint zodra je iets opent is voor veel
+   * mensen precies de reden om een app weg te zetten. Handmatig starten kan
+   * altijd, ook op 'nooit'. */
+  musicAuto: 'nooit' | 'diavoorstelling' | 'diavoorstelling-en-memory'
   /** Actief thema (id uit de thema-registry): kleuren/fonts van de tijdlijn. */
   themeId: string
   /** Weergave waarin een event-canvas standaard opent. */
@@ -168,6 +173,7 @@ interface Settings {
 const DEFAULT_SETTINGS: Settings = {
   musicLookup: true,
   musicVolume: 60,
+  musicAuto: 'diavoorstelling',
   themeId: 'classic-dark',
   defaultLayout: 'custom',
   slideshow: true,
@@ -400,6 +406,9 @@ export function AppShell() {
   const [videoFocused, setVideoFocused] = useState(false)
   const videoFocusedRef = useRef(false)
   const stopMusicRef = useRef<() => void>(() => {})
+  // Begon de huidige muziek automatisch (bij het openen van een memory) of heb
+  // je 'm zelf aangezet? Bepaalt of hij stopt als je de memory verlaat.
+  const autoStartedRef = useRef(false)
   // Gestylede bevestigings-dialoog voor destructieve acties (i.p.v. het
   // stijlbrekende native window.confirm).
   const [confirmBox, setConfirmBox] = useState<null | {
@@ -558,6 +567,20 @@ export function AppShell() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [videoFocused])
+
+  /** Start automatisch het eerste liedje van een memory, als de instelling dat
+   * toestaat. Alleen liedjes (`song`), nooit een gesproken opname: die hoort niet
+   * vanzelf te beginnen. En nooit als er al iets speelt -- dan zou het openen van
+   * een memory je huidige nummer onderbreken. */
+  const autoPlayForEvent = (items: Item[]): void => {
+    if (settingsRef.current.musicAuto !== 'diavoorstelling-en-memory') return
+    if (nowPlayingRef.current) return
+    const first = items.find((i) => i.itemType === 'song' && i.media)
+    if (first) {
+      autoStartedRef.current = true
+      void playSong(first)
+    }
+  }
 
   const stopMusic = (): void => {
     setNowPlaying(null)
@@ -1003,8 +1026,17 @@ export function AppShell() {
 
     // `snapCam`: animatieloze herbouw op de huidige plek (themawissel): geen
     // exit-/reveal-animatie en de camera wordt exact op deze stand teruggezet.
+    /** Muziek die automatisch bij een memory begon, hoort ook bij die memory te
+     * stoppen. Handmatig gestarte muziek blijft juist wél doorspelen: die heb je
+     * zelf aangezet. `autoStartedRef` houdt dat onderscheid vast. */
+    const stopAutoMusicOnLeave = (): void => {
+      if (autoStartedRef.current && nowPlayingRef.current) stopMusicRef.current()
+      autoStartedRef.current = false
+    }
+
     const setupLifeline = (focusAfter?: string, snapCam?: { x: number; y: number; zoom: number }): void => {
       if (!engine || !backendRef.current) return
+      stopAutoMusicOnLeave()
       if (!fontsDone) sceneBuiltBeforeFonts = true
       // Invalideer een eventuele in-flight enterYear.
       enterSeqRef.current++
@@ -1074,6 +1106,7 @@ export function AppShell() {
       snapCam?: { x: number; y: number; zoom: number },
     ): Promise<void> => {
       if (!engine || !backendRef.current || enteringRef.current) return
+      stopAutoMusicOnLeave()
       enteringRef.current = true
       const seq = ++enterSeqRef.current
       // Zijwaartse jaar-overgang (+1 = nieuwe jaar komt van rechts): oude scene
@@ -1315,6 +1348,8 @@ export function AppShell() {
         currentYearCoverRef.current = detail.yearCover ?? null
         currentThemeChoicesRef.current = { year: detail.yearTheme ?? null, event: detail.event.theme ?? null }
         currentItemsRef.current = detail.items
+        // Instelling "ook bij een memory": het eerste liedje begint zachtjes.
+        autoPlayForEvent(detail.items)
         // Zie enterYear: entry-referentie alleen bij een echte entry bijwerken.
         if (!snapCam) entryZoomRef.current = engine.pendingZoom
         // Focus-continuïteit bij terug (Escape) uit L3: het item waar je vandaan
@@ -4110,6 +4145,22 @@ function SettingsPanel({
                 'Plak je een Spotify- of YouTube-link, dan halen we eenmalig de titel, de artiest en de albumhoes op. ' +
                   'Dat is de enige keer dat MemoryLane voor muziek contact met internet maakt: daarna staat alles lokaal in je vault. ' +
                   'Zet je dit uit, dan vul je titel en artiest zelf in.',
+              )}
+              {subhead('Wanneer muziek vanzelf begint')}
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                {([
+                  ['nooit', 'Nooit'],
+                  ['diavoorstelling', 'Bij een diavoorstelling'],
+                  ['diavoorstelling-en-memory', 'Ook bij het openen van een memory'],
+                ] as const).map(([id, label]) => (
+                  <button key={id} onClick={() => onChange({ musicAuto: id })} style={segOn(settings.musicAuto === id)}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+              {desc(
+                'Handmatig starten kan altijd, ook op "nooit" — met de knop bij het liedje of met de spatiebalk. ' +
+                  'Muziek die vanzelf begon stopt ook vanzelf als je de memory verlaat; wat je zelf aanzette blijft doorspelen.',
               )}
               {subhead('Geluid')}
               <div style={{ fontSize: 13, color: u.textMuted, margin: '4px 0 4px' }}>
