@@ -339,6 +339,8 @@ benoemt dat, en er komt een instelling **"Gegevens van liedjes online opzoeken"*
   geluid. Eén oplopende keuzelijst: "wel bij het openen maar niet in de diavoorstelling" is geen
   zinnig scenario.
 - **`musicVolume`**: 0–100, standaard 60. (`musicLookup` is al in fase 3 geland.)
+- **`musicSlideshow`**: `'per-memory'` | `'afspeellijst'` | `'alleen-memory'`, standaard
+  `'per-memory'` — zie hieronder.
 - **Memory openen**: speelt het eerste liedje van die memory zachtjes; bij verlaten fade-out.
 
 **Diavoorstelling — kan niet zoals oorspronkelijk bedacht.** `Screensaver.tsx:40` schudt álle
@@ -346,16 +348,25 @@ foto's, `list_screensaver_photos` (`index.rs:627-676`) geeft alleen item-ids **z
 en vanaf de lifeline is de scope alle jaren door elkaar (`AppShell.tsx:2214-2231`). Bij
 `diaSpeed` = 7s zou de muziek gemiddeld elke 7 seconden wisselen. Twee opties:
 
-- **(a) Diavoorstelling per memory groeperen** — `list_screensaver_photos` levert `(item_id, event_id)`,
-  de Screensaver schudt de *memories* en houdt de foto's binnen een memory bij elkaar. Dan klopt
-  "muziek volgt de memory" wél, en de diavoorstelling wordt zelf samenhangender. **Maar het verandert
-  het gedrag van een afgeronde feature**, en het retourtype van `getScreensaverPhotos` → dus ook de
-  MockBackend.
-- **(b) Eén afspeellijst per scope** — de liedjes binnen de scope spelen achter elkaar, losgekoppeld
-  van welke foto er staat. Goedkoop, geen gedragsverandering, maar de koppeling foto↔liedje is weg.
+**Jims besluit: dit wordt zélf een instelling**, geen vaste keuze. Nieuwe instelling
+**`musicSlideshow`** met drie standen, standaard `'per-memory'`:
 
-**Dit is de enige echte beslisvraag; die ligt bij Jim.** Advies: **(a)**. Fase 1–4 hangen er niet
-van af, dus de bouw start zonder dat dit beslist is.
+- **`'per-memory'`** — `list_screensaver_photos` levert `(item_id, event_id)`, de Screensaver schudt
+  de *memories* en houdt de foto's binnen een memory bij elkaar. Dan volgt de muziek echt de memory,
+  en de diavoorstelling wordt zelf samenhangender. Verandert het retourtype van
+  `getScreensaverPhotos` → dus ook de MockBackend.
+- **`'afspeellijst'`** — de liedjes binnen de scope spelen achter elkaar, losgekoppeld van welke foto
+  er staat. De bestaande foto-shuffle blijft exact zoals hij is; de koppeling foto↔liedje is weg.
+- **`'alleen-memory'`** — muziek klinkt alleen bij de diavoorstelling van één specifieke memory
+  (daar klopt de koppeling vanzelf). Vanaf een jaar of vanaf alles blijft het stil, en de shuffle
+  blijft ongewijzigd.
+
+**Belangrijk voor het gedrag:** het hergroeperen van de foto's gebeurt ALLEEN als `musicSlideshow`
+op `'per-memory'` staat **én** er daadwerkelijk muziek mag klinken (`musicAuto !== 'nooit'`). Staat
+de muziek uit, dan is de bestaande diavoorstelling bewijsbaar onaangeroerd — de gedragswijziging
+hangt aan een keuze die de gebruiker zelf maakt, niet aan het installeren van deze feature.
+
+Fase 1–4 hangen hier niet van af.
 
 **Gate:** idem + handmatige controle van alle drie de standen.
 
