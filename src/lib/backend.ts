@@ -1367,9 +1367,41 @@ class MockBackend implements Backend {
     }
     return { url }
   }
-  async mediaUrl(): Promise<string> {
-    // Geen echt bestand in browser-dev; de speler-UI (poster/chevrons) is wel te zien.
-    return ''
+  async mediaUrl(itemId: string): Promise<string> {
+    // Video: geen echt bestand in browser-dev; de speler-UI (poster/chevrons) is
+    // wel te zien. Geluid: wél een bron, want anders is de muziekspeler in de
+    // browser-modus helemaal niet te controleren -- `playSong` poort op een lege
+    // URL. Twee seconden stilte (WAV), genoeg om play/pauze/fade/einde te zien.
+    const isSong = /-(s\d+|a\d+|song\d+)$/.test(itemId)
+    if (!isSong) return ''
+    const sampleRate = 8000
+    const frames = sampleRate * 2
+    const dataLen = frames // 8-bit mono
+    const buf = new Uint8Array(44 + dataLen)
+    const view = new DataView(buf.buffer)
+    const ascii = (off: number, str: string) => {
+      for (let i = 0; i < str.length; i++) buf[off + i] = str.charCodeAt(i)
+    }
+    ascii(0, 'RIFF')
+    view.setUint32(4, 36 + dataLen, true)
+    ascii(8, 'WAVEfmt ')
+    view.setUint32(16, 16, true)
+    view.setUint16(20, 1, true)
+    view.setUint16(22, 1, true)
+    view.setUint32(24, sampleRate, true)
+    view.setUint32(28, sampleRate, true)
+    view.setUint16(32, 1, true)
+    view.setUint16(34, 8, true)
+    ascii(36, 'data')
+    view.setUint32(40, dataLen, true)
+    buf.fill(128, 44) // stilte (8-bit is unsigned, midden = 128)
+    let bin = ''
+    for (const b of buf) bin += String.fromCharCode(b)
+    // Fragment-suffix per item: twee liedjes kunnen naar hetzelfde bestand
+    // wijzen (daar bestaat `media_shared` voor), en dan zou wisselen tussen die
+    // twee geen nieuwe bron zijn -- de muziek liep gewoon door en alleen het
+    // label veranderde. Precies het gedrag dat deze mock moet kunnen tonen.
+    return `data:audio/wav;base64,${btoa(bin)}#${encodeURIComponent(itemId)}`
   }
 
   // Mobiele inbox: alleen echt in de desktop-app (keyring + HTTP in Rust). In

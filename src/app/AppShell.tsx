@@ -14,7 +14,8 @@ import type {
   SearchResult,
   YearSummary,
 } from '../lib/backend'
-import { createBackend } from '../lib/backend'
+import { createBackend, soundLabel } from '../lib/backend'
+import { isSound } from '../render/scenes/types'
 import { RenderEngine } from '../render/core/engine'
 import { loadThemeFonts } from '../theme/fonts'
 import { THEMES, themeById } from '../theme/registry'
@@ -28,6 +29,7 @@ import type { NodePosition } from '../render/scenes/scene'
 import { Screensaver } from './Screensaver'
 import { SettingsPhone } from './SettingsPhone'
 import { FocusVideoLayer } from './FocusVideoLayer'
+import { MusicLayer, PauseIcon, PlayIcon, type NowPlaying } from './MusicLayer'
 import { FocusScene } from '../render/scenes/focus'
 import { LifelineScene } from '../render/scenes/lifeline'
 import type { Scene } from '../render/scenes/scene'
@@ -99,6 +101,8 @@ interface Settings {
   /** Mag de app bij een geplakte link online de titel, artiest en albumhoes
    * opzoeken? Standaard aan; uit betekent: alleen wat je zelf typt. */
   musicLookup: boolean
+  /** Volume van de muziek (0-100). Achtergrondmuziek, geen concert. */
+  musicVolume: number
   /** Actief thema (id uit de thema-registry): kleuren/fonts van de tijdlijn. */
   themeId: string
   /** Weergave waarin een event-canvas standaard opent. */
@@ -163,6 +167,7 @@ interface Settings {
 
 const DEFAULT_SETTINGS: Settings = {
   musicLookup: true,
+  musicVolume: 60,
   themeId: 'classic-dark',
   defaultLayout: 'custom',
   slideshow: true,
@@ -374,6 +379,27 @@ export function AppShell() {
   const [addSong, setAddSong] = useState<null | AddSongForm>(null)
   // https-link van het gefocuste liedje (L3), of null. Stuurt de "Openen"-knop.
   const [focusSourceUrl, setFocusSourceUrl] = useState<string | null>(null)
+  // Id van het gefocuste liedje MET een lokaal bestand, of null. Stuurt zowel de
+  // afspeelknop in de dock als de spatiebalk.
+  const [focusPlayableId, setFocusPlayableId] = useState<string | null>(null)
+  // Muziek. `nowPlaying` is de enige speler in de app; er klinkt nooit meer dan
+  // één liedje tegelijk.
+  const [nowPlaying, setNowPlaying] = useState<NowPlaying | null>(null)
+  const [musicPaused, setMusicPaused] = useState(false)
+  // Speelde er muziek toen een video begon? Dan hervatten we na afloop, zodat de
+  // twee elkaar niet overstemmen.
+  const musicResumeRef = useRef(false)
+  // Refs voor de toets-closure (die wordt één keer geregistreerd).
+  const nowPlayingRef = useRef<NowPlaying | null>(null)
+  nowPlayingRef.current = nowPlaying
+  const focusPlayableRef = useRef<string | null>(null)
+  focusPlayableRef.current = focusPlayableId
+  // Of het gefocuste item een video IS. Bewust apart van `focusVideoId`: die is
+  // een mount-vlag voor de DOM-overlay en wordt tijdens elke stap/transitie
+  // even null. Daarop pauzeren gaf een hoorbare muziekflard bij élke stap.
+  const [videoFocused, setVideoFocused] = useState(false)
+  const videoFocusedRef = useRef(false)
+  const stopMusicRef = useRef<() => void>(() => {})
   // Gestylede bevestigings-dialoog voor destructieve acties (i.p.v. het
   // stijlbrekende native window.confirm).
   const [confirmBox, setConfirmBox] = useState<null | {
@@ -499,6 +525,47 @@ export function AppShell() {
   // Titel bij een detailfoto: caption (indien de instelling aan is én er een
   // caption is), anders de eventnaam. Zo krijg je zonder caption geen rare
   // bestandsnamen, maar netjes de eventnaam.
+  /** Het id van een geluidsitem dat écht afspeelbaar is: er moet een lokaal
+   * bestand zijn. Een liedje dat alleen een link is, klinkt niet in de app. */
+  const playableIdOf = (item: Item | undefined): string | null =>
+    item && isSound(item.itemType) && item.media ? item.id : null
+
+  /** Start (of hervat) een liedje. Alleen mogelijk met een LOKAAL audiobestand:
+   * `mediaUrl` werpt bij een item zonder media, dus dat pad wordt hier gepoort.
+   * Een link-only liedje toont zijn bronknop en klinkt niet in de app. */
+  const playSong = async (item: Item | undefined): Promise<void> => {
+    const backend = backendRef.current
+    if (!backend || !item || !item.media) return
+    const { title, artist } = soundLabel(item)
+    const src = await backend.mediaUrl(item.id).catch(() => '')
+    if (!src) return
+    setMusicPaused(false)
+    setNowPlaying({ itemId: item.id, title, artist, src })
+  }
+
+  // Video aan het woord: muziek pauzeren en na afloop hervatten. `musicResumeRef`
+  // onthoudt of hij daarvóór ook echt speelde, zodat een handmatig gepauzeerd
+  // liedje niet ineens vanzelf begint.
+  useEffect(() => {
+    if (videoFocused) {
+      if (nowPlayingRef.current && !musicPaused) {
+        musicResumeRef.current = true
+        setMusicPaused(true)
+      }
+    } else if (musicResumeRef.current) {
+      musicResumeRef.current = false
+      setMusicPaused(false)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [videoFocused])
+
+  const stopMusic = (): void => {
+    setNowPlaying(null)
+    setMusicPaused(false)
+    musicResumeRef.current = false
+  }
+  stopMusicRef.current = stopMusic
+
   /** De https-link van een liedje, of null. Alleen `song`: bij een gesproken memo
    * is er niets om extern te openen. */
   const sourceUrlOf = (item: Item | undefined): string | null => {
@@ -666,6 +733,16 @@ export function AppShell() {
       const el = document.activeElement
       if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) return
       if (dialogOpenRef.current || overlayOpenRef.current) return
+      // Spatie NIET window-breed: `FocusVideoLayer` claimt die toets al zodra er
+      // een video gefocust is. Alleen reageren als L3 open staat én het gefocuste
+      // item echt een afspeelbaar geluidsitem is.
+      if (e.key === ' ' && levelRef.current === 'focus' && focusPlayableRef.current) {
+        e.preventDefault()
+        const id = focusPlayableRef.current
+        if (nowPlayingRef.current?.itemId === id) setMusicPaused((v) => !v)
+        else void playSong(currentItemsRef.current.find((i) => i.id === id))
+        return
+      }
       if (e.key === 'e' || e.key === 'E') {
         e.preventDefault()
         updateSettings({ viewMode: !settingsRef.current.viewMode })
@@ -1293,12 +1370,14 @@ export function AppShell() {
           const it = id ? currentItemsRef.current.find((x) => x.id === id) : undefined
           setHeader({ text: focusTitleFor(it), dir: delta > 0 ? 'in' : 'out' })
           setFocusSourceUrl(sourceUrlOf(it))
+          setFocusPlayableId(playableIdOf(it))
         },
         // Vers resolven (app → jaar → event) zodat een themawissel meetelt.
         resolveTheme(currentThemeChoicesRef.current.year, currentThemeChoicesRef.current.event),
       )
       scene.setAnimateSteps(settingsRef.current.l3StepAnimation)
       setFocusSourceUrl(sourceUrlOf(items[index]))
+      setFocusPlayableId(playableIdOf(items[index]))
       if (contentFillRef.current) scene.setFullscreen(true)
       sceneRef.current = scene
       if (snapCam) engine.jumpCamera(snapCam.x, snapCam.y, snapCam.zoom)
@@ -1492,6 +1571,14 @@ export function AppShell() {
         setCoverPickModeRef.current(false)
         return
       }
+      // Escape stopt eerst de muziek. In kijkmodus is het "nu speelt"-balkje
+      // weggefade en is de spatiebalk buiten L3 niet actief -- zonder deze uitweg
+      // is muziek daar helemaal niet meer te stoppen.
+      if (e.key === 'Escape' && nowPlayingRef.current && !dialogOpenRef.current) {
+        e.preventDefault()
+        stopMusicRef.current()
+        return
+      }
       if (e.key === 'Escape' || e.key === 'Backspace') {
         // Een open dialog (formulier/bevestiging) vangt Escape zelf af — hier
         // nooit onder de dialog door navigeren (de INPUT-guard hierboven dekt
@@ -1637,6 +1724,16 @@ export function AppShell() {
             : null
         const focusItem = focusScene?.currentItem?.() ?? null
         const vidId = focusItem && focusItem.itemType === 'video' ? focusItem.id : null
+        // Transitie-ONGEVOELIG: puur "is het gefocuste item een video". `vidId`
+        // hierboven wordt tijdens elke stap even null (de DOM-overlay unmount
+        // dan), en daarop de muziek pauzeren gaf een flard bij elke stap.
+        const vidFocused =
+          levelRef.current === 'focus' &&
+          sceneRef.current?.currentItem?.()?.itemType === 'video'
+        if (vidFocused !== videoFocusedRef.current) {
+          videoFocusedRef.current = vidFocused
+          setVideoFocused(vidFocused)
+        }
         if (vidId !== focusVideoIdRef.current) {
           focusVideoIdRef.current = vidId
           videoAspectRef.current = null // ander/geen item → verhouding onbekend
@@ -2106,6 +2203,9 @@ export function AppShell() {
     setVaultPath(await backend.getVaultPath())
     // Nieuwe/gewijzigde vault → de onthouden L0-stand slaat nergens meer op.
     lifelineCamRef.current = null
+    // En muziek uit de vórige vault mag hier niet doorklinken: die src wijst naar
+    // een bestand dat bij een ander archief hoort.
+    stopMusicRef.current()
     // En een tagfilter uit de vórige vault ook niet: dat zou het eerste jaar dat je
     // opent stil leeg maken.
     tagFilterRef.current = []
@@ -2435,6 +2535,9 @@ export function AppShell() {
     setBusy(true)
     try {
       await backend.deleteItem(id)
+      // Speelde dit liedje? Dan blijft het anders doorklinken vanuit de
+      // prullenbak, met een balkje dat een item toont dat niet meer bestaat.
+      if (nowPlayingRef.current?.itemId === id) stopMusic()
       if (eventId) enterEventRef.current(eventId)
     } catch (e) {
       setMessage(String(e))
@@ -2475,6 +2578,7 @@ export function AppShell() {
         // L3. Zonder dit blijft hij na het bewerken van de link de OUDE link
         // openen -- of verdwijnt hij niet als je het veld leegmaakt.
         setFocusSourceUrl(sourceUrlOf(item))
+        setFocusPlayableId(playableIdOf(item))
       }
     }
   }
@@ -2820,6 +2924,8 @@ export function AppShell() {
           onClose={() => setScreensaverIds(null)}
         />
       )}
+      {/* Een video en muziek mogen elkaar niet overstemmen: zodra er een video
+          gefocust is pauzeert de muziek, en na afloop hervat hij. */}
       {focusVideoId && backendRef.current && (
         <FocusVideoLayer
           ref={videoWrapRef}
@@ -2832,6 +2938,15 @@ export function AppShell() {
           }}
         />
       )}
+      <MusicLayer
+        now={nowPlaying}
+        volume={settings.musicVolume}
+        paused={musicPaused}
+        hidden={settings.viewMode || anyDialog}
+        onEnded={stopMusic}
+        onTogglePause={() => setMusicPaused((p) => !p)}
+        onStop={stopMusic}
+      />
       {showFps && <FpsOverlay engineRef={engineRef} />}
       {showFit &&
         phase === 'ready' &&
@@ -2954,6 +3069,15 @@ export function AppShell() {
           onLayout={changeLayout}
           onSaveLayout={saveLayoutAsCustom}
           onEdit={startEdit}
+          onPlaySong={
+            focusPlayableId
+              ? () => {
+                  if (nowPlaying?.itemId === focusPlayableId) setMusicPaused((p) => !p)
+                  else void playSong(currentItemsRef.current.find((i) => i.id === focusPlayableId))
+                }
+              : undefined
+          }
+          playing={!!focusPlayableId && nowPlaying?.itemId === focusPlayableId && !musicPaused}
           onOpenSource={focusSourceUrl ? () => {
             void backendRef.current?.openExternal(focusSourceUrl).catch((e) => setToast(String(e)))
           } : undefined}
@@ -3987,6 +4111,20 @@ function SettingsPanel({
                   'Dat is de enige keer dat MemoryLane voor muziek contact met internet maakt: daarna staat alles lokaal in je vault. ' +
                   'Zet je dit uit, dan vul je titel en artiest zelf in.',
               )}
+              {subhead('Geluid')}
+              <div style={{ fontSize: 13, color: u.textMuted, margin: '4px 0 4px' }}>
+                Volume: {settings.musicVolume}%
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                step={5}
+                value={settings.musicVolume}
+                onChange={(e) => onChange({ musicVolume: Number(e.target.value) })}
+                style={{ width: '100%' }}
+              />
+              {desc('Muziek bij een herinnering hoort op de achtergrond te staan, niet eroverheen.')}
               {subhead('Waarom we de tekst bewaren')}
               {desc(
                 'De titel en de artiest zijn wat er over twintig jaar nog toe doet. Die staan als gewone tekst in je vault, ' +
@@ -4477,6 +4615,8 @@ function Fab({
   onSaveLayout,
   onEdit,
   onOpenSource,
+  onPlaySong,
+  playing,
   onDelete,
   scatterRotate,
   onToggleScatterRotate,
@@ -4505,6 +4645,10 @@ function Fab({
   onDelete: () => void
   /** Alleen gezet als het gefocuste item een liedje met een https-link is. */
   onOpenSource?: () => void
+  /** Alleen gezet als het gefocuste item een lokaal audiobestand heeft. */
+  onPlaySong?: () => void
+  /** Klinkt dit item op dit moment? Stuurt het label van de knop. */
+  playing?: boolean
   scatterRotate: boolean
   onToggleScatterRotate: () => void
   gridSort: 'date' | 'name' | 'random'
@@ -4676,6 +4820,14 @@ function Fab({
           <div style={row}>
             {/* Een liedje met een link: openen is een KIJK-actie, niet iets wat je
                 pas na het openen van een bewerkformulier mag kunnen. */}
+            {onPlaySong && (
+              <Pill
+                icon={playing ? <PauseIcon size={16} /> : <PlayIcon size={16} />}
+                onClick={onPlaySong}
+              >
+                {playing ? 'Pauzeer' : 'Speel af'}
+              </Pill>
+            )}
             {onOpenSource && (
               <Pill icon={<IconExternal size={16} />} onClick={onOpenSource}>Openen</Pill>
             )}
