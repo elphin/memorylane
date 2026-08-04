@@ -9,10 +9,16 @@
 // Sluit alleen met Escape (het is een diavoorstelling; muisbeweging sluit 'm niet).
 
 import { useEffect, useRef, useState } from 'react'
-import type { Backend } from '../lib/backend'
+import type { Backend, ScreensaverPhoto } from '../lib/backend'
 
 interface Props {
-  photoIds: string[]
+  photos: ScreensaverPhoto[]
+  /** Houd de foto's van één memory bij elkaar (en schud de MEMORIES) in plaats
+   * van alle foto's door elkaar. Nodig om de muziek de memory te laten volgen:
+   * los geschud zou een liedje elke paar seconden wisselen. */
+  groupByMemory: boolean
+  /** Aangeroepen zodra de diavoorstelling naar een andere memory overgaat. */
+  onMemoryChange?: (eventId: string) => void
   thumb: Backend['thumb']
   speedMs: number
   mode: 'kenburns' | 'crossfade'
@@ -36,8 +42,33 @@ function shuffle<T>(a: T[]): T[] {
   return r
 }
 
-export function Screensaver({ photoIds, thumb, speedMs, mode, onClose }: Props) {
-  const [order] = useState(() => shuffle(photoIds))
+/** Schudt de MEMORIES en houdt de foto's daarbinnen op volgorde. Zo blijf je bij
+ * één herinnering terwijl je ernaar kijkt, in plaats van door je hele leven te
+ * springen -- en kan er één liedje bij horen. */
+function shuffleByMemory(photos: ScreensaverPhoto[]): ScreensaverPhoto[] {
+  const groups = new Map<string, ScreensaverPhoto[]>()
+  for (const p of photos) {
+    const g = groups.get(p.eventId)
+    if (g) g.push(p)
+    else groups.set(p.eventId, [p])
+  }
+  // Eén memory? Dan is groeperen zinloos en zou `.flat()` de chronologische
+  // volgorde teruggeven -- de diavoorstelling van die memory verliest dan stil
+  // zijn shuffle. Val terug op het gewone schudden.
+  if (groups.size <= 1) return shuffle(photos)
+  return shuffle([...groups.values()]).flat()
+}
+
+export function Screensaver({
+  photos,
+  groupByMemory,
+  onMemoryChange,
+  thumb,
+  speedMs,
+  mode,
+  onClose,
+}: Props) {
+  const [order] = useState(() => (groupByMemory ? shuffleByMemory(photos) : shuffle(photos)))
   const [cur, setCur] = useState(0)
   const [prev, setPrev] = useState<number | null>(null)
   const [tick, setTick] = useState(0) // forceert een verse animatie per wissel
@@ -49,9 +80,19 @@ export function Screensaver({ photoIds, thumb, speedMs, mode, onClose }: Props) 
   const fadeMs = Math.min(1600, Math.round(dur * 0.5))
 
   const url = (i: number): string => {
-    const id = order[i]
+    const id = order[i]?.itemId
     return (id ? thumb(id, 2048).url : '') ?? ''
   }
+
+  // Meld een memory-wissel zodra de getoonde foto uit een andere memory komt.
+  // In een effect, niet in de rotatie-lus: die draait ook bij het preloaden.
+  const lastEventRef = useRef<string | null>(null)
+  useEffect(() => {
+    const ev = order[cur]?.eventId
+    if (!ev || ev === lastEventRef.current) return
+    lastEventRef.current = ev
+    onMemoryChange?.(ev)
+  }, [cur, order, onMemoryChange])
 
   // Rotatie: preload de volgende foto, wissel PAS bij load (of error) → de crossfade
   // speelt altijd over een geladen afbeelding. Timer los van image-load.

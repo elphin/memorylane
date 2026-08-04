@@ -168,6 +168,14 @@ export interface SongDraft {
   durationSecs: number | null
 }
 
+/** Een foto voor de diavoorstelling, mét de memory waar hij bij hoort. Die
+ * koppeling is nodig om de foto's per memory bij elkaar te kunnen houden -- en
+ * daarmee om de muziek de memory te laten volgen. */
+export interface ScreensaverPhoto {
+  itemId: string
+  eventId: string
+}
+
 export interface CanvasItem {
   eventId: string
   itemRef: string
@@ -396,7 +404,14 @@ export interface Backend {
     scopeId: string | null,
     include: string[],
     exclude: string[],
-  ): Promise<string[]>
+  ): Promise<ScreensaverPhoto[]>
+  /** Afspeelbare liedjes binnen een scope (met hun memory), voor de
+   * afspeellijst-stand van de diavoorstelling. Eén query in plaats van een
+   * `getEvent` per memory. */
+  getScopeSongs(
+    scopeKind: 'all' | 'year' | 'event',
+    scopeId: string | null,
+  ): Promise<ScreensaverPhoto[]>
   thumb(itemId: string, size: 64 | 128 | 256 | 1024 | 2048): ThumbSource
   /** URL naar het originele mediabestand (voor <video>-afspelen), via het
    * asset-protocol. Leeg in de mock. */
@@ -500,9 +515,9 @@ class TauriBackend implements Backend {
     scopeId: string | null,
     include: string[],
     exclude: string[],
-  ): Promise<string[]> {
+  ): Promise<ScreensaverPhoto[]> {
     const invoke = await this.api()
-    return await invoke<string[]>('get_screensaver_photos', {
+    return await invoke<ScreensaverPhoto[]>('get_screensaver_photos', {
       scopeKind,
       scopeId,
       include,
@@ -623,6 +638,14 @@ class TauriBackend implements Backend {
     if (paths.length === 0) return 0
     const invoke = await this.api()
     return await invoke<number>('import_photos', { eventId, sources: paths })
+  }
+
+  async getScopeSongs(
+    scopeKind: 'all' | 'year' | 'event',
+    scopeId: string | null,
+  ): Promise<ScreensaverPhoto[]> {
+    const invoke = await this.api()
+    return await invoke<ScreensaverPhoto[]>('get_scope_songs', { scopeKind, scopeId })
   }
 
   async pickAudioFile(): Promise<string | null> {
@@ -996,7 +1019,7 @@ class MockBackend implements Backend {
     scopeId: string | null,
     include: string[],
     exclude: string[],
-  ): Promise<string[]> {
+  ): Promise<ScreensaverPhoto[]> {
     // Deterministische synthetische tags per foto, zodat include/exclude testbaar is.
     const photoTags = (photoId: string): string[] => {
       const h = hueFor(photoId)
@@ -1022,7 +1045,9 @@ class MockBackend implements Backend {
     }
     if (include.length) ids = ids.filter((id) => photoTags(id).some((t) => include.includes(t)))
     if (exclude.length) ids = ids.filter((id) => !photoTags(id).some((t) => exclude.includes(t)))
-    return ids
+    // Het event-id zit in het foto-id (`<eventId>-i<n>`), dus dat is hier af te
+    // leiden -- net als in Rust komt het uit dezelfde bron als de foto zelf.
+    return ids.map((itemId) => ({ itemId, eventId: itemId.replace(/-i\d+$/, '') }))
   }
   async getEvent(eventId: string): Promise<EventDetail | null> {
     const summary = this.findEvent(eventId)
@@ -1269,6 +1294,27 @@ class MockBackend implements Backend {
     else this.frames.delete(itemId)
   }
 
+  async getScopeSongs(
+    scopeKind: 'all' | 'year' | 'event',
+    scopeId: string | null,
+  ): Promise<ScreensaverPhoto[]> {
+    const eventIds: string[] = []
+    if (scopeKind === 'event' && scopeId) eventIds.push(scopeId)
+    else if (scopeKind === 'year' && scopeId) {
+      for (const ev of this.details.get(scopeId)?.events ?? []) eventIds.push(ev.id)
+    } else {
+      for (const d of this.details.values()) for (const ev of d.events) eventIds.push(ev.id)
+    }
+    const out: ScreensaverPhoto[] = []
+    for (const eventId of eventIds) {
+      const detail = await this.getEvent(eventId)
+      for (const it of detail?.items ?? []) {
+        if (it.itemType === 'song' && it.media) out.push({ itemId: it.id, eventId })
+      }
+    }
+    return out
+  }
+
   async pickAudioFile(): Promise<string | null> {
     // Geen bestandskiezer in de browser: doe alsof er een bestand gekozen is,
     // zodat de dialoog-flow wel te doorlopen is.
@@ -1375,7 +1421,9 @@ class MockBackend implements Backend {
     const isSong = /-(s\d+|a\d+|song\d+)$/.test(itemId)
     if (!isSong) return ''
     const sampleRate = 8000
-    const frames = sampleRate * 2
+    // 30 seconden: lang genoeg om een memory-wissel in de diavoorstelling te zien
+    // zonder dat het fragment er tussendoor afloopt.
+    const frames = sampleRate * 30
     const dataLen = frames // 8-bit mono
     const buf = new Uint8Array(44 + dataLen)
     const view = new DataView(buf.buffer)

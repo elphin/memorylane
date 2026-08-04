@@ -1171,7 +1171,15 @@ pub fn search(state: State<VaultService>, query: String) -> Result<Vec<SearchRes
     state.with_conn(|c| index::search(c, &query))
 }
 
-/// Foto-item-ids voor de screensaver: scope ("all"/"year"/"event") + tag-filter.
+/// Een foto voor de diavoorstelling, met de memory waar hij bij hoort.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScreensaverPhoto {
+    pub item_id: String,
+    pub event_id: String,
+}
+
+/// Foto's voor de screensaver: scope ("all"/"year"/"event") + tag-filter.
 #[tauri::command]
 pub fn get_screensaver_photos(
     state: State<VaultService>,
@@ -1179,10 +1187,29 @@ pub fn get_screensaver_photos(
     scope_id: Option<String>,
     include: Vec<String>,
     exclude: Vec<String>,
-) -> Result<Vec<String>, String> {
-    state.with_conn(|c| {
+) -> Result<Vec<ScreensaverPhoto>, String> {
+    let rows = state.with_conn(|c| {
         index::list_screensaver_photos(c, &scope_kind, scope_id.as_deref(), &include, &exclude)
-    })
+    })?;
+    Ok(rows
+        .into_iter()
+        .map(|(item_id, event_id)| ScreensaverPhoto { item_id, event_id })
+        .collect())
+}
+
+/// Liedjes binnen een scope, voor de afspeellijst-stand van de diavoorstelling.
+#[tauri::command]
+pub fn get_scope_songs(
+    state: State<VaultService>,
+    scope_kind: String,
+    scope_id: Option<String>,
+) -> Result<Vec<ScreensaverPhoto>, String> {
+    let rows =
+        state.with_conn(|c| index::list_scope_songs(c, &scope_kind, scope_id.as_deref()))?;
+    Ok(rows
+        .into_iter()
+        .map(|(item_id, event_id)| ScreensaverPhoto { item_id, event_id })
+        .collect())
 }
 
 #[tauri::command]

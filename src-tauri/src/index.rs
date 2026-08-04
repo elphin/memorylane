@@ -675,10 +675,13 @@ pub fn list_screensaver_photos(
     scope_id: Option<&str>,
     include: &[String],
     exclude: &[String],
-) -> rusqlite::Result<Vec<String>> {
+) -> rusqlite::Result<Vec<(String, String)>> {
     use rusqlite::types::Value;
+    // Ook het event-id: de diavoorstelling kan de foto's dan per memory bij elkaar
+    // houden, wat nodig is om de muziek de memory te laten volgen. Zonder dat is
+    // elke foto los zand en zou een liedje elke paar seconden wisselen.
     let mut sql = String::from(
-        "SELECT i.id FROM items i JOIN events e ON i.event_id = e.id \
+        "SELECT i.id, i.event_id FROM items i JOIN events e ON i.event_id = e.id \
          WHERE i.item_type = 'photo' AND i.synthetic = 0",
     );
     // Bind-volgorde volgt exact de SQL-opbouw: [scope_id?] [include...] [exclude...].
@@ -716,7 +719,56 @@ pub fn list_screensaver_photos(
     }
     sql.push_str(" ORDER BY (i.timestamp_ms IS NULL), i.timestamp_ms, i.slug");
     let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map(rusqlite::params_from_iter(binds), |r| r.get::<_, String>(0))?;
+    let rows = stmt.query_map(rusqlite::params_from_iter(binds), |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+    })?;
+    rows.collect()
+}
+
+/// Alle AFSPEELBARE liedjes binnen een scope, chronologisch, met hun memory.
+///
+/// Zelfde scope-semantiek als `list_screensaver_photos`. Bestaat om twee redenen:
+/// - De diavoorstelling moet in de stand "één afspeellijst" weten wélke liedjes
+///   er zijn. Dat via `get_event` per memory ophalen is bij scope "alles"
+///   honderden IPC-rondjes -- de muziek begint dan veel later dan de eerste foto.
+/// - Een memory die de jaargrens kruist staat in twee jaren; via `get_event` per
+///   jaar zou zijn liedjes dus dubbel in de rij zetten. Eén query kan dat niet.
+///
+/// Alleen liedjes MET een lokaal bestand: een link-only liedje is in de app niet
+/// afspeelbaar en hoort dus niet in een afspeellijst.
+pub fn list_scope_songs(
+    conn: &Connection,
+    scope_kind: &str,
+    scope_id: Option<&str>,
+) -> rusqlite::Result<Vec<(String, String)>> {
+    use rusqlite::types::Value;
+    let mut sql = String::from(
+        "SELECT i.id, i.event_id FROM items i JOIN events e ON i.event_id = e.id \
+         WHERE i.item_type = 'song' AND i.media IS NOT NULL AND i.synthetic = 0",
+    );
+    let mut binds: Vec<Value> = Vec::new();
+    match scope_kind {
+        "year" => match scope_id {
+            Some(id) => {
+                sql.push_str(" AND e.year_id = ?");
+                binds.push(Value::Text(id.to_string()));
+            }
+            None => return Ok(Vec::new()),
+        },
+        "event" => match scope_id {
+            Some(id) => {
+                sql.push_str(" AND i.event_id = ?");
+                binds.push(Value::Text(id.to_string()));
+            }
+            None => return Ok(Vec::new()),
+        },
+        _ => {}
+    }
+    sql.push_str(" ORDER BY (i.timestamp_ms IS NULL), i.timestamp_ms, i.slug");
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(rusqlite::params_from_iter(binds), |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+    })?;
     rows.collect()
 }
 
@@ -1346,15 +1398,57 @@ mod tests {
         m
     }
 
+    /// Alleen de item-ids, voor asserts die niet over de memory-koppeling gaan.
+    fn ids(rows: Vec<(String, String)>) -> Vec<String> {
+        rows.into_iter().map(|(id, _)| id).collect()
+    }
+
+    /// De diavoorstelling moet per foto weten uit welke memory hij komt: daarop
+    /// groepeert hij, en daarop volgt de muziek.
+    #[test]
+    fn screensaver_photos_carry_their_event() {
+        let mut conn = open_in_memory().unwrap();
+        load(&mut conn, &screensaver_model()).unwrap();
+        let all = list_screensaver_photos(&conn, "all", None, &[], &[]).unwrap();
+        let itc = all.iter().find(|(id, _)| id == "itc").expect("itc");
+        assert_eq!(itc.1, "ev2", "itc hoort bij ev2");
+        let it1 = all.iter().find(|(id, _)| id == "it1").expect("it1");
+        assert_eq!(it1.1, "ev1");
+        assert!(all.iter().all(|(_, ev)| !ev.is_empty()), "elke foto heeft een memory");
+    }
+
+    /// De afspeellijst-stand van de diavoorstelling: alleen liedjes MET een
+    /// bestand, met hun memory erbij, en netjes op scope gefilterd.
+    #[test]
+    fn scope_songs_only_playable_ones() {
+        let mut m = sample_model();
+        m.items.push(song("s_file", Some("bl.mp3"), None, Some("The Weeknd")));
+        m.items.push(song("s_link", None, None, Some("Alleen een link")));
+        let mut conn = open_in_memory().unwrap();
+        load(&mut conn, &m).unwrap();
+
+        let all = list_scope_songs(&conn, "all", None).unwrap();
+        assert_eq!(all.len(), 1, "alleen het liedje met een bestand: {all:?}");
+        assert_eq!(all[0].0, "s_file");
+        assert_eq!(all[0].1, "ev1", "de memory komt mee");
+
+        assert_eq!(list_scope_songs(&conn, "event", Some("ev1")).unwrap().len(), 1);
+        assert!(list_scope_songs(&conn, "event", Some("ev-anders")).unwrap().is_empty());
+        assert_eq!(list_scope_songs(&conn, "year", Some("y2024")).unwrap().len(), 1);
+        assert!(list_scope_songs(&conn, "year", None).unwrap().is_empty(), "geen id -> leeg");
+        // Een foto is geen liedje.
+        assert!(all.iter().all(|(id, _)| id != "it1"));
+    }
+
     #[test]
     fn screensaver_scope_and_synthetic() {
         let mut conn = open_in_memory().unwrap();
         load(&mut conn, &screensaver_model()).unwrap();
-        let all = list_screensaver_photos(&conn, "all", None, &[], &[]).unwrap();
+        let all = ids(list_screensaver_photos(&conn, "all", None, &[], &[]).unwrap());
         assert_eq!(all, vec!["it1", "ita", "itb", "itc"]); // synthetisch weggelaten, chronologisch
-        let y = list_screensaver_photos(&conn, "year", Some("y2024"), &[], &[]).unwrap();
+        let y = ids(list_screensaver_photos(&conn, "year", Some("y2024"), &[], &[]).unwrap());
         assert_eq!(y, vec!["it1", "ita", "itb"]);
-        let e = list_screensaver_photos(&conn, "event", Some("ev2"), &[], &[]).unwrap();
+        let e = ids(list_screensaver_photos(&conn, "event", Some("ev2"), &[], &[]).unwrap());
         assert_eq!(e, vec!["itc"]);
     }
 
@@ -1364,14 +1458,15 @@ mod tests {
         load(&mut conn, &screensaver_model()).unwrap();
         let inc = |t: &[&str]| t.iter().map(|s| (*s).into()).collect::<Vec<String>>();
         // include any-of "vakantie" → ita + itc (it1 leeg, itb familie, syn uit).
-        let v = list_screensaver_photos(&conn, "all", None, &inc(&["vakantie"]), &[]).unwrap();
+        let v = ids(list_screensaver_photos(&conn, "all", None, &inc(&["vakantie"]), &[]).unwrap());
         assert_eq!(v, vec!["ita", "itc"]);
         // exclude "familie" binnen y2024 → it1 + ita (itb valt af).
-        let v = list_screensaver_photos(&conn, "year", Some("y2024"), &[], &inc(&["familie"])).unwrap();
+        let v = ids(list_screensaver_photos(&conn, "year", Some("y2024"), &[], &inc(&["familie"])).unwrap());
         assert_eq!(v, vec!["it1", "ita"]);
         // volgorde-kritisch: scope + include + exclude samen → itc (ita heeft 'strand').
-        let v = list_screensaver_photos(&conn, "all", None, &inc(&["vakantie"]), &inc(&["strand"]))
-            .unwrap();
+        let v =
+            ids(list_screensaver_photos(&conn, "all", None, &inc(&["vakantie"]), &inc(&["strand"]))
+                .unwrap());
         assert_eq!(v, vec!["itc"]);
     }
 
@@ -1563,7 +1658,7 @@ mod tests {
         let y = &list_years(&conn).unwrap()[0];
         assert!(!y.photo_ids.contains(&"s1".to_string()));
         assert!(!y.featured_ids.contains(&"s1".to_string()));
-        let dia = list_screensaver_photos(&conn, "all", None, &[], &[]).unwrap();
+        let dia = ids(list_screensaver_photos(&conn, "all", None, &[], &[]).unwrap());
         assert!(!dia.contains(&"s1".to_string()));
         let detail = get_year(&conn, "y2024").unwrap().unwrap();
         assert!(detail.events.iter().all(|e| !e.photo_ids.contains(&"s1".to_string())));

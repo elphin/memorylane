@@ -14,7 +14,7 @@ import type {
   SearchResult,
   YearSummary,
 } from '../lib/backend'
-import { createBackend, soundLabel } from '../lib/backend'
+import { createBackend, soundLabel, type ScreensaverPhoto } from '../lib/backend'
 import { isSound } from '../render/scenes/types'
 import { RenderEngine } from '../render/core/engine'
 import { loadThemeFonts } from '../theme/fonts'
@@ -108,6 +108,13 @@ interface Settings {
    * mensen precies de reden om een app weg te zetten. Handmatig starten kan
    * altijd, ook op 'nooit'. */
   musicAuto: 'nooit' | 'diavoorstelling' | 'diavoorstelling-en-memory'
+  /** Hoe muziek zich in een diavoorstelling gedraagt.
+   * - `per-memory`: de foto's blijven per memory bij elkaar en de muziek volgt de
+   *   memory. De koppeling waar de hele feature om draait.
+   * - `afspeellijst`: alle liedjes binnen wat je afspeelt achter elkaar, los van
+   *   welke foto er staat. De bestaande foto-shuffle blijft ongewijzigd.
+   * - `alleen-memory`: muziek alleen bij de diavoorstelling van één memory. */
+  musicSlideshow: 'per-memory' | 'afspeellijst' | 'alleen-memory'
   /** Actief thema (id uit de thema-registry): kleuren/fonts van de tijdlijn. */
   themeId: string
   /** Weergave waarin een event-canvas standaard opent. */
@@ -174,6 +181,7 @@ const DEFAULT_SETTINGS: Settings = {
   musicLookup: true,
   musicVolume: 60,
   musicAuto: 'diavoorstelling',
+  musicSlideshow: 'per-memory',
   themeId: 'classic-dark',
   defaultLayout: 'custom',
   slideshow: true,
@@ -413,6 +421,20 @@ export function AppShell() {
   // auto-start werd dat óók als "automatisch" afgekapt bij het verlaten -- precies
   // de belofte die de instelling doet, gebroken.
   const autoStartedIdRef = useRef<string | null>(null)
+  // Scope waarmee de lopende diavoorstelling gestart is; stuurt de stand
+  // 'alleen-memory'.
+  const diaScopeRef = useRef<'all' | 'year' | 'event'>('all')
+  // Afspeellijst: de liedjes (met hun memory) + waar we zijn.
+  const diaQueueRef = useRef<ScreensaverPhoto[]>([])
+  const diaQueueAtRef = useRef(0)
+  // Generatie van de lopende diavoorstelling. Elke start/sluiting hoogt 'm op, en
+  // elke async stap controleert 'm ná zijn awaits -- zodat muziek nooit begint
+  // nadat de diavoorstelling al gesloten is.
+  const diaGenRef = useRef(0)
+  // WELK liedje de diavoorstelling zelf startte. Los van `autoStartedIdRef`:
+  // anders zou het sluiten van een diavoorstelling de muziek stoppen die al
+  // speelde toen je 'm startte.
+  const diaStartedIdRef = useRef<string | null>(null)
   // Gestylede bevestigings-dialoog voor destructieve acties (i.p.v. het
   // stijlbrekende native window.confirm).
   const [confirmBox, setConfirmBox] = useState<null | {
@@ -499,7 +521,11 @@ export function AppShell() {
     dir: 'out',
   })
   // Screensaver: null = dicht, anders de (context-afhankelijke) foto-ids.
-  const [screensaverIds, setScreensaverIds] = useState<string[] | null>(null)
+  const [screensaverIds, setScreensaverIds] = useState<ScreensaverPhoto[] | null>(null)
+  // Of deze diavoorstelling de foto's per memory groepeert. Vastgelegd bij het
+  // starten: de Screensaver schudt maar één keer, dus een later gewijzigde
+  // instelling mag de lopende volgorde niet halverwege omgooien.
+  const [screensaverGrouped, setScreensaverGrouped] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
   // Vensterstand-toetsen. Beide raken ALLEEN het OS-venster, nooit de app-knoppen —
   // die staan puur op de kijkmodus (E) + instellingen. F11 = chromeless volledig
@@ -557,20 +583,24 @@ export function AppShell() {
     auto = false,
     /** De memory waarvoor de auto-start bedoeld was. */
     forEvent?: string,
-  ): Promise<void> => {
+    /** True als er daadwerkelijk muziek gestart is. De aanroeper mag pas ná een
+     * geslaagde start onthouden dat híj het was -- anders blijft er een id staan
+     * dat nooit geklonken heeft. */
+  ): Promise<boolean> => {
     const backend = backendRef.current
-    if (!backend || !item || !item.media) return
+    if (!backend || !item || !item.media) return false
     const { title, artist } = soundLabel(item)
     const src = await backend.mediaUrl(item.id).catch(() => '')
-    if (!src) return
+    if (!src) return false
     // `mediaUrl` doet meerdere awaits (waaronder een dynamische import), dus er
     // zit echt tijd tussen. Ben je die memory intussen alweer uit, dan mag er
     // geen muziek meer beginnen -- die zou dan op de jaar- of lifeline-weergave
     // starten én als "handmatig" gelabeld staan, en dus nergens meer stoppen.
-    if (auto && (currentEventRef.current !== forEvent || levelRef.current !== 'event')) return
+    if (auto && (currentEventRef.current !== forEvent || levelRef.current !== 'event')) return false
     autoStartedIdRef.current = auto ? item.id : null
     setMusicPaused(false)
     setNowPlaying({ itemId: item.id, title, artist, src })
+    return true
   }
 
   // Video aan het woord: muziek pauzeren en na afloop hervatten. `musicResumeRef`
@@ -600,11 +630,86 @@ export function AppShell() {
     if (first) void playSong(first, true, eventId)
   }
 
+  /** Welke muziek-stand geldt er nu voor de diavoorstelling? `null` = geen muziek.
+   *
+   * Hier komen twee instellingen samen: `musicAuto` bepaalt óf er automatisch
+   * geluid mag klinken, `musicSlideshow` bepaalt hóe. Staat de muziek uit, dan
+   * verandert er ook niets aan de diavoorstelling zelf -- de bestaande
+   * foto-shuffle blijft dan bewijsbaar ongemoeid. */
+  const musicForSlideshow = (): null | 'per-memory' | 'afspeellijst' => {
+    const st = settingsRef.current
+    if (st.musicAuto === 'nooit') return null
+    if (st.musicSlideshow === 'alleen-memory') {
+      // Alleen zinvol bij de diavoorstelling van één memory; vanaf een jaar of
+      // vanaf alles blijft het stil.
+      return diaScopeRef.current === 'event' ? 'per-memory' : null
+    }
+    return st.musicSlideshow === 'afspeellijst' ? 'afspeellijst' : 'per-memory'
+  }
+
+  /** Mogen de foto's per memory gegroepeerd worden?
+   *
+   * Strikter dan `musicForSlideshow()`: dit verandert de VOLGORDE van je
+   * diavoorstelling, en dat mag alleen als je daar zelf voor koos ('per-memory')
+   * én er in deze scope daadwerkelijk muziek te horen valt. Zonder die laatste
+   * eis zou iedereen op de dag van uitrol een andere volgorde krijgen zonder één
+   * noot te horen -- vrijwel geen enkele vault heeft dan al een liedje. */
+  const groupSlideshowPhotos = (hasSongs: boolean): boolean =>
+    hasSongs &&
+    settingsRef.current.musicAuto !== 'nooit' &&
+    settingsRef.current.musicSlideshow === 'per-memory'
+
+  /** Start het eerste liedje van een memory tijdens de diavoorstelling.
+   *
+   * `gen` is de generatie van de lopende diavoorstelling: sluit je 'm tijdens een
+   * van de awaits, dan mag er geen muziek meer beginnen. Zonder die controle kan
+   * er geluid starten wanneer er allang geen diavoorstelling meer is -- en dat
+   * blijft dan hangen, want niets stopt het nog. */
+  const playSlideshowMemory = async (eventId: string, gen: number): Promise<void> => {
+    const backend = backendRef.current
+    if (!backend || musicForSlideshow() !== 'per-memory') return
+    const detail = await backend.getEvent(eventId).catch(() => null)
+    if (gen !== diaGenRef.current) return
+    const songs = (detail?.items ?? []).filter((i) => i.itemType === 'song' && i.media)
+    // De liedjes van déze memory worden de wachtrij: loopt het eerste af terwijl
+    // de foto's nog draaien, dan gaat de volgende verder in plaats van stilte.
+    diaQueueRef.current = songs.map((i) => ({ itemId: i.id, eventId }))
+    diaQueueAtRef.current = 0
+    const first = songs[0]
+    // Al aan het spelen? Dan niet opnieuw beginnen; wel wisselen bij een ánder liedje.
+    if (!first || nowPlayingRef.current?.itemId === first.id) return
+    if (await playSong(first)) diaStartedIdRef.current = first.id
+  }
+
+  /** Speel de liedjes binnen de scope achter elkaar, los van de foto's. */
+  const playSlideshowPlaylist = async (
+    songs: ScreensaverPhoto[],
+    gen: number,
+  ): Promise<void> => {
+    diaQueueRef.current = songs
+    diaQueueAtRef.current = 0
+    await playFromDiaQueue(gen)
+  }
+
+  /** Start het volgende liedje uit de afspeellijst (of laat het stil als hij op is). */
+  const playFromDiaQueue = async (gen: number): Promise<void> => {
+    const backend = backendRef.current
+    const entry = diaQueueRef.current[diaQueueAtRef.current]
+    if (!backend || !entry) return
+    // Het item komt uit de memory die de query meegaf -- geen id-heuristiek. Echte
+    // item-ids zijn UUIDs, dus een event-id eruit afleiden werkt alleen in de mock.
+    const detail = await backend.getEvent(entry.eventId).catch(() => null)
+    const item = detail?.items.find((i) => i.id === entry.itemId)
+    if (!item || gen !== diaGenRef.current) return
+    if (await playSong(item)) diaStartedIdRef.current = item.id
+  }
+
   const stopMusic = (): void => {
     setNowPlaying(null)
     setMusicPaused(false)
     musicResumeRef.current = false
     autoStartedIdRef.current = null
+    diaStartedIdRef.current = null
   }
   stopMusicRef.current = stopMusic
 
@@ -2447,7 +2552,21 @@ export function AppShell() {
         return
       }
       setSettingsOpen(false)
+      diaScopeRef.current = scopeKind
+      const gen = ++diaGenRef.current
+      diaQueueRef.current = []
+      diaStartedIdRef.current = null
+      // Welke liedjes zitten er in deze scope? Eén query -- niet een `getEvent`
+      // per memory, want dat zijn bij "alles" honderden IPC-rondjes en het telt
+      // een memory die de jaargrens kruist bovendien dubbel.
+      const mode = musicForSlideshow()
+      const songs = mode ? await backend.getScopeSongs(scopeKind, scopeId).catch(() => []) : []
+      if (gen !== diaGenRef.current) return
+      setScreensaverGrouped(groupSlideshowPhotos(songs.length > 0))
       setScreensaverIds(ids)
+      // In de 'afspeellijst'-stand hangt de muziek niet aan de foto's: dan begint
+      // hij meteen met het eerste liedje binnen de scope.
+      if (mode === 'afspeellijst') void playSlideshowPlaylist(songs, gen)
     } catch (e) {
       setToast(String(e))
     }
@@ -3008,11 +3127,25 @@ export function AppShell() {
       </AnimatePresence>
       {screensaverIds && (
         <Screensaver
-          photoIds={screensaverIds}
+          photos={screensaverIds}
+          // Alleen groeperen als de muziek de memory ook echt volgt. Staat de
+          // muziek uit of op 'afspeellijst', dan blijft de bestaande
+          // foto-shuffle exact zoals hij was -- de gedragswijziging hangt aan een
+          // eigen keuze, niet aan het bestaan van deze feature.
+          groupByMemory={screensaverGrouped}
+          onMemoryChange={(eventId) => void playSlideshowMemory(eventId, diaGenRef.current)}
           thumb={(id, size) => backendRef.current!.thumb(id, size)}
           speedMs={settings.diaSpeed * 1000}
           mode={settings.diaMode}
-          onClose={() => setScreensaverIds(null)}
+          onClose={() => {
+            diaGenRef.current++ // annuleert alles wat nog in de lucht hangt
+            setScreensaverIds(null)
+            // Alleen muziek die de DIAVOORSTELLING zelf startte stopt mee. Wat er
+            // al speelde toen je 'm startte, blijft gewoon doorlopen.
+            if (nowPlayingRef.current?.itemId === diaStartedIdRef.current) stopMusic()
+            diaStartedIdRef.current = null
+            diaQueueRef.current = []
+          }}
         />
       )}
       {/* Een video en muziek mogen elkaar niet overstemmen: zodra er een video
@@ -3034,7 +3167,20 @@ export function AppShell() {
         volume={settings.musicVolume}
         paused={musicPaused}
         hidden={settings.viewMode || anyDialog}
-        onEnded={stopMusic}
+        onEnded={() => {
+          // Loopt er een diavoorstelling, dan gaat hij door naar het volgende
+          // nummer in de wachtrij -- of dat nu de afspeellijst van de hele scope
+          // is of de liedjes van de memory die nu in beeld staat. Anders is het
+          // liedje simpelweg afgelopen.
+          if (screensaverIds && diaQueueRef.current.length > 0) {
+            diaQueueAtRef.current += 1
+            if (diaQueueAtRef.current < diaQueueRef.current.length) {
+              void playFromDiaQueue(diaGenRef.current)
+              return
+            }
+          }
+          stopMusic()
+        }}
         onTogglePause={() => setMusicPaused((p) => !p)}
         onStop={stopMusic}
       />
@@ -4248,6 +4394,29 @@ function SettingsPanel({
                 'Handmatig starten kan altijd, ook op "nooit": open het liedje en gebruik de afspeelknop ' +
                   'of de spatiebalk. Muziek die vanzelf begon stopt ook vanzelf als je de memory verlaat; ' +
                   'wat je zelf aanzette blijft doorspelen.',
+              )}
+              {subhead('Muziek in een diavoorstelling')}
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                {([
+                  ['per-memory', "Foto's per memory groeperen"],
+                  ['afspeellijst', 'Eén afspeellijst'],
+                  ['alleen-memory', 'Alleen bij één memory'],
+                ] as const).map(([id, label]) => (
+                  <button
+                    key={id}
+                    onClick={() => onChange({ musicSlideshow: id })}
+                    style={segOn(settings.musicSlideshow === id)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              {desc(
+                settings.musicSlideshow === 'per-memory'
+                  ? 'De diavoorstelling houdt de foto’s van één memory bij elkaar en schudt de memories in plaats van de losse foto’s. Zo volgt de muziek de herinnering. Dit verandert dus ook de volgorde van je diavoorstelling — maar alleen zolang er muziek mag klinken.'
+                  : settings.musicSlideshow === 'afspeellijst'
+                    ? 'De liedjes spelen achter elkaar door, los van welke foto er staat. Je diavoorstelling blijft precies zoals hij was.'
+                    : 'Muziek klinkt alleen als je de diavoorstelling van één memory start — daar hoort het liedje vanzelf bij de foto’s. Vanaf een jaar of vanaf alles blijft het stil.',
               )}
               {subhead('Geluid')}
               <div style={{ fontSize: 13, color: u.textMuted, margin: '4px 0 4px' }}>

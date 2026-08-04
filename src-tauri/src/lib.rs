@@ -180,6 +180,7 @@ pub fn run() {
             commands::import_photos,
             commands::search,
             commands::get_screensaver_photos,
+            commands::get_scope_songs,
             commands::get_index_errors,
             inbox::inbox_pair,
             inbox::inbox_status,
