@@ -86,11 +86,13 @@ impl VaultService {
         item_id: &str,
         tier: Tier,
     ) -> Result<PathBuf, String> {
+        // `item_thumb_ref`, niet `item_media_ref`: een liedje toont zijn albumhoes
+        // (`cover`), en een geluidsitem zonder hoesje levert bewust niets op.
         let (folder, media) = {
             let conn = self.conn.lock().map_err(lock_err)?;
-            index::item_media_ref(&conn, item_id)
+            index::item_thumb_ref(&conn, item_id)
                 .map_err(|e| e.to_string())?
-                .ok_or_else(|| format!("geen media voor item {item_id}"))?
+                .ok_or_else(|| format!("geen afbeelding voor item {item_id}"))?
         };
 
         let vault = {
@@ -197,7 +199,7 @@ impl VaultService {
         body: Option<&str>,
     ) -> Result<(), String> {
         let vault = self.current_vault()?;
-        let (_event_id, folder, slug, _media) = {
+        let index::ItemFiles { folder_path: folder, slug, .. } = {
             let conn = self.conn.lock().map_err(lock_err)?;
             index::item_files(&conn, item_id)
                 .map_err(|e| e.to_string())?
@@ -217,7 +219,7 @@ impl VaultService {
     /// Zie `place_display` voor de twee vormen die `place:` kan hebben.
     pub fn get_item_metadata(&self, item_id: &str) -> Result<ItemMetadata, String> {
         let vault = self.current_vault()?;
-        let (_event_id, folder, slug, media) = {
+        let index::ItemFiles { folder_path: folder, slug, media, .. } = {
             let conn = self.conn.lock().map_err(lock_err)?;
             index::item_files(&conn, item_id)
                 .map_err(|e| e.to_string())?
@@ -270,7 +272,7 @@ impl VaultService {
         tags: &[String],
     ) -> Result<(), String> {
         let vault = self.current_vault()?;
-        let (_event_id, folder, slug, _media) = {
+        let index::ItemFiles { folder_path: folder, slug, .. } = {
             let conn = self.conn.lock().map_err(lock_err)?;
             index::item_files(&conn, item_id)
                 .map_err(|e| e.to_string())?
@@ -288,7 +290,7 @@ impl VaultService {
     /// bewerkbaar bestand en worden geweigerd — zelfde gedrag als `update_item`.
     pub fn set_item_frame(&self, item_id: &str, frame: Option<&str>) -> Result<(), String> {
         let vault = self.current_vault()?;
-        let (_event_id, folder, slug, _media) = {
+        let index::ItemFiles { folder_path: folder, slug, .. } = {
             let conn = self.conn.lock().map_err(lock_err)?;
             index::item_files(&conn, item_id)
                 .map_err(|e| e.to_string())?
@@ -531,7 +533,7 @@ impl VaultService {
     /// Verwijdert een item naar de prullenbak (`.md` + media), dan herindexeren.
     pub fn delete_item(&self, item_id: &str) -> Result<(), String> {
         let vault = self.current_vault()?;
-        let (event_id, folder, slug, media) = {
+        let index::ItemFiles { event_id, folder_path: folder, slug, media, cover } = {
             let conn = self.conn.lock().map_err(lock_err)?;
             index::item_files(&conn, item_id)
                 .map_err(|e| e.to_string())?
@@ -540,16 +542,16 @@ impl VaultService {
         if let Some(slug) = slug {
             writer::trash_file(&vault, &format!("{folder}/{slug}.md"))?;
         }
-        if let Some(media) = media {
-            // Trash het mediabestand alleen als geen ánder item ernaar verwijst.
-            // Door de v1-duplicate-`.md`-bug kunnen twee items dezelfde media
-            // delen; dan zou trashen een overlevend item breken.
+        // Media én hoesje. Trash een bestand alleen als geen ánder item ernaar
+        // verwijst: door de v1-duplicate-`.md`-bug kunnen twee items dezelfde
+        // media delen, en twee liedjes kunnen dezelfde albumhoes gebruiken.
+        for file in [media, cover].into_iter().flatten() {
             let shared = {
                 let conn = self.conn.lock().map_err(lock_err)?;
-                index::media_shared(&conn, &event_id, &media, item_id).map_err(|e| e.to_string())?
+                index::media_shared(&conn, &event_id, &file, item_id).map_err(|e| e.to_string())?
             };
             if !shared {
-                writer::trash_file(&vault, &format!("{folder}/{media}"))?;
+                writer::trash_file(&vault, &format!("{folder}/{file}"))?;
             }
         }
         self.rescan()?;

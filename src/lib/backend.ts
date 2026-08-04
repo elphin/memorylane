@@ -96,6 +96,11 @@ export interface Item {
   media?: string
   url?: string
   caption?: string
+  /** Artiest van een liedje (alleen bij `song`). */
+  artist?: string
+  /** Bestandsnaam van een aparte afbeelding die dit item representeert
+   * (albumhoes). Zie `thumbRef` voor wanneer hij `media` vervangt. */
+  cover?: string
   bodyText?: string
   slug?: string
   /** Tijdstip (ms) voor chronologische sortering (grid-layout). */
@@ -103,6 +108,26 @@ export interface Item {
   /** Frame-stijl van een foto/video ('plain'/'polaroid'/'rounded'/'none').
    * Afwezig = erven van het thema. */
   frame?: string
+}
+
+/** Audio-extensies. Moet gelijk blijven aan `ItemType::from_extension` in
+ * `model.rs` — zie `thumbRef`. */
+const AUDIO_EXT = new Set(['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac'])
+
+/** De afbeelding die dit item op het scherm representeert, of `null` als het er
+ * geen heeft. Spiegelt `index::item_thumb_ref` in Rust: `cover` wint van `media`,
+ * en een bestand met een audio-extensie telt niet mee (een mp3 levert geen plaatje op).
+ *
+ * Beslist op de EXTENSIE van het gekozen bestand, niet op het itemtype — precies
+ * zoals Rust. Op het itemtype beslissen wijkt af bij een `cover:` met een
+ * audio-extensie en bij een foto-item met een mp3 als media: dan zegt de frontend
+ * "er is een plaatje" terwijl de backend weigert, en blijft de textuur-cache eeuwig
+ * herproberen terwijl de placeholder-kaart nooit verschijnt. */
+export function thumbRef(item: Item): string | null {
+  const file = item.cover ?? item.media ?? null
+  if (!file) return null
+  const ext = file.slice(file.lastIndexOf('.') + 1).toLowerCase()
+  return AUDIO_EXT.has(ext) ? null : file
 }
 
 export interface CanvasItem {

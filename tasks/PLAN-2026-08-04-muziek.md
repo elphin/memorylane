@@ -151,8 +151,18 @@ happenedAt: 2019-07-14
 
 **Gate:** `cargo test`, `cargo clippy --all-targets`, `npm run build`.
 
+> **Verschoven naar 1a bij de bouw** (commit-notitie): het claimen van `cover` in de scanner,
+> `item_files`/`media_shared`/`delete_item` en de bijbehorende tests staan hieronder nog beschreven
+> maar zijn al in 1a gedaan. Reden: zonder de claim zou elk hoesje één fase lang als synthetische
+> fototegel in de index staan, en `ItemFiles` moest toch al naar een named struct. **1b is dus nog
+> alleen `song_markdown` + `import_song` + `set_song_meta`.**
+
 ### Fase 1b — Schrijfpad: writer + bestandsbeheer van het hoesje
 
+- **Nooit een lege string in `cover` schrijven.** `Parsed::get_str` filtert lege waarden weg, dus
+  vandaag kán de kolom geen `""` bevatten — en daar hangt de gelijkheid tussen `item_thumb_ref` en
+  `thumbRef` aan: bij `cover: ""` geeft Rust een rij terug en TS `null`. Zodra de writer `cover`
+  zet, moet leeg dus `None` worden, geen `""`.
 - `song_markdown()` + `import_song()` (kopieert audio en/of hoesje de memory-map in). **Eigen
   schrijfpad**, niet `import_media_inner`: die kiest zijn type via `media_type_for_ext` en zou een
   mp3 `type: audio` geven.

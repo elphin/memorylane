@@ -162,6 +162,8 @@ fn scan_loose_media_event(
             media: Some(media.clone()),
             url: None,
             caption: None,
+            artist: None,
+            cover: None,
             happened_at: None,
             timestamp_ms: event_start_ms,
             place: None,
@@ -289,6 +291,7 @@ fn scan_event(root: &Path, event_path: &Path, year: &Year, model: &mut VaultMode
     let event_start_ms = to_millis(&start_at);
     let mut parsed_items: Vec<ParsedItem> = Vec::new();
     let mut media_files: Vec<String> = Vec::new();
+    let mut all_files: Vec<String> = Vec::new();
 
     for entry in entries {
         let path = entry.path();
@@ -300,8 +303,17 @@ fn scan_event(root: &Path, event_path: &Path, year: &Year, model: &mut VaultMode
             if let Some(pi) = read_item(root, &path, &name, &event, event_start_ms, model) {
                 parsed_items.push(pi);
             }
-        } else if is_media_file(&name) {
-            media_files.push(name);
+        } else {
+            // `all_files` is alles wat er ligt; `media_files` alleen wat tot een
+            // synthetisch item gepromoveerd mag worden. Het verschil telt: de
+            // `image`-crate raadt het formaat uit de inhoud, dus een handgeschreven
+            // `media: scan.tiff` levert een werkende thumbnail op terwijl tiff niet
+            // in `is_media_file` staat. Dat bestand bestaat dus wél, en er mag geen
+            // "verwijst naar ontbrekend"-waarschuwing over komen.
+            if is_media_file(&name) {
+                media_files.push(name.clone());
+            }
+            all_files.push(name);
         }
     }
 
@@ -310,23 +322,26 @@ fn scan_event(root: &Path, event_path: &Path, year: &Year, model: &mut VaultMode
     let kept = dedupe_items(parsed_items, &event.id, &folder_path, model);
 
     // Welke media zijn geclaimd door een overlevend item?
+    // Ook `cover` telt als geclaimd: een albumhoes hoort bij zijn liedje en mag
+    // niet daarnaast nog eens als losse fototegel opduiken.
     let claimed: std::collections::HashSet<String> = kept
         .iter()
-        .filter_map(|it| it.media.clone())
+        .flat_map(|it| [it.media.clone(), it.cover.clone()])
+        .flatten()
         .map(|m| m.to_ascii_lowercase())
         .collect();
 
     for it in &kept {
-        // Media-referentie die niet op schijf staat → waarschuwen.
-        if let Some(media) = &it.media {
-            if !media_files
-                .iter()
-                .any(|m| m.eq_ignore_ascii_case(media))
-            {
+        // Verwijzingen die niet op schijf staan → waarschuwen. Ook `cover`: dat is
+        // de PRIMAIRE thumbnailbron, dus een typefout daarin levert stilzwijgend
+        // geen plaatje op als we er niet over melden.
+        for (file, what) in [(&it.media, "mediabestand"), (&it.cover, "hoesje")] {
+            let Some(file) = file else { continue };
+            if !all_files.iter().any(|m| m.eq_ignore_ascii_case(file)) {
                 model.errors.push(IndexError {
                     path: format!("{folder_path}/{}", it.slug.clone().unwrap_or_default()),
                     severity: Severity::Warning,
-                    reason: format!("verwijst naar ontbrekend mediabestand '{media}'"),
+                    reason: format!("verwijst naar ontbrekend {what} '{file}'"),
                 });
             }
         }
@@ -351,6 +366,8 @@ fn scan_event(root: &Path, event_path: &Path, year: &Year, model: &mut VaultMode
             media: Some(media.clone()),
             url: None,
             caption: None,
+            artist: None,
+            cover: None,
             happened_at: None,
             timestamp_ms: event_start_ms,
             place: None,
@@ -443,6 +460,9 @@ fn read_item(
     let place = read_location(&parsed, "place");
     let category = parsed.get_str("category");
     let url = parsed.get_str("url");
+    let artist = parsed.get_str("artist");
+    // Aparte thumbnail-bron (albumhoes). Bestandsnaam binnen de eventmap, net als `media`.
+    let cover = parsed.get_str("cover");
     // Frame-stijl (scalar, opaak — de frontend kent de geldige waarden);
     // leeg/whitespace telt als afwezig.
     let frame = parsed
@@ -476,6 +496,8 @@ fn read_item(
             media: media.clone(),
             url,
             caption,
+            artist,
+            cover,
             happened_at,
             timestamp_ms,
             place,
@@ -803,6 +825,59 @@ mod tests {
         assert!(to_millis("1969-07-01").is_some());
         assert!(to_millis("2025-12-23T21:27:59.407Z").is_some());
         assert!(to_millis("geen datum").is_none());
+    }
+
+    /// Een albumhoes hoort bij zijn liedje. Zonder het claimen van `cover` zou het
+    /// hoesje-bestand als losse fototegel náást het liedje op het canvas belanden
+    /// (en in de collage), omdat de scanner elk niet-geclaimd mediabestand tot een
+    /// synthetisch item promoveert.
+    #[test]
+    fn song_cover_is_claimed_and_does_not_become_a_loose_photo() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let dir = root.join("2019/2019-07-14 Zomer");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("blinding-lights.md"),
+            "---\ntype: song\ncaption: Blinding Lights\nartist: The Weeknd\n\
+             media: bl.mp3\ncover: hoes.jpg\nisrc: USUG11904206\n---\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("bl.mp3"), b"x").unwrap();
+        std::fs::write(dir.join("hoes.jpg"), b"x").unwrap();
+
+        let model = scan(root);
+        let items: Vec<_> = model.items.iter().filter(|i| !i.synthetic).collect();
+        assert_eq!(items.len(), 1, "precies één item, niet het liedje plus het hoesje");
+        let s = items[0];
+        assert_eq!(s.item_type, ItemType::Song);
+        assert_eq!(s.artist.as_deref(), Some("The Weeknd"));
+        assert_eq!(s.cover.as_deref(), Some("hoes.jpg"));
+        assert_eq!(s.media.as_deref(), Some("bl.mp3"));
+        assert!(
+            model.items.iter().all(|i| !i.synthetic),
+            "geen enkel synthetisch item: hoesje én mp3 zijn geclaimd"
+        );
+        assert!(
+            model.errors.is_empty(),
+            "geen waarschuwingen over ontbrekende bestanden: {:?}",
+            model.errors
+        );
+    }
+
+    /// Een los mp3-bestand blijft `audio`; `song` ontstaat alleen via een
+    /// expliciete `type: song`. Anders zou elke spraakmemo automatisch muziek zijn.
+    #[test]
+    fn loose_audio_stays_audio_and_never_becomes_a_song() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let dir = root.join("2019/2019-07-14 Zomer");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("oma-vertelt.mp3"), b"x").unwrap();
+
+        let model = scan(root);
+        let it = model.items.iter().find(|i| i.media.as_deref() == Some("oma-vertelt.mp3"));
+        assert_eq!(it.expect("item voor de losse mp3").item_type, ItemType::Audio);
     }
 
     #[test]

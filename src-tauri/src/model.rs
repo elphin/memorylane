@@ -13,6 +13,12 @@ pub enum ItemType {
     Video,
     Link,
     Audio,
+    /// Een liedje dat bij deze memory hoort. Onderscheiden van `Audio` (een losse
+    /// geluidsopname, bijv. een spraakmemo) omdat alleen muziek automatisch mag
+    /// starten bij het openen van een memory of tijdens een diavoorstelling.
+    /// Ontstaat uitsluitend via een expliciete `type: song` in de frontmatter,
+    /// nooit uit een extensie: een los mp3-bestand blijft `Audio`.
+    Song,
 }
 
 impl ItemType {
@@ -23,7 +29,14 @@ impl ItemType {
             ItemType::Video => "video",
             ItemType::Link => "link",
             ItemType::Audio => "audio",
+            ItemType::Song => "song",
         }
+    }
+
+    /// True voor itemtypes die geluid dragen. Gebruikt om te bepalen of een
+    /// bestandsnaam als thumbnail-bron in aanmerking komt (audio nooit).
+    pub fn is_sound(self) -> bool {
+        matches!(self, ItemType::Audio | ItemType::Song)
     }
 
     pub fn parse(s: &str) -> Option<Self> {
@@ -33,6 +46,7 @@ impl ItemType {
             "video" => Some(ItemType::Video),
             "link" => Some(ItemType::Link),
             "audio" => Some(ItemType::Audio),
+            "song" => Some(ItemType::Song),
             _ => None,
         }
     }
@@ -45,6 +59,11 @@ impl ItemType {
                 Some(ItemType::Photo)
             }
             "mp4" | "mov" | "avi" | "mkv" | "webm" => Some(ItemType::Video),
+            // LET OP: houd deze lijst gelijk aan `AUDIO_EXT` in `src/lib/backend.ts`.
+            // `item_thumb_ref` (Rust) en `thumbRef` (TS) moeten hetzelfde antwoord
+            // geven; loopt dit uiteen, dan zegt de frontend "er is een plaatje"
+            // terwijl de backend weigert en blijft de textuur-cache eeuwig
+            // herproberen. `audio_extensions_are_pinned` bewaakt deze lijst.
             "mp3" | "wav" | "ogg" | "m4a" | "aac" | "flac" => Some(ItemType::Audio),
             _ => None,
         }
@@ -178,6 +197,14 @@ pub struct Item {
     pub url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub caption: Option<String>,
+    /// Artiest van een liedje. Alleen gevuld voor `Song`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artist: Option<String>,
+    /// Bestandsnaam van een aparte afbeelding binnen de eventmap die als
+    /// thumbnail dient (albumhoes). Valt terug op `media` als die ontbreekt --
+    /// behalve bij geluidsitems, want een mp3 levert geen plaatje op.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cover: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub happened_at: Option<String>,
     /// Genormaliseerde tijdstempel (ms sinds epoch) uit `happened_at`; als die
@@ -257,4 +284,47 @@ pub struct VaultModel {
     pub items: Vec<Item>,
     pub canvas_items: Vec<CanvasItem>,
     pub errors: Vec<IndexError>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Pint de audio-extensielijst vast. Die staat twee keer: hier en als
+    /// `AUDIO_EXT` in `src/lib/backend.ts`. Zolang beide gelijk zijn, geven
+    /// `index::item_thumb_ref` en `thumbRef` hetzelfde antwoord over de vraag of
+    /// een item een afbeelding heeft. Voeg je hier een extensie toe (opus, aiff,
+    /// wma), dan MOET je hem daar ook toevoegen -- deze test wordt dan rood.
+    #[test]
+    fn audio_extensions_are_pinned() {
+        for ext in ["mp3", "wav", "ogg", "m4a", "aac", "flac"] {
+            assert_eq!(
+                ItemType::from_extension(ext),
+                Some(ItemType::Audio),
+                "{ext} hoort audio te zijn"
+            );
+            assert_eq!(ItemType::from_extension(&ext.to_uppercase()), Some(ItemType::Audio));
+        }
+        for ext in ["opus", "aiff", "wma", "jpg", "mp4", ""] {
+            assert_ne!(
+                ItemType::from_extension(ext),
+                Some(ItemType::Audio),
+                "'{ext}' staat niet in AUDIO_EXT in backend.ts -- voeg hem daar toe \
+                 voordat je hem hier toevoegt, anders lopen frontend en backend uiteen"
+            );
+        }
+    }
+
+    /// Een liedje ontstaat alleen via een expliciete `type: song`, nooit uit een
+    /// extensie: een losse mp3 is een geluidsopname (spraakmemo), geen muziek die
+    /// automatisch mag afspelen.
+    #[test]
+    fn song_never_comes_from_an_extension() {
+        assert_eq!(ItemType::parse("song"), Some(ItemType::Song));
+        for ext in ["mp3", "m4a", "flac"] {
+            assert_eq!(ItemType::from_extension(ext), Some(ItemType::Audio));
+        }
+        assert!(ItemType::Song.is_sound() && ItemType::Audio.is_sound());
+        assert!(!ItemType::Photo.is_sound() && !ItemType::Text.is_sound());
+    }
 }

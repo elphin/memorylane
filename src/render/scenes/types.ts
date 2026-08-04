@@ -1,6 +1,16 @@
 // Gedeelde types voor de tijdlijn-scenes.
 
-export type ItemType = 'text' | 'photo' | 'video' | 'link' | 'audio'
+export type ItemType = 'text' | 'photo' | 'video' | 'link' | 'audio' | 'song'
+
+/** Itemtypes die geluid dragen: een liedje (`song`) of een losse opname (`audio`).
+ *
+ * Bepaalt of dit item AUDIO-UI krijgt (geluidskaart, afspeelknop, automatisch
+ * starten). NOOIT gebruiken om te beslissen of er een afbeelding is — daarvoor is
+ * uitsluitend `thumbRef` er. Die twee vragen lopen uiteen: een `song` met
+ * `media: hoes.jpg` (link-only liedje, of een typefout) is wél geluid-UI en heeft
+ * wél een plaatje. Op het type beslissen in plaats van op de bestandsextensie was
+ * precies de bug die de review van fase 1a ving. */
+export const isSound = (t: ItemType): boolean => t === 'song' || t === 'audio'
 
 /** Zoomniveaus (semantic zoom). */
 export enum Level {

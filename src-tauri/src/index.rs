@@ -30,7 +30,7 @@ CREATE TABLE items (
     media TEXT, url TEXT, caption TEXT, happened_at TEXT, timestamp_ms INTEGER,
     place_lat REAL, place_lng REAL, place_label TEXT,
     people TEXT NOT NULL, tags TEXT NOT NULL, category TEXT, frame TEXT, body_text TEXT,
-    slug TEXT, synthetic INTEGER NOT NULL
+    slug TEXT, synthetic INTEGER NOT NULL, artist TEXT, cover TEXT
 );
 CREATE TABLE canvas_items (
     event_id TEXT NOT NULL, item_ref TEXT NOT NULL,
@@ -119,8 +119,8 @@ pub fn load(conn: &mut Connection, model: &VaultModel) -> rusqlite::Result<()> {
         let mut item_stmt = tx.prepare(
             "INSERT INTO items (id, event_id, item_type, media, url, caption, happened_at,
                  timestamp_ms, place_lat, place_lng, place_label, people, tags, category,
-                 body_text, slug, synthetic, frame)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)",
+                 body_text, slug, synthetic, frame, artist, cover)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20)",
         )?;
         let mut fts_stmt = tx.prepare(
             "INSERT INTO items_fts (item_id, caption, body_text, tags, people, place)
@@ -147,19 +147,31 @@ pub fn load(conn: &mut Connection, model: &VaultModel) -> rusqlite::Result<()> {
                 it.slug,
                 it.synthetic as i64,
                 it.frame,
+                it.artist,
+                it.cover,
             ])?;
             // Indexeer zodra er íets doorzoekbaars is — ook een foto met alleen
             // tags/people/place (anders is die onvindbaar). Tags/people als spatie-
             // gescheiden tekst zodat FTS elk woord als token indexeert.
             let has_text = it.caption.is_some()
+                || it.artist.is_some()
                 || it.body_text.is_some()
                 || !it.tags.is_empty()
                 || !it.people.is_empty()
                 || label.is_some();
+            // De artiest hoort bij de titel in de FTS-caption, zodat zoeken op
+            // "The Weeknd" het liedje vindt. De zoeksnippet komt uit items.caption
+            // (niet uit deze kolom), dus dit vervuilt het resultaat niet.
+            let fts_caption = match (&it.caption, &it.artist) {
+                (Some(c), Some(a)) => Some(format!("{c} {a}")),
+                (Some(c), None) => Some(c.clone()),
+                (None, Some(a)) => Some(a.clone()),
+                (None, None) => None,
+            };
             if has_text {
                 fts_stmt.execute(params![
                     it.id,
-                    it.caption,
+                    fts_caption,
                     it.body_text,
                     it.tags.join(" "),
                     it.people.join(" "),
@@ -465,7 +477,7 @@ pub fn get_event(conn: &Connection, event_id: &str) -> rusqlite::Result<Option<E
     let mut items_stmt = conn.prepare(
         "SELECT id, event_id, item_type, media, url, caption, happened_at, timestamp_ms,
              place_lat, place_lng, place_label, people, tags, category, body_text, slug, synthetic,
-             frame
+             frame, artist, cover
          FROM items WHERE event_id = ?1 ORDER BY timestamp_ms, slug",
     )?;
     let items = items_stmt
@@ -563,6 +575,39 @@ pub fn item_media_ref(
         )
         .ok();
     Ok(row)
+}
+
+/// Vault-relatieve folder + bestandsnaam van de afbeelding die dit item op het
+/// scherm representeert: `cover` als die er is, anders `media`.
+///
+/// Geeft bewust NIETS terug als het gekozen bestand audio is: een mp3 levert geen
+/// plaatje op, en zonder deze rem hasht `resolve_thumb` eerst het hele bestand
+/// (bij een flac van 60 MB nergens voor nodig) voordat de decoder alsnog opgeeft,
+/// waarna de frontend eeuwig blijft herproberen.
+///
+/// Deny-list op audio, geen allow-list op beeld: de `image`-crate raadt het formaat
+/// uit de inhoud, dus een handgeschreven `media: scan.tiff` levert vandaag een
+/// werkende thumbnail op en dat mag niet stilzwijgend sneuvelen.
+pub fn item_thumb_ref(
+    conn: &Connection,
+    item_id: &str,
+) -> rusqlite::Result<Option<(String, String)>> {
+    let row = conn
+        .query_row(
+            "SELECT e.folder_path, COALESCE(i.cover, i.media)
+             FROM items i JOIN events e ON i.event_id = e.id
+             WHERE i.id = ?1 AND COALESCE(i.cover, i.media) IS NOT NULL",
+            params![item_id],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+        )
+        .ok();
+    Ok(row.filter(|(_, file)| {
+        !file
+            .rsplit('.')
+            .next()
+            .and_then(ItemType::from_extension)
+            .is_some_and(ItemType::is_sound)
+    }))
 }
 
 /// Gememoiseerde content-hash voor `path`, geldig als mtime+size ongewijzigd.
@@ -675,30 +720,44 @@ pub fn list_screensaver_photos(
     rows.collect()
 }
 
-/// Bestandsinfo van een item voor verwijderen: (event_id, folder_path, slug, media).
-pub type ItemFiles = (String, String, Option<String>, Option<String>);
+/// Bestandsinfo van een item voor bewerken/verwijderen. Named struct in plaats van
+/// een tuple: er zijn vijf call sites, en elk veld erbij raakte ze anders allemaal.
+pub struct ItemFiles {
+    pub event_id: String,
+    pub folder_path: String,
+    pub slug: Option<String>,
+    pub media: Option<String>,
+    pub cover: Option<String>,
+}
 
 pub fn item_files(conn: &Connection, item_id: &str) -> rusqlite::Result<Option<ItemFiles>> {
     Ok(conn
         .query_row(
-            "SELECT i.event_id, e.folder_path, i.slug, i.media
+            "SELECT i.event_id, e.folder_path, i.slug, i.media, i.cover
              FROM items i JOIN events e ON i.event_id = e.id WHERE i.id = ?1",
             params![item_id],
             |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, Option<String>>(2)?,
-                    r.get::<_, Option<String>>(3)?,
-                ))
+                Ok(ItemFiles {
+                    event_id: r.get(0)?,
+                    folder_path: r.get(1)?,
+                    slug: r.get(2)?,
+                    media: r.get(3)?,
+                    cover: r.get(4)?,
+                })
             },
         )
         .ok())
 }
 
-/// Verwijst een ánder item in hetzelfde event naar hetzelfde mediabestand?
-/// Gebruikt bij verwijderen: door de v1-duplicate-`.md`-bug (twee `.md`'s → één
-/// media) mag het trashen van het mediabestand een overlevend item niet breken.
+/// Verwijst een ánder item in hetzelfde event naar hetzelfde bestand (als media
+/// óf als hoesje)? Gebruikt bij verwijderen: door de v1-duplicate-`.md`-bug (twee
+/// `.md`'s → één media) mag het trashen van een bestand een overlevend item niet
+/// breken, en twee liedjes kunnen dezelfde albumhoes delen.
+///
+/// `COLLATE NOCASE` staat bewust bij elke vergelijking apart. Het is een unaire
+/// postfix-operator die strakker bindt dan elke binaire operator: achter de
+/// haakjes zou hij aan het resultaat van de OR hangen en zouden BEIDE
+/// vergelijkingen terugvallen op hoofdlettergevoelig BINARY.
 pub fn media_shared(
     conn: &Connection,
     event_id: &str,
@@ -707,7 +766,9 @@ pub fn media_shared(
 ) -> rusqlite::Result<bool> {
     let n: i64 = conn.query_row(
         "SELECT count(*) FROM items
-         WHERE event_id = ?1 AND media = ?2 COLLATE NOCASE AND id != ?3",
+         WHERE event_id = ?1
+           AND (media = ?2 COLLATE NOCASE OR cover = ?2 COLLATE NOCASE)
+           AND id != ?3",
         params![event_id, media, exclude_item_id],
         |r| r.get(0),
     )?;
@@ -889,6 +950,8 @@ fn row_to_item(r: &rusqlite::Row) -> rusqlite::Result<Item> {
         tags: parse_json_vec(&tags),
         category: r.get(13)?,
         frame: r.get(17)?,
+        artist: r.get(18)?,
+        cover: r.get(19)?,
         body_text: r.get(14)?,
         slug: r.get(15)?,
         synthetic: synthetic != 0,
@@ -988,6 +1051,8 @@ mod tests {
             id: "it1".into(),
             event_id: "ev1".into(),
             item_type: ItemType::Photo,
+            artist: None,
+            cover: None,
             media: Some("strand.jpg".into()),
             url: None,
             caption: Some("Strand bij zonsondergang".into()),
@@ -1203,6 +1268,8 @@ mod tests {
             tags: vec![],
             category: None,
             frame: None,
+            artist: None,
+            cover: None,
             body_text: None,
             slug: Some("geen-datum".into()),
             synthetic: false,
@@ -1235,6 +1302,8 @@ mod tests {
             tags: tags.iter().map(|t| (*t).into()).collect(),
             category: None,
             frame: None,
+            artist: None,
+            cover: None,
             body_text: None,
             slug: Some(id.into()),
             synthetic,
@@ -1332,6 +1401,174 @@ mod tests {
         assert!(search(&conn, "\"'(*)").unwrap().is_empty());
     }
 
+    /// Bouwt een liedje-item. `media`/`cover` bepalen welk van de vier gevallen
+    /// je test (bestand+hoesje, alleen bestand, alleen hoesje, geen van beide).
+    fn song(id: &str, media: Option<&str>, cover: Option<&str>, artist: Option<&str>) -> Item {
+        Item {
+            id: id.into(),
+            event_id: "ev1".into(),
+            item_type: ItemType::Song,
+            artist: artist.map(str::to_string),
+            cover: cover.map(str::to_string),
+            media: media.map(str::to_string),
+            url: Some("https://open.spotify.com/track/x".into()),
+            caption: Some("Blinding Lights".into()),
+            happened_at: None,
+            timestamp_ms: Some(5),
+            place: None,
+            people: vec![],
+            tags: vec![],
+            category: None,
+            frame: None,
+            body_text: None,
+            slug: Some(id.into()),
+            synthetic: false,
+        }
+    }
+
+    /// De artiest moet doorzoekbaar zijn: op "The Weeknd" zoeken is minstens zo
+    /// waarschijnlijk als op de titel. De snippet komt uit `items.caption`, dus
+    /// de samengevoegde FTS-kolom mag het resultaat niet vervuilen.
+    #[test]
+    fn search_finds_song_by_artist() {
+        let mut m = sample_model();
+        m.items.push(song("s1", Some("bl.mp3"), None, Some("The Weeknd")));
+        let mut conn = open_in_memory().unwrap();
+        load(&mut conn, &m).unwrap();
+
+        let hit = |q: &str| search(&conn, q).unwrap().into_iter().find(|r| r.item_id == "s1");
+        assert!(hit("Weeknd").is_some(), "vindbaar op artiest");
+        assert!(hit("Blinding").is_some(), "vindbaar op titel");
+        // De snippet komt uit items.caption, NIET uit de samengevoegde FTS-kolom:
+        // de artiest mag niet in het zoekresultaat opduiken als hij daar niet staat.
+        assert_eq!(hit("Weeknd").unwrap().snippet, "Blinding Lights");
+    }
+
+    /// Een liedje dat alléén een artiest heeft (geen titel, geen body, geen tags)
+    /// moet nog steeds in de FTS belanden — anders valt het door de `has_text`-gate.
+    #[test]
+    fn search_finds_song_with_only_an_artist() {
+        let mut m = sample_model();
+        let mut s = song("s2", None, None, Some("Fleetwood Mac"));
+        s.caption = None;
+        m.items.push(s);
+        let mut conn = open_in_memory().unwrap();
+        load(&mut conn, &m).unwrap();
+        assert!(search(&conn, "Fleetwood").unwrap().iter().any(|r| r.item_id == "s2"));
+    }
+
+    /// `item_thumb_ref` bepaalt wat er als afbeelding geserveerd wordt. Het hoesje
+    /// wint van de media, en een geluidsitem zonder hoesje levert NIETS op — anders
+    /// probeert de thumbnailer een JPEG uit een mp3 te persen (na eerst het hele
+    /// bestand te hashen) en blijft de frontend eeuwig herproberen.
+    #[test]
+    fn item_thumb_ref_prefers_cover_and_never_serves_audio() {
+        let mut m = sample_model();
+        m.items.push(song("s_both", Some("bl.mp3"), Some("hoes.jpg"), None));
+        m.items.push(song("s_media", Some("bl.mp3"), None, None));
+        m.items.push(song("s_cover", None, Some("hoes.jpg"), None));
+        m.items.push(song("s_none", None, None, None));
+        let mut conn = open_in_memory().unwrap();
+        load(&mut conn, &m).unwrap();
+
+        let f = |id: &str| item_thumb_ref(&conn, id).unwrap().map(|(_, file)| file);
+        assert_eq!(f("s_both").as_deref(), Some("hoes.jpg"), "hoesje wint van media");
+        assert_eq!(f("s_media"), None, "mp3 is geen afbeelding");
+        assert_eq!(f("s_cover").as_deref(), Some("hoes.jpg"));
+        assert_eq!(f("s_none"), None);
+        // Een gewone foto blijft gewoon zijn media serveren.
+        assert_eq!(f("it1").as_deref(), Some("strand.jpg"));
+
+        // Randgevallen van de extensie-check.
+        let mut m2 = sample_model();
+        m2.items.push(song("s_caps", Some("bl.MP3"), None, None));
+        m2.items.push(song("s_noext", Some("bestand-zonder-punt"), None, None));
+        m2.items.push(song("s_audiocover", None, Some("hoes.flac"), None));
+        let mut conn2 = open_in_memory().unwrap();
+        load(&mut conn2, &m2).unwrap();
+        let g = |id: &str| item_thumb_ref(&conn2, id).unwrap().map(|(_, file)| file);
+        assert_eq!(g("s_caps"), None, "hoofdletter-extensie telt ook als audio");
+        assert_eq!(
+            g("s_noext").as_deref(),
+            Some("bestand-zonder-punt"),
+            "zonder extensie geen oordeel: laten passeren (deny-list, geen allow-list)"
+        );
+        assert_eq!(g("s_audiocover"), None, "een 'cover' met audio-extensie is geen plaatje");
+    }
+
+    /// `media_shared` moet zowel `media` als `cover` afdekken, en
+    /// hoofdletterongevoelig blijven. Die laatste eis is subtiel: `COLLATE NOCASE`
+    /// bindt strakker dan `OR`, dus achter de haakjes zou hij aan het OR-resultaat
+    /// hangen en zouden beide vergelijkingen terugvallen op BINARY.
+    #[test]
+    fn media_shared_covers_both_columns_case_insensitively() {
+        let mut m = sample_model();
+        m.items.push(song("s_a", None, Some("hoes.jpg"), None));
+        m.items.push(song("s_b", None, Some("Hoes.JPG"), None));
+        // Verwijst kruislings naar de MEDIA van de bestaande foto (it1: strand.jpg).
+        // Dekt de media-tak van de query: zonder die tak blijven alle andere asserts
+        // slagen, want die vinden hun treffers allemaal in de cover-kolom.
+        m.items.push(song("s_c", None, Some("strand.jpg"), None));
+        let mut conn = open_in_memory().unwrap();
+        load(&mut conn, &m).unwrap();
+
+        assert!(
+            media_shared(&conn, "ev1", "STRAND.jpg", "s_c").unwrap(),
+            "it1 heeft strand.jpg als media -- dekt de media-tak én zijn COLLATE"
+        );
+
+        assert!(
+            media_shared(&conn, "ev1", "hoes.jpg", "s_a").unwrap(),
+            "s_b gebruikt hetzelfde hoesje met andere casing"
+        );
+        assert!(
+            !media_shared(&conn, "ev1", "nergens-gebruikt.jpg", "it1").unwrap(),
+            "een bestand dat niemand anders gebruikt is niet gedeeld"
+        );
+        assert!(media_shared(&conn, "ev1", "HOES.jpg", "it1").unwrap(), "hoofdletters");
+    }
+
+    /// Een liedje moet ongewijzigd door de index heen komen: `artist` en `cover`
+    /// zijn de twee nieuwe kolommen en `row_to_item` leest positioneel.
+    #[test]
+    fn song_roundtrips_through_the_index() {
+        let mut m = sample_model();
+        m.items.push(song("s1", Some("bl.mp3"), Some("hoes.jpg"), Some("The Weeknd")));
+        let mut conn = open_in_memory().unwrap();
+        load(&mut conn, &m).unwrap();
+
+        let detail = get_event(&conn, "ev1").unwrap().unwrap();
+        let s = detail.items.iter().find(|i| i.id == "s1").expect("liedje in het event");
+        assert_eq!(s.item_type, ItemType::Song);
+        assert_eq!(s.artist.as_deref(), Some("The Weeknd"));
+        assert_eq!(s.cover.as_deref(), Some("hoes.jpg"));
+        assert_eq!(s.media.as_deref(), Some("bl.mp3"));
+        assert_eq!(s.url.as_deref(), Some("https://open.spotify.com/track/x"));
+        // De foto ernaast houdt zijn eigen velden (geen kolomverschuiving).
+        let p = detail.items.iter().find(|i| i.id == "it1").unwrap();
+        assert_eq!(p.frame.as_deref(), Some("polaroid"));
+        assert_eq!(p.artist, None);
+        assert_eq!(p.cover, None);
+    }
+
+    /// Liedjes mogen nooit in een fotopool lekken: niet in de jaar-omslag, niet in
+    /// de collage en niet in de diavoorstelling.
+    #[test]
+    fn songs_never_leak_into_photo_pools() {
+        let mut m = sample_model();
+        m.items.push(song("s1", Some("bl.mp3"), Some("hoes.jpg"), None));
+        let mut conn = open_in_memory().unwrap();
+        load(&mut conn, &m).unwrap();
+
+        let y = &list_years(&conn).unwrap()[0];
+        assert!(!y.photo_ids.contains(&"s1".to_string()));
+        assert!(!y.featured_ids.contains(&"s1".to_string()));
+        let dia = list_screensaver_photos(&conn, "all", None, &[], &[]).unwrap();
+        assert!(!dia.contains(&"s1".to_string()));
+        let detail = get_year(&conn, "y2024").unwrap().unwrap();
+        assert!(detail.events.iter().all(|e| !e.photo_ids.contains(&"s1".to_string())));
+    }
+
     #[test]
     fn list_years_cover_pools() {
         // Zonder uitgelichte foto's: featured_ids leeg, photo_ids bevat de foto.
@@ -1370,6 +1607,8 @@ mod tests {
             tags: vec![],
             category: None,
             frame: None,
+            artist: None,
+            cover: None,
             body_text: None,
             slug: Some("clip".into()),
             synthetic: false,
@@ -1406,6 +1645,8 @@ mod tests {
             tags: vec!["kerstmis".into()],
             category: None,
             frame: None,
+            artist: None,
+            cover: None,
             body_text: None,
             slug: Some("ph".into()),
             synthetic: false,
@@ -1440,6 +1681,8 @@ mod tests {
                 id: id.into(),
                 event_id: event_id.into(),
                 item_type: ItemType::Photo,
+                artist: None,
+                cover: None,
                 media: Some(format!("{id}.jpg")),
                 url: None,
                 caption: None,
@@ -1505,6 +1748,8 @@ mod tests {
             tags: vec![],
             category: None,
             frame: None,
+            artist: None,
+            cover: None,
             body_text: None,
             slug: Some("t1".into()),
             synthetic: false,
@@ -1560,6 +1805,8 @@ mod tests {
                 id: id.into(),
                 event_id: event_id.into(),
                 item_type: ItemType::Photo,
+                artist: None,
+                cover: None,
                 media: Some(format!("{slug}.jpg")),
                 url: None,
                 caption: None,
@@ -1630,6 +1877,8 @@ mod tests {
             tags: vec![],
             category: None,
             frame: None,
+            artist: None,
+            cover: None,
             body_text: None,
             slug: Some("notitie".into()),
             synthetic: false,
