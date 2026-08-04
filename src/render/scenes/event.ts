@@ -4,7 +4,8 @@
 // de backend (write-through naar `_canvas.json`).
 
 import { CanvasTextMetrics, Container, Graphics, Sprite, Text, Texture } from 'pixi.js'
-import type { Backend, CanvasLayoutInput, EventDetail, Item } from '../../lib/backend'
+import { thumbRef, type Backend, type CanvasLayoutInput, type EventDetail, type Item } from '../../lib/backend'
+import { isSound } from './types'
 import { resolveFrameStyle, resolveTheme } from '../../theme/resolve'
 import type { FrameStyle, ResolvedTheme } from '../../theme/tokens'
 import type { FrameContext, RenderEngine } from '../core/engine'
@@ -87,6 +88,10 @@ interface Node {
   // niet-vierkante foto correct raakbaar is. cardW/cardH = de foto-inhoud.
   halfW: number
   halfH: number
+  /** Halve maat OMHOOG vanaf het midden. Gelijk aan `halfH`, behalve bij een
+   * liedje: daar zit het label alleen aan de ONDERkant, dus `halfH` omhoog
+   * spiegelen zou een onzichtbare grijpzone boven de hoes opleveren. */
+  halfTop: number
   cardW: number
   cardH: number
   frameBorder: number // huidige (gedempte) witte-rand-dikte waarmee het frame getekend is
@@ -165,7 +170,11 @@ export class EventScene implements Scene {
       const isText = item.itemType === 'text' || item.itemType === 'link'
       const half = isText ? Math.max(TEXT_W, TEXT_H) / 2 : PHOTO / 2 + BORDER
 
-      const frameStyle: FrameStyle = isText ? 'plain' : resolveFrameStyle(item.frame, this.T)
+      // Geluidsitems krijgen altijd 'plain': een polaroid-band ónder een albumhoes
+      // met daaronder nog eens titel en artiest is vormtaal-onzin, en het maakt de
+      // kaartsoorten echt exclusief in plaats van "meestal".
+      const frameStyle: FrameStyle =
+        isText || isSound(item.itemType) ? 'plain' : resolveFrameStyle(item.frame, this.T)
       let sprite: Sprite | null = null
       let frame: Graphics | null = null
       let mask: Graphics | null = null
@@ -193,9 +202,18 @@ export class EventScene implements Scene {
         // ingedrukt is (zie setRingKeys).
         // Video's krijgen een play-badge zodat ze meteen herkenbaar zijn.
         if (item.itemType === 'video') this.buildPlayBadge(container)
+        // Geluid: een muziek-badge zodat de kaart meteen leesbaar is als "dit
+        // klinkt", ook als er wél een albumhoes op staat.
+        if (isSound(item.itemType)) {
+          this.buildNoteBadge(container)
+          capEl = this.buildSongLabel(container, item)
+        }
         // Polaroid: het bijschrift in de brede onderrand, in het caption-font
         // van het thema (donkere inkt op de bijna-witte rand).
-        if (frameStyle === 'polaroid' && item.caption) {
+        // `else if`: een geluidsitem heeft zijn label AL, en een tweede Text in
+        // dezelfde container zou `capEl` overschrijven -- het liedje-label zou dan
+        // ongepositioneerd dwars over de albumhoes blijven liggen.
+        else if (frameStyle === 'polaroid' && item.caption) {
           const t = item.caption.trim()
           capEl = new Text({
             text: t.length > 42 ? `${t.slice(0, 41).trimEnd()}…` : t,
@@ -252,7 +270,11 @@ export class EventScene implements Scene {
         ty: y,
         trot: rot,
         halfW: half,
-        halfH: half,
+        // Liedje: het label onder de hoes hoort bij de kaart (zie `songLabelExtent`).
+        // Hier al meenemen, want de eerste grid-packing gebeurt vóór de eerste
+        // `sizePhotoCard` -- anders overlapt de allereerste layout alsnog.
+        halfH: half + (capEl && isSound(item.itemType) ? 4 + capEl.height : 0),
+        halfTop: half,
         cardW: PHOTO,
         cardH: PHOTO,
         frameBorder: BORDER,
@@ -379,7 +401,11 @@ export class EventScene implements Scene {
     n.halfW = w / 2 + BORDER
     // Bewust zónder de polaroid-band: de hit-/sleep-box blijft de foto zelf
     // (symmetrisch); de band is puur visueel. De grid-packer telt 'm apart mee.
-    n.halfH = h / 2 + BORDER
+    // Bij een liedje telt het label WEL mee: titel en artiest zijn de kern van de
+    // kaart en staan altijd onder de hoes, dus zonder dit overlapt de grid-packer
+    // ze met de rij eronder -- dezelfde fout als de notitie-autofit eerder maakte.
+    n.halfH = h / 2 + BORDER + this.songLabelExtent(n)
+    n.halfTop = h / 2 + BORDER
     if (n.mask) this.drawPhotoMask(n.mask, n.frameStyle, w, h)
     n.sprite?.setSize(w, h)
     this.drawFrameBorder(n)
@@ -469,7 +495,18 @@ export class EventScene implements Scene {
     }
     // Polaroid-caption gecentreerd in de onderrand (schaalt mee met de band en
     // wordt op de bandbreedte geklemd zodat 'ie nooit uit de rand steekt).
-    if (n.capEl) {
+    if (n.capEl && isSound(n.item.itemType)) {
+      // Liedje: titel + artiest staan ALTIJD onder de hoes, ongeacht kader-stijl.
+      // Bij een liedje is die tekst de kern van de kaart -- vaak is het het enige
+      // wat er van de herinnering over is -- geen versiering in een polaroid-band.
+      n.capEl.visible = true
+      // Eerst schalen, dán positioneren: `Text.height` is in Pixi 8 schaal-afhankelijk,
+      // dus andersom zet je de positie met de hoogte van de vórige ronde.
+      n.capEl.scale.set(1)
+      const maxW = w + eb * 2
+      if (n.capEl.width > maxW) n.capEl.scale.set(maxW / n.capEl.width)
+      n.capEl.position.set(0, h / 2 + eb + 4 + n.capEl.height / 2)
+    } else if (n.capEl) {
       const band = this.effBorderMin(n.scale, POLAROID_MIN) * 3.5
       n.capEl.visible = fs === 'polaroid'
       n.capEl.position.set(0, h / 2 + (eb + band) / 2)
@@ -519,6 +556,61 @@ export class EventScene implements Scene {
     g.poly([-R * 0.28, -R * 0.4, -R * 0.28, R * 0.4, R * 0.52, 0]).fill({ color: 0xffffff, alpha: 0.96 })
     container.addChild(g)
     return g
+  }
+
+  /** Hoeveel ruimte het liedje-label ONDER de hoes inneemt (0 voor al het andere).
+   * Telt mee in `halfH`, dus zowel in de grid-packing als in de sleep-/hitbox: het
+   * label hoort bij de kaart, je pakt een liedje net zo goed bij zijn titel beet. */
+  private songLabelExtent(n: Node): number {
+    if (!n.capEl || !isSound(n.item.itemType)) return 0
+    return 4 + n.capEl.height
+  }
+
+  /** Muzieknoot-badge voor geluidsitems (liedje of losse opname). Zelfde vorm en
+   * plek als de play-badge van een video, zodat "hier zit media in" consistent leest. */
+  private buildNoteBadge(container: Container): Graphics {
+    const R = 16
+    const g = new Graphics()
+    g.circle(0, 0, R).fill({ color: 0x000000, alpha: 0.45 })
+    g.circle(0, 0, R).stroke({ width: 2, color: 0xffffff, alpha: 0.92 })
+    // Achtste noot: bolletje links-onder, stok omhoog, vlaggetje naar rechts.
+    const W = 0xffffff
+    g.ellipse(-R * 0.2, R * 0.34, R * 0.28, R * 0.22).fill({ color: W, alpha: 0.96 })
+    g.rect(R * 0.02, -R * 0.46, R * 0.14, R * 0.82).fill({ color: W, alpha: 0.96 })
+    g.poly([R * 0.16, -R * 0.46, R * 0.52, -R * 0.24, R * 0.52, R * 0.02, R * 0.16, -R * 0.2])
+      .fill({ color: W, alpha: 0.96 })
+    container.addChild(g)
+    return g
+  }
+
+  /** Titel + artiest onder de hoes. Hergebruikt het `capEl`-slot (de polaroid-band),
+   * maar staat áltijd aan: bij een liedje is de tekst de kern van de kaart, niet
+   * versiering. Zonder titel valt hij terug op de bestandsnaam. */
+  private buildSongLabel(container: Container, item: Item): Text {
+    // Zonder titel: de bestandsnaam, maar zonder extensie en zonder de `_a1b2c3d4`-
+    // suffix die de import erachter zet. Losse mp3's in bestaande vaults hebben geen
+    // caption, en `oma-vertelt_a1b2c3d4.mp3` op een kaart is geen verbetering.
+    const fromFile = (f: string) => f.replace(/\.[^.]+$/, '').replace(/_[0-9a-f]{8}$/i, '')
+    const title = (item.caption ?? (item.media ? fromFile(item.media) : null) ?? 'Liedje').trim()
+    const artist = item.artist?.trim()
+    const cut = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1).trimEnd()}…` : s)
+    const label = artist ? `${cut(title, 30)}\n${cut(artist, 30)}` : cut(title, 34)
+    const el = new Text({
+      text: label,
+      style: {
+        // `cardTitle`, niet `paperInk`: deze tekst staat op de canvas-achtergrond,
+        // niet in een witte polaroid-band. Met papier-inkt is hij onleesbaar.
+        fill: this.T.colors.cardTitle,
+        fontSize: 15,
+        fontFamily: this.T.fonts.caption,
+        align: 'center',
+        lineHeight: 18,
+      },
+    })
+    el.resolution = 2
+    el.anchor.set(0.5)
+    container.addChild(el)
+    return el
   }
 
   /** Blauwe rand (net buiten de gouden) die de vaste jaar-cover markeert. */
@@ -993,7 +1085,7 @@ export class EventScene implements Scene {
     for (const n of this.nodes) {
       minX = Math.min(minX, n.x - n.halfW * n.scale)
       maxX = Math.max(maxX, n.x + n.halfW * n.scale)
-      minY = Math.min(minY, n.y - n.halfH * n.scale)
+      minY = Math.min(minY, n.y - n.halfTop * n.scale)
       maxY = Math.max(maxY, n.y + n.halfH * n.scale)
     }
     return { minX, minY, maxX, maxY }
@@ -1040,7 +1132,7 @@ export class EventScene implements Scene {
       // huidige tussenpositie.
       minX = Math.min(minX, n.tx - n.halfW * n.scale)
       maxX = Math.max(maxX, n.tx + n.halfW * n.scale)
-      minY = Math.min(minY, n.ty - n.halfH * n.scale)
+      minY = Math.min(minY, n.ty - n.halfTop * n.scale)
       maxY = Math.max(maxY, n.ty + n.halfH * n.scale)
     }
     const vp = this.engine.viewport()
@@ -1068,7 +1160,10 @@ export class EventScene implements Scene {
       // hoge notitie buiten de klikzone vallen.
       const sc = this.effScale(n)
       if (Math.abs(worldX - n.x) > n.halfW * sc) continue
-      if (Math.abs(worldY - n.y) > n.halfH * sc) continue
+      // Asymmetrisch: omhoog `halfTop`, omlaag `halfH` (het liedje-label hangt
+      // alleen onder de hoes). Symmetrisch toetsen gaf een grijpzone bóven de kaart.
+      const dy = worldY - n.y
+      if (dy < -n.halfTop * sc || dy > n.halfH * sc) continue
       if (!best || n.container.zIndex >= best.container.zIndex) best = n
     }
     return best
@@ -1161,6 +1256,7 @@ export class EventScene implements Scene {
     }
     n.halfW = w / 2
     n.halfH = h / 2
+    n.halfTop = h / 2
     if (n.textBg) {
       n.textBg.clear()
       n.textBg
@@ -1463,7 +1559,10 @@ export class EventScene implements Scene {
         const target = this.kbFocusId === null || focused ? 1 : 0
         n.borderAlpha += (target - n.borderAlpha) * kf
         n.frame.alpha = n.borderAlpha
-        if (n.capEl) n.capEl.alpha = n.borderAlpha
+        // Het liedje-label is géén chroom: bij een liedje zonder hoes is de titel het
+      // enige wat de kaart identificeert. Meefaden zou 'm bij toetsenbord-navigatie
+      // reduceren tot een leeg vlak met een badge.
+      if (n.capEl) n.capEl.alpha = isSound(n.item.itemType) ? 1 : n.borderAlpha
       }
       if (n.focusRing) {
         // Alleen tonen als de eigen witte rand niet volstaat (notitie, kaderloos, of
@@ -1507,7 +1606,21 @@ export class EventScene implements Scene {
         this.drawFrameBorder(n)
       }
 
-      if (!n.sprite || !n.item.media) continue
+      // `thumbRef`, niet `n.item.media`: een liedje toont zijn albumhoes, en een
+      // geluidsitem zónder hoes heeft helemaal geen afbeelding. Vroeger stond hier
+      // `n.item.media`; dat liet een mp3 als thumbnail-bron door, waarna de backend
+      // die bewust weigert en de textuur-cache eeuwig bleef herproberen -- én de
+      // placeholder hieronder nooit verscheen.
+      if (!n.sprite) continue
+      if (!thumbRef(n.item)) {
+        // Geen hoes: een rustig vlak in de themakleur in plaats van het
+        // "laden"-grijs, zodat de kaart afgemaakt oogt en niet kapot.
+        if (!n.loaded) {
+          n.sprite.tint = this.T.colors.surface
+          n.loaded = true
+        }
+        continue
+      }
 
       // Basis-thumbnail (256) laden.
       if (!n.loaded) {

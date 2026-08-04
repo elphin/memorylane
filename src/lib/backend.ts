@@ -933,7 +933,38 @@ class MockBackend implements Backend {
       // Deterministische, licht-geschudde tijden zodat de grid-sortering merkbaar is.
       timestampMs: 1_719_792_000_000 + ((i * 7) % 12) * 86_400_000 + i * 3_600_000,
     }))
-    const items = [...base, ...(this.adds.get(eventId) ?? [])]
+    // Liedjes in ALLE VIER de combinaties van hoes/bestand. Dat is geen luxe:
+    // `MockBackend.thumb()` verzint voor elk item-id een gradient, dus zonder deze
+    // vier ziet een geval dat in de echte app kapot is er hier goed uit. Verwacht:
+    // s0 en s2 tonen een "hoes", s1 en s3 het effen placeholder-vlak; alle vier
+    // tonen de muzieknoot-badge plus titel en artiest.
+    //
+    // LET OP: in L3 (focus) liegt de mock nog. Die poort staat nog op `media`, dus
+    // in de echte app blijft s1 daar in een retry-lus hangen en s2/s3 op een grijs
+    // vlak -- terwijl `MockBackend.thumb()` voor élk id een gradient verzint en het
+    // er hier prima uitziet. Dat is fase 2b; concludeer niet "L3 werkt al".
+    const songs: Item[] = [
+      // s0 heeft bewust frame 'polaroid': een geluidsitem moet die kader-stijl
+      // negeren. Zonder dit geval blijft in de mock onzichtbaar dat een tweede
+      // caption-Text het liedje-label zou overschrijven.
+      { id: `${eventId}-s0`, cover: 'hoes.jpg', media: 'bl.mp3', artist: 'The Weeknd', caption: 'Blinding Lights', frame: 'polaroid' },
+      { id: `${eventId}-s1`, media: 'bl.mp3', artist: 'Fleetwood Mac', caption: 'Dreams' },
+      // Bewust lang, zodat de breedte-clamp van het label echt afgaat.
+      { id: `${eventId}-s2`, cover: 'hoes.jpg', artist: 'Toto met een hele lange artiestennaam', caption: 'Africa (uitgebreide albumversie)' },
+      { id: `${eventId}-s3`, caption: 'Dat nummer van die zomer' },
+    ].map((s) => ({ ...s, eventId, itemType: 'song' as const, slug: s.id, timestampMs: 1_719_792_000_000 }))
+    // Eén losse geluidsopname: geen liedje, wel dezelfde kaart zonder artiest.
+    songs.push({
+      id: `${eventId}-a0`,
+      eventId,
+      itemType: 'audio',
+      media: 'oma-vertelt.mp3',
+      caption: 'Oma vertelt',
+      slug: `${eventId}-a0`,
+      timestampMs: 1_719_792_000_000,
+    })
+
+    const items = [...base, ...songs, ...(this.adds.get(eventId) ?? [])]
       .filter((it) => !this.deleted.has(it.id))
       .map((it) => {
         const frame = this.frames.get(it.id)
