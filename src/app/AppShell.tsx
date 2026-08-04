@@ -406,9 +406,13 @@ export function AppShell() {
   const [videoFocused, setVideoFocused] = useState(false)
   const videoFocusedRef = useRef(false)
   const stopMusicRef = useRef<() => void>(() => {})
-  // Begon de huidige muziek automatisch (bij het openen van een memory) of heb
-  // je 'm zelf aangezet? Bepaalt of hij stopt als je de memory verlaat.
-  const autoStartedRef = useRef(false)
+  // WELK liedje automatisch begon (bij het openen van een memory), of null.
+  //
+  // Bewust een id en geen boolean: een vlag wordt alleen gezet en nooit gewist bij
+  // een handmatige start, dus zodra je zelf iets anders aanzette na een
+  // auto-start werd dat óók als "automatisch" afgekapt bij het verlaten -- precies
+  // de belofte die de instelling doet, gebroken.
+  const autoStartedIdRef = useRef<string | null>(null)
   // Gestylede bevestigings-dialoog voor destructieve acties (i.p.v. het
   // stijlbrekende native window.confirm).
   const [confirmBox, setConfirmBox] = useState<null | {
@@ -424,6 +428,11 @@ export function AppShell() {
   const [weergaveOpen, setWeergaveOpen] = useState(false)
   // Brug tussen de React-state en de gesture-handlers (die buiten React draaien).
   const syncRingsRef = useRef<() => void>(() => {})
+  // Welke omslag-hint er bovenin staat terwijl je Ctrl (of Ctrl+Shift) vasthoudt.
+  // Zonder deze balk is de enige aanwijzing een gekleurde rand om een foto die je
+  // misschien niet eens in beeld hebt -- en bij een memory zónder omslag zie je
+  // helemaal niets gebeuren.
+  const [ringHint, setRingHint] = useState<null | { kind: 'cover' | 'year'; has: boolean }>(null)
   const setCoverPickModeRef = useRef<(on: boolean) => void>(() => {})
   // Formulier dat op "kies een omslagfoto" tijdelijk opzij is gezet, zodat de dialoog
   // ná het kiezen terugkomt met alles wat je al had ingevuld.
@@ -542,12 +551,24 @@ export function AppShell() {
   /** Start (of hervat) een liedje. Alleen mogelijk met een LOKAAL audiobestand:
    * `mediaUrl` werpt bij een item zonder media, dus dat pad wordt hier gepoort.
    * Een link-only liedje toont zijn bronknop en klinkt niet in de app. */
-  const playSong = async (item: Item | undefined): Promise<void> => {
+  const playSong = async (
+    item: Item | undefined,
+    /** Automatisch gestart (bij het openen van een memory)? */
+    auto = false,
+    /** De memory waarvoor de auto-start bedoeld was. */
+    forEvent?: string,
+  ): Promise<void> => {
     const backend = backendRef.current
     if (!backend || !item || !item.media) return
     const { title, artist } = soundLabel(item)
     const src = await backend.mediaUrl(item.id).catch(() => '')
     if (!src) return
+    // `mediaUrl` doet meerdere awaits (waaronder een dynamische import), dus er
+    // zit echt tijd tussen. Ben je die memory intussen alweer uit, dan mag er
+    // geen muziek meer beginnen -- die zou dan op de jaar- of lifeline-weergave
+    // starten én als "handmatig" gelabeld staan, en dus nergens meer stoppen.
+    if (auto && (currentEventRef.current !== forEvent || levelRef.current !== 'event')) return
+    autoStartedIdRef.current = auto ? item.id : null
     setMusicPaused(false)
     setNowPlaying({ itemId: item.id, title, artist, src })
   }
@@ -568,24 +589,22 @@ export function AppShell() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [videoFocused])
 
-  /** Start automatisch het eerste liedje van een memory, als de instelling dat
-   * toestaat. Alleen liedjes (`song`), nooit een gesproken opname: die hoort niet
+  /** Start automatisch het eerste liedje van een memory (met een korte infade),
+   * als de instelling dat toestaat. Alleen liedjes (`song`), nooit een gesproken opname: die hoort niet
    * vanzelf te beginnen. En nooit als er al iets speelt -- dan zou het openen van
    * een memory je huidige nummer onderbreken. */
-  const autoPlayForEvent = (items: Item[]): void => {
+  const autoPlayForEvent = (items: Item[], eventId: string): void => {
     if (settingsRef.current.musicAuto !== 'diavoorstelling-en-memory') return
     if (nowPlayingRef.current) return
     const first = items.find((i) => i.itemType === 'song' && i.media)
-    if (first) {
-      autoStartedRef.current = true
-      void playSong(first)
-    }
+    if (first) void playSong(first, true, eventId)
   }
 
   const stopMusic = (): void => {
     setNowPlaying(null)
     setMusicPaused(false)
     musicResumeRef.current = false
+    autoStartedIdRef.current = null
   }
   stopMusicRef.current = stopMusic
 
@@ -1030,8 +1049,10 @@ export function AppShell() {
      * stoppen. Handmatig gestarte muziek blijft juist wél doorspelen: die heb je
      * zelf aangezet. `autoStartedRef` houdt dat onderscheid vast. */
     const stopAutoMusicOnLeave = (): void => {
-      if (autoStartedRef.current && nowPlayingRef.current) stopMusicRef.current()
-      autoStartedRef.current = false
+      if (autoStartedIdRef.current && nowPlayingRef.current?.itemId === autoStartedIdRef.current) {
+        stopMusicRef.current()
+      }
+      autoStartedIdRef.current = null
     }
 
     const setupLifeline = (focusAfter?: string, snapCam?: { x: number; y: number; zoom: number }): void => {
@@ -1286,6 +1307,11 @@ export function AppShell() {
       snapCam?: { x: number; y: number; zoom: number },
     ): Promise<void> => {
       if (!engine || !backendRef.current || enteringRef.current) return
+      // Van memory A naar memory B (bijv. via een zoekresultaat) gaat niet langs
+      // het jaar-niveau, dus zonder dit zou het liedje van A doorklinken in B --
+      // terwijl B zijn eigen liedje heeft.
+      const sameEvent = currentEventRef.current === eventId
+      if (!sameEvent) stopAutoMusicOnLeave()
       enteringRef.current = true
       const seq = ++enterSeqRef.current
       const backend = backendRef.current
@@ -1348,8 +1374,12 @@ export function AppShell() {
         currentYearCoverRef.current = detail.yearCover ?? null
         currentThemeChoicesRef.current = { year: detail.yearTheme ?? null, event: detail.event.theme ?? null }
         currentItemsRef.current = detail.items
-        // Instelling "ook bij een memory": het eerste liedje begint zachtjes.
-        autoPlayForEvent(detail.items)
+        // Alleen bij een ECHTE entry, niet bij een verversing van dezelfde memory.
+        // `enterEvent` is ook de "herbouw de scene"-route: na een themawissel, een
+        // toegevoegde foto of een verwijderd item. Zonder deze conditie begon de
+        // muziek die je zojuist had uitgezet daar telkens opnieuw -- en werd
+        // "item verwijderen" per ongeluk "volgende nummer".
+        if (!sameEvent) autoPlayForEvent(detail.items, eventId)
         // Zie enterYear: entry-referentie alleen bij een echte entry bijwerken.
         if (!snapCam) entryZoomRef.current = engine.pendingZoom
         // Focus-continuïteit bij terug (Escape) uit L3: het item waar je vandaan
@@ -1606,13 +1636,18 @@ export function AppShell() {
         setCoverPickModeRef.current(false)
         return
       }
-      // Escape stopt eerst de muziek. In kijkmodus is het "nu speelt"-balkje
-      // weggefade en is de spatiebalk buiten L3 niet actief -- zonder deze uitweg
-      // is muziek daar helemaal niet meer te stoppen.
+      // Escape stopt eerst de muziek, maar ALLEEN als dat werkelijk de enige
+      // uitweg is: in kijkmodus (het "nu speelt"-balkje is dan weggefade en de
+      // spatiebalk werkt buiten L3 niet), óf als deze muziek niet toch al stopt
+      // zodra je de memory verlaat. Anders zou elke terugstap in een memory met
+      // een liedje twee keer Escape kosten, waarvan de eerste niets extra's doet.
       if (e.key === 'Escape' && nowPlayingRef.current && !dialogOpenRef.current) {
-        e.preventDefault()
-        stopMusicRef.current()
-        return
+        const stopsOnLeave = autoStartedIdRef.current === nowPlayingRef.current.itemId
+        if (settingsRef.current.viewMode || !stopsOnLeave) {
+          e.preventDefault()
+          stopMusicRef.current()
+          return
+        }
       }
       if (e.key === 'Escape' || e.key === 'Backspace') {
         // Een open dialog (formulier/bevestiging) vangt Escape zelf af — hier
@@ -1636,9 +1671,30 @@ export function AppShell() {
     // Alt-Tab de gouden rand doven terwijl de kies-modus gewoon aan blijft.
     let shiftDown = false
     const syncRings = (): void => {
-      if (levelRef.current !== 'event') return
+      if (levelRef.current !== 'event') {
+        setRingHint(null)
+        return
+      }
       const pick = coverPickRef.current
       sceneRef.current?.setRingKeys?.(ctrlDown || pick, shiftDown && !pick)
+      // Spiegelt exact wat de scene tekent (zie `refreshRings`): de blauwe
+      // jaar-rand vereist Ctrl ÉN Shift, de gouden alleen Ctrl. In de plakkende
+      // kies-modus staat de eigen balk er al -- dan geen tweede.
+      // `has` wordt hier vastgelegd, niet tijdens de render uit een ref gelezen:
+      // een ref-wijziging veroorzaakt geen re-render, dus de tekst "nog geen
+      // gekozen" zou anders stil verouderen.
+      const kind = pick ? null : ctrlDown && shiftDown ? 'year' : ctrlDown ? 'cover' : null
+      setRingHint(
+        kind === null
+          ? null
+          : {
+              kind,
+              has:
+                kind === 'year'
+                  ? !!currentYearCoverRef.current
+                  : !!currentEventInfoRef.current?.featuredPhoto,
+            },
+      )
     }
     syncRingsRef.current = syncRings
 
@@ -3078,16 +3134,46 @@ export function AppShell() {
       )}
       {/* Kies-modus: duidelijk in beeld dát je in die modus zit. Zonder deze balk was
           de enige aanwijzing een gouden rand die je pas ziet als je al hovert. */}
+      {/* AnimatePresence zodat de balk ook nét zo zacht wéggaat als hij komt --
+          zonder dat knipt hij weg zodra je Ctrl loslaat. */}
+      <AnimatePresence>
       {coverPick && uiLevel === 'event' && !screensaverIds && (
-        <div style={coverBannerStyle}>
-          <IconCover size={18} />
+        <HintBar key="pickbar" tone="cover" icon={<IconCover size={18} />}>
           <span>
             <b>Kies de omslagfoto</b> — klik een foto in deze memory
           </span>
           <span style={{ opacity: 0.65 }}>Esc om te stoppen</span>
           {coverHint && <span style={{ color: '#ffd479' }}>{coverHint}</span>}
-        </div>
+        </HintBar>
       )}
+      {/* Ctrl vasthouden = "welke foto vertegenwoordigt dit?" Zonder uitleg is de
+          enige aanwijzing een rand om een foto die misschien buiten beeld staat. */}
+      {ringHint && !coverPick && uiLevel === 'event' && !screensaverIds && !anyDialog && (
+        <HintBar
+          key={`ringhint-${ringHint.kind}`}
+          tone={ringHint.kind}
+          icon={<IconCover size={18} />}
+        >
+          {ringHint.kind === 'year' ? (
+            <span>
+              <b>Omslagfoto van dit jaar</b> — klik een foto om 'm de hele jaartegel te laten
+              vertegenwoordigen
+            </span>
+          ) : (
+            <span>
+              <b>Omslagfoto van deze memory</b> — klik een foto om 'm als thumbnail te kiezen
+            </span>
+          )}
+          <span style={{ opacity: 0.6 }}>
+            {ringHint.has
+              ? ringHint.kind === 'year'
+                ? 'de huidige is blauw omrand'
+                : 'de huidige is goud omrand'
+              : 'nog geen gekozen'}
+          </span>
+        </HintBar>
+      )}
+      </AnimatePresence>
       {matReport && <MaterializationOverlay report={matReport} onClose={() => setMatReport(null)} />}
       {phase === 'ready' && !anyDialog && !searchOpen && !settingsOpen && !settings.viewMode && (
         <Fab
@@ -4159,8 +4245,9 @@ function SettingsPanel({
                 ))}
               </div>
               {desc(
-                'Handmatig starten kan altijd, ook op "nooit" — met de knop bij het liedje of met de spatiebalk. ' +
-                  'Muziek die vanzelf begon stopt ook vanzelf als je de memory verlaat; wat je zelf aanzette blijft doorspelen.',
+                'Handmatig starten kan altijd, ook op "nooit": open het liedje en gebruik de afspeelknop ' +
+                  'of de spatiebalk. Muziek die vanzelf begon stopt ook vanzelf als je de memory verlaat; ' +
+                  'wat je zelf aanzette blijft doorspelen.',
               )}
               {subhead('Geluid')}
               <div style={{ fontSize: 13, color: u.textMuted, margin: '4px 0 4px' }}>
@@ -6150,12 +6237,59 @@ const toastStyle = (u: UiPalette): React.CSSProperties => ({
 /** Balk bovenin tijdens de "kies de omslagfoto"-modus. Bewust bovenaan (de dock
  * staat onderin) en in het goud van de omslag-rand, zodat balk en rand één verhaal
  * vertellen. */
-const coverBannerStyle: React.CSSProperties = {
+/** Zwevend hint-balkje onder de memory-titel. Half doorzichtig met een blur, en
+ * het faadt in -- het moet aanvoelen als een tooltip die verschijnt, niet als een
+ * dialoog die je pad blokkeert. `pointerEvents: none`, dus je kunt er dwars
+ * doorheen klikken op de foto die je wilt kiezen. */
+function HintBar({
+  tone,
+  icon,
+  children,
+}: {
+  tone: 'cover' | 'year'
+  icon: React.ReactNode
+  children: React.ReactNode
+}) {
+  const gold = tone === 'cover'
+  return (
+    <div style={hintRowStyle}>
+    <m.div
+      initial={{ opacity: 0, y: -6 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -6 }}
+      transition={{ duration: 0.16, ease: 'easeOut' }}
+      style={{
+        ...coverBannerStyle,
+        background: gold ? 'rgba(28,22,10,0.72)' : 'rgba(12,20,32,0.72)',
+        border: `1px solid ${gold ? 'rgba(255,194,75,0.45)' : 'rgba(75,155,255,0.45)'}`,
+        color: gold ? '#ffe6b0' : '#cfe2ff',
+        backdropFilter: 'blur(14px)',
+        WebkitBackdropFilter: 'blur(14px)',
+      }}
+    >
+      {icon}
+      {children}
+    </m.div>
+    </div>
+  )
+}
+
+/** Centrerende laag onder de memory-titel. Nodig omdat de balk zelf een
+ * motion-element is: die schrijft `transform` vol met zijn eigen animatie en zou
+ * een `translateX(-50%)` overschrijven -- de balk stond dan rechts van het midden. */
+const hintRowStyle: React.CSSProperties = {
   position: 'absolute',
   // Onder de memory-titel (die staat op top 18 en is even breed gecentreerd).
   top: 72,
-  left: '50%',
-  transform: 'translateX(-50%)',
+  left: 0,
+  right: 0,
+  display: 'flex',
+  justifyContent: 'center',
+  zIndex: 1100,
+  pointerEvents: 'none',
+}
+
+const coverBannerStyle: React.CSSProperties = {
   display: 'flex',
   alignItems: 'center',
   gap: 10,
@@ -6166,8 +6300,6 @@ const coverBannerStyle: React.CSSProperties = {
   color: '#ffe6b0',
   font: '13px sans-serif',
   boxShadow: '0 6px 24px rgba(0,0,0,0.55)',
-  zIndex: 1100,
-  pointerEvents: 'none',
   maxWidth: '92vw',
   flexWrap: 'wrap',
   justifyContent: 'center',
