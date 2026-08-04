@@ -181,3 +181,14 @@ export function IconTrash({ size = 18, style }: IconProps) {
     </svg>
   )
 }
+
+/** Vierkant met een pijl die eruit wijst: "opent buiten de app" (systeembrowser). */
+export function IconExternal({ size = 18, style }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.7} strokeLinecap="round" strokeLinejoin="round" style={svgBase(style)}>
+      <path d="M13 5h6v6" />
+      <path d="M19 5l-8 8" />
+      <path d="M18 14v4.5A1.5 1.5 0 0 1 16.5 20h-11A1.5 1.5 0 0 1 4 18.5v-11A1.5 1.5 0 0 1 5.5 6H10" />
+    </svg>
+  )
+}

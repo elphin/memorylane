@@ -22,7 +22,7 @@ import { ACCENT_SWATCHES, FRAME_STYLES, TITLE_FONTS, resolveTheme, type ThemeCho
 import { BACKGROUNDS, BACKGROUND_NONE, loadBackgroundTexture } from '../theme/textures'
 import { THEME, setActiveTheme, type ResolvedTheme } from '../theme/tokens'
 import { UI_DARK, UI_LIGHT, ui, type UiPalette } from '../theme/ui'
-import { IconEigen, IconGrid, IconScatter, IconImage, IconNote, IconSliders, IconPalette, IconPencil, IconPlus, IconTrash, IconCrop, IconCover } from './icons'
+import { IconEigen, IconGrid, IconScatter, IconImage, IconNote, IconSliders, IconPalette, IconPencil, IconPlus, IconTrash, IconCrop, IconCover, IconExternal } from './icons'
 import { EventScene } from '../render/scenes/event'
 import type { NodePosition } from '../render/scenes/scene'
 import { Screensaver } from './Screensaver'
@@ -88,6 +88,10 @@ interface MetaForm {
   frame: string
   /** Oorspronkelijke waarde bij openen (alleen schrijven bij wijziging). */
   frame0: string
+  /** Geluidsitem (losse opname): dan is de kader-keuze betekenisloos, want de
+   * kaart forceert 'plain'. Een bediening tonen die aantoonbaar niets doet -- en
+   * bij opslaan wél naar schijf schrijft -- is erger dan geen bediening. */
+  isSound?: boolean
 }
 
 /** App-voorkeuren (UI, geen vault-data) — bewaard in localStorage. */
@@ -362,6 +366,9 @@ export function AppShell() {
   const [editing, setEditing] = useState<null | { id: string; kind: 'text' | 'photo'; value: string }>(null)
   const [eventForm, setEventForm] = useState<null | EventForm>(null)
   const [metaForm, setMetaForm] = useState<null | MetaForm>(null)
+  const [songForm, setSongForm] = useState<null | SongForm>(null)
+  // https-link van het gefocuste liedje (L3), of null. Stuurt de "Openen"-knop.
+  const [focusSourceUrl, setFocusSourceUrl] = useState<string | null>(null)
   // Gestylede bevestigings-dialoog voor destructieve acties (i.p.v. het
   // stijlbrekende native window.confirm).
   const [confirmBox, setConfirmBox] = useState<null | {
@@ -487,6 +494,14 @@ export function AppShell() {
   // Titel bij een detailfoto: caption (indien de instelling aan is én er een
   // caption is), anders de eventnaam. Zo krijg je zonder caption geen rare
   // bestandsnamen, maar netjes de eventnaam.
+  /** De https-link van een liedje, of null. Alleen `song`: bij een gesproken memo
+   * is er niets om extern te openen. */
+  const sourceUrlOf = (item: Item | undefined): string | null => {
+    if (!item || item.itemType !== 'song') return null
+    const url = normalizeLink(item.url ?? '')
+    return url.startsWith('https://') ? url : null
+  }
+
   const focusTitleFor = (item: Item | undefined): string => {
     const cap = item?.caption?.trim()
     if (settingsRef.current.photoTitleFromCaption && cap) return cap
@@ -1272,11 +1287,13 @@ export function AppShell() {
           // Titel meelaten lopen bij stappen (tik óf pijltjestoets).
           const it = id ? currentItemsRef.current.find((x) => x.id === id) : undefined
           setHeader({ text: focusTitleFor(it), dir: delta > 0 ? 'in' : 'out' })
+          setFocusSourceUrl(sourceUrlOf(it))
         },
         // Vers resolven (app → jaar → event) zodat een themawissel meetelt.
         resolveTheme(currentThemeChoicesRef.current.year, currentThemeChoicesRef.current.event),
       )
       scene.setAnimateSteps(settingsRef.current.l3StepAnimation)
+      setFocusSourceUrl(sourceUrlOf(items[index]))
       if (contentFillRef.current) scene.setFullscreen(true)
       sceneRef.current = scene
       if (snapCam) engine.jumpCamera(snapCam.x, snapCam.y, snapCam.zoom)
@@ -1965,11 +1982,11 @@ export function AppShell() {
   }, [uiLevel, setCoverPickMode])
 
   useEffect(() => {
-    dialogOpenRef.current = !!(modal || editing || eventForm || metaForm || confirmBox)
+    dialogOpenRef.current = !!(modal || editing || eventForm || metaForm || songForm || confirmBox)
     // Een open dialoog dekt het canvas af → de kies-modus zou onbereikbaar aan blijven
     // (en de balk zou over de dialoog liegen dat Esc 'm sluit).
     if (dialogOpenRef.current) setCoverPickMode(false)
-  }, [modal, editing, eventForm, metaForm, confirmBox])
+  }, [modal, editing, eventForm, metaForm, songForm, confirmBox])
 
   // Haal de asset-URL van de gefocuste video op (pad → convertFileSrc). Async,
   // dus buiten de render; leeg bij geen video of tijdens het laden.
@@ -2449,6 +2466,10 @@ export function AppShell() {
         const id = sceneRef.current?.currentId?.()
         const item = id ? detail.items.find((it) => it.id === id) : undefined
         setHeader({ text: focusTitleFor(item), dir: 'in' })
+        // Ook de bronknop: die luistert alleen naar stappen en naar het openen van
+        // L3. Zonder dit blijft hij na het bewerken van de link de OUDE link
+        // openen -- of verdwijnt hij niet als je het veld leegmaakt.
+        setFocusSourceUrl(sourceUrlOf(item))
       }
     }
   }
@@ -2464,6 +2485,18 @@ export function AppShell() {
       setEditing({ id, kind: 'text', value: item.bodyText ?? '' })
       return
     }
+    // Liedje → eigen formulier. De kader-keuze (polaroid/strak) is voor een
+    // liedje betekenisloos -- de kaart negeert 'm sowieso -- en titel en artiest
+    // horen niet in een paneel dat "Foto-gegevens" heet.
+    if (item.itemType === 'song') {
+      setSongForm({
+        id,
+        title: item.caption ?? '',
+        artist: item.artist ?? '',
+        url: item.url ?? '',
+      })
+      return
+    }
     // Foto → metadata-paneel (laad de huidige sidecar-waarden).
     const backend = backendRef.current
     if (!backend) return
@@ -2475,6 +2508,7 @@ export function AppShell() {
         const frame = currentItemsRef.current.find((it) => it.id === id)?.frame ?? ''
         setMetaForm({
           id,
+          isSound: item.itemType === 'audio',
           caption: m.caption,
           date: m.date,
           place: m.place,
@@ -2489,6 +2523,25 @@ export function AppShell() {
         setMessage(String(e))
         setPhase('error')
       })
+  }
+
+  const submitSong = async (): Promise<void> => {
+    const backend = backendRef.current
+    const f = songForm
+    if (!backend || !f || mutatingRef.current) return
+    mutatingRef.current = true
+    setBusy(true)
+    try {
+      await backend.setSongMeta(f.id, f.title, f.artist, normalizeLink(f.url))
+      await refreshFocus()
+      setSongForm(null)
+    } catch (e) {
+      setMessage(String(e))
+      setPhase('error')
+    } finally {
+      mutatingRef.current = false
+      setBusy(false)
+    }
   }
 
   const submitEdit = async (): Promise<void> => {
@@ -2569,7 +2622,7 @@ export function AppShell() {
   // Eén afleiding voor "staat er een blokkerende dialog open?" — gebruikt in
   // alle render-guards én (via dialogOpenRef) in de key-/gesture-closures, zodat
   // een nieuwe dialog-soort nooit op één plek vergeten kan worden.
-  const anyDialog = !!(modal || editing || eventForm || metaForm || confirmBox)
+  const anyDialog = !!(modal || editing || eventForm || metaForm || songForm || confirmBox)
 
   const backVisible =
     phase === 'ready' &&
@@ -2804,6 +2857,9 @@ export function AppShell() {
           onLayout={changeLayout}
           onSaveLayout={saveLayoutAsCustom}
           onEdit={startEdit}
+          onOpenSource={focusSourceUrl ? () => {
+            void backendRef.current?.openExternal(focusSourceUrl).catch((e) => setToast(String(e)))
+          } : undefined}
           onDelete={() => void deleteCurrent()}
           scatterRotate={settings.scatterRotate}
           onToggleScatterRotate={toggleScatterRotate}
@@ -2872,6 +2928,22 @@ export function AppShell() {
         )}
       </AnimatePresence>
       <AnimatePresence>
+        {songForm && (
+          <SongPanel
+            key="songpanel"
+            form={songForm}
+            busy={busy}
+            onChange={(patch) => setSongForm({ ...songForm, ...patch })}
+            onSubmit={() => void submitSong()}
+            onCancel={() => setSongForm(null)}
+            onOpenLink={() => {
+              const url = normalizeLink(songForm.url)
+              // `setToast`, niet `setMessage`: die laatste rendert alleen in de
+              // fout-overlay, dus elke mislukking zou hier volledig stil zijn.
+              if (url) void backendRef.current?.openExternal(url).catch((e) => setToast(String(e)))
+            }}
+          />
+        )}
         {metaForm && (
           <MetaPanel
             key="metapanel"
@@ -2952,6 +3024,115 @@ function AnimatedModal({
   )
 }
 
+/** Maakt een geplakte link klaar voor opslaan én voor de opener.
+ *
+ * Twee dingen die anders stil misgaan:
+ * - De opener-scope in `capabilities/default.json` matcht met glob, en glob is
+ *   HOOFDLETTERGEVOELIG. `HTTPS://…` haalt dan wel onze eigen check maar wordt
+ *   door de scope geweigerd -- een knop die aan staat en niets doet.
+ * - `http://`-links (oude bookmarks, gedeelde berichten) zouden de knop permanent
+ *   uit laten staan met "plak eerst een https-link", terwijl je wél plakte.
+ * Geeft een lege string als er niets bruikbaars overblijft. */
+function normalizeLink(raw: string): string {
+  const url = raw.trim()
+  if (!url) return ''
+  // Controltekens midden in de URL: `open` spawnt zonder foutmelding, dus die
+  // zouden een stille no-op opleveren.
+  if (/[\u0000-\u0020]/.test(url)) return ''
+  return url.replace(/^https?:\/\//i, 'https://')
+}
+
+interface SongForm {
+  id: string
+  title: string
+  artist: string
+  url: string
+}
+
+/** Bewerkscherm voor een liedje: titel, artiest en de streaming-link.
+ *
+ * Bewust géén kader-keuze (die negeert de kaart toch) en géén plaats/mensen: dit
+ * gaat over wát het liedje is, niet over waar de foto genomen is. De link is
+ * meteen te openen, zodat je kunt controleren of je de juiste geplakt hebt. */
+function SongPanel({
+  form,
+  busy,
+  onChange,
+  onSubmit,
+  onCancel,
+  onOpenLink,
+}: {
+  form: SongForm
+  busy: boolean
+  onChange: (patch: Partial<SongForm>) => void
+  onSubmit: () => void
+  onCancel: () => void
+  onOpenLink: () => void
+}) {
+  const u = ui()
+  useEscape(onCancel)
+  const canOpen = normalizeLink(form.url).startsWith('https://')
+  return (
+    <AnimatedModal
+      onBackdrop={onCancel}
+      panelStyle={{ width: 480, maxWidth: '92%', background: u.card, color: u.text, borderRadius: 12, padding: 20 }}
+    >
+      <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 12 }}>Liedje</div>
+      <label style={metaLabel(u)}>
+        Titel
+        <input
+          autoFocus
+          value={form.title}
+          onChange={(e) => onChange({ title: e.target.value })}
+          placeholder="Blinding Lights"
+          style={{ ...field(u), marginTop: 4 }}
+        />
+      </label>
+      <label style={{ ...metaLabel(u), marginTop: 12, display: 'block' }}>
+        Artiest
+        <input
+          value={form.artist}
+          onChange={(e) => onChange({ artist: e.target.value })}
+          placeholder="The Weeknd"
+          style={{ ...field(u), marginTop: 4 }}
+        />
+      </label>
+      <label style={{ ...metaLabel(u), marginTop: 12, display: 'block' }}>
+        Link
+        <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+          <input
+            value={form.url}
+            onChange={(e) => onChange({ url: e.target.value })}
+            placeholder="https://open.spotify.com/track/…"
+            style={{ ...field(u), flex: 1 }}
+          />
+          <button
+            type="button"
+            onClick={onOpenLink}
+            disabled={!canOpen}
+            title={canOpen ? 'Openen in je browser' : 'Plak eerst een https-link'}
+            style={{ ...ghostBtn(u), opacity: canOpen ? 1 : 0.45, cursor: canOpen ? 'pointer' : 'default' }}
+          >
+            Openen
+          </button>
+        </div>
+      </label>
+      <div style={{ fontSize: 12, opacity: 0.6, marginTop: 10, lineHeight: 1.45 }}>
+        Titel en artiest blijven bewaard, ook als de dienst waar de link naartoe wijst
+        ooit verdwijnt.
+      </div>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
+        <button type="button" onClick={onCancel} style={ghostBtn(u)}>
+          Annuleren
+        </button>
+        <button type="button" onClick={onSubmit} disabled={busy} style={primaryBtn(u)}>
+          Opslaan
+        </button>
+      </div>
+    </AnimatedModal>
+  )
+}
+
 function MetaPanel({
   form,
   busy,
@@ -3021,6 +3202,7 @@ function MetaPanel({
             style={{ ...field(u), marginTop: 4 }}
           />
         </label>
+        {!form.isSound && (
         <div style={{ ...metaLabel(u), marginTop: 12 }}>
           Kader
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 4 }}>
@@ -3043,6 +3225,7 @@ function MetaPanel({
             ))}
           </div>
         </div>
+        )}
         {form.exif.length > 0 && (
           <div style={{ marginTop: 16, borderTop: `1px solid ${u.border}`, paddingTop: 12 }}>
             <div style={{ fontSize: 12, color: u.textFaint, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.5 }}>
@@ -4017,6 +4200,7 @@ function Fab({
   onLayout,
   onSaveLayout,
   onEdit,
+  onOpenSource,
   onDelete,
   scatterRotate,
   onToggleScatterRotate,
@@ -4042,6 +4226,8 @@ function Fab({
   onSaveLayout: () => void
   onEdit: () => void
   onDelete: () => void
+  /** Alleen gezet als het gefocuste item een liedje met een https-link is. */
+  onOpenSource?: () => void
   scatterRotate: boolean
   onToggleScatterRotate: () => void
   gridSort: 'date' | 'name' | 'random'
@@ -4210,6 +4396,11 @@ function Fab({
       <div style={wrap}>
         <m.div key="focus" style={wrapCol} {...dockEnter}>
           <div style={row}>
+            {/* Een liedje met een link: openen is een KIJK-actie, niet iets wat je
+                pas na het openen van een bewerkformulier mag kunnen. */}
+            {onOpenSource && (
+              <Pill icon={<IconExternal size={16} />} onClick={onOpenSource}>Openen</Pill>
+            )}
             <Pill kind="primary" icon={<IconPencil size={16} />} onClick={onEdit}>Bewerk</Pill>
             <Pill kind="danger" icon={<IconTrash size={16} />} onClick={onDelete}>Verwijder</Pill>
           </div>

@@ -4,11 +4,12 @@
 // als grote kaart.
 
 import { BlurFilter, Container, Graphics, Sprite, Text, Texture } from 'pixi.js'
-import type { Backend, Item } from '../../lib/backend'
+import { soundLabel, thumbRef, type Backend, type Item } from '../../lib/backend'
 import { resolveFrameStyle, resolveTheme } from '../../theme/resolve'
 import type { FrameStyle, ResolvedTheme } from '../../theme/tokens'
 import type { FrameContext, RenderEngine } from '../core/engine'
 import type { Scene } from './scene'
+import { isSound } from './types'
 
 const FOCUS = 720
 const CARD_W = 640
@@ -162,9 +163,12 @@ export class FocusScene implements Scene {
       // foto vouwt. In content-beeldvullend laten we 'm weg: dan vult de foto
       // tot de rand en zouden alleen de zijranden zichtbaar zijn (tegen de
       // geblurde achtergrond = lelijk).
-      this.frameStyleCur = resolveFrameStyle(item.frame, this.T)
+      // Geluidsitems negeren de kaderstijl, net als op het canvas: een
+      // polaroid-band onder een albumhoes met titel en artiest is vormtaal-onzin.
+      const sound = isSound(item.itemType)
+      this.frameStyleCur = sound ? 'plain' : resolveFrameStyle(item.frame, this.T)
       const frame = new Graphics()
-      frame.visible = !this.fullscreen && this.frameStyleCur !== 'none'
+      frame.visible = !this.effFull && this.frameStyleCur !== 'none'
       container.addChild(frame)
       this.frame = frame
       const sprite = new Sprite(Texture.WHITE)
@@ -182,28 +186,64 @@ export class FocusScene implements Scene {
       this.dispW = FOCUS
       this.dispH = FOCUS
       this.drawPhotoFrame(FOCUS, FOCUS)
+      if (sound) {
+        // Zonder hoes blijft de sprite anders op `focusLoading` staan -- eeuwig
+        // "aan het laden" terwijl er niets komt. Meteen het rustige vlak zetten.
+        if (!thumbRef(item)) {
+          sprite.tint = this.T.colors.surface
+          this.loaded = true
+        }
+        this.buildNoteBadge(container)
+      }
     }
 
     // Caption: bij een polaroid-kader ín de brede onderrand (donkere inkt op
     // de rand), anders onder het item (alleen bij foto's; bij tekst ís de
     // kaart de tekst).
-    if (item.caption && !isText) {
+    // Bij een liedje is er ALTIJD een onderschrift, ook zonder titel: de tekst is
+    // de kern van het item. Titel op de eerste regel, artiest op de tweede.
+    // `soundLabel`: dezelfde naam als op het canvas. Die twee liepen uiteen --
+    // het canvas toonde de bestandsnaam en de focus "Liedje" -- terwijl het om
+    // hetzelfde item gaat, en een gesproken memo is sowieso geen liedje.
+    const sl = isSound(item.itemType) ? soundLabel(item) : null
+    const songLines = sl ? [sl.title, sl.artist].filter(Boolean).join('\n') : null
+    if ((item.caption || songLines) && !isText) {
       const polaroid = this.frameStyleCur === 'polaroid'
       const cap = new Text({
-        text: item.caption,
+        text: songLines ?? item.caption ?? '',
         style: {
           fill: polaroid ? this.T.colors.paperInk : this.T.colors.textSoft,
           fontSize: polaroid ? 24 : 18,
           fontFamily: this.T.fonts.caption,
+          align: 'center',
+          lineHeight: songLines ? 26 : undefined,
         },
       })
       cap.resolution = 2
       cap.anchor.set(0.5, polaroid ? 0.5 : 0)
-      if (polaroid && this.fullscreen) cap.alpha = 0 // band is verborgen in beeldvullend
+      if (polaroid && this.effFull) cap.alpha = 0 // band is verborgen in beeldvullend
       container.addChild(cap)
       this.caption = cap
       this.positionCaption(this.contentW, this.contentH)
+      // Bij een liedje hoort de tekst BIJ de inhoud: reserveer er ruimte voor in
+      // de camera-fit, anders valt titel en artiest onder de dock. `contentH` is
+      // een totale hoogte rond het midden, dus twee keer de onderste uitloop.
+      if (songLines) this.contentH += 2 * (PHOTO_BORDER + 18 + cap.height)
     }
+  }
+
+  /** Muzieknoot-badge, zelfde vorm als op het canvas maar op L3-formaat. */
+  private buildNoteBadge(container: Container): void {
+    const R = 44
+    const g = new Graphics()
+    g.circle(0, 0, R).fill({ color: 0x000000, alpha: 0.45 })
+    g.circle(0, 0, R).stroke({ width: 3, color: 0xffffff, alpha: 0.92 })
+    const W = 0xffffff
+    g.ellipse(-R * 0.2, R * 0.34, R * 0.28, R * 0.22).fill({ color: W, alpha: 0.96 })
+    g.rect(R * 0.02, -R * 0.46, R * 0.12, R * 0.82).fill({ color: W, alpha: 0.96 })
+    g.poly([R * 0.14, -R * 0.46, R * 0.52, -R * 0.24, R * 0.52, R * 0.02, R * 0.14, -R * 0.2])
+      .fill({ color: W, alpha: 0.96 })
+    container.addChild(g)
   }
 
   /** Aan/uit voor de slide+fade-transitie tussen items (instelling). */
@@ -249,7 +289,7 @@ export class FocusScene implements Scene {
     // Afgeronde foto-hoeken via het masker, alleen bij 'rounded' (en niet in
     // beeldvullend — daar vult de foto de schermrand).
     if (this.sprite && this.photoMask) {
-      if (fs === 'rounded' && !this.fullscreen) {
+      if (fs === 'rounded' && !this.effFull) {
         this.photoMask.clear()
         this.photoMask.roundRect(-w / 2, -h / 2, w, h, 16).fill(0xffffff)
         this.sprite.mask = this.photoMask
@@ -295,7 +335,7 @@ export class FocusScene implements Scene {
   }
 
   private fitCamera(): void {
-    this.baseZoom = this.baseZoomFor(this.fullscreen)
+    this.baseZoom = this.baseZoomFor(this.effFull)
     this.engine.jumpCamera(0, 0, this.baseZoom)
     this.refreshBlurBg()
   }
@@ -327,7 +367,7 @@ export class FocusScene implements Scene {
   /** Zet de blur-achtergrond in de RUST-stand (geen animatie): zichtbaar+vol in
    * beeldvullend, anders verborgen. Tekst-items tonen geen bg. */
   private refreshBlurBg(): void {
-    const show = this.fullscreen && this.canShowBlur()
+    const show = this.effFull && this.canShowBlur()
     this.bgBlur.visible = show
     this.bgBlur.alpha = 1
     if (show) this.sizeBlurBg()
@@ -349,6 +389,27 @@ export class FocusScene implements Scene {
    * nieuwe fit terwijl de witte fotorand uit-/infaadt en de geblurde achtergrond
    * in-/uitfaadt. De frame-lus (update) drijft de fades; de camera-tween loopt via
    * de engine. */
+  /** Heeft het huidige item iets om beeldvullend te TONEN?
+   *
+   * Een geluidsitem zonder albumhoes niet: je zou een schermvullend effen vlak
+   * krijgen met alleen een badge, terwijl titel en artiest net buiten de fit
+   * vallen -- en bij een liedje is die tekst juist de inhoud.
+   *
+   * Bewust een effectieve stand en geen weigering in `setFullscreen`: de voorkeur
+   * van de gebruiker blijft staan (stap je door naar een foto, dan is
+   * beeldvullend er weer), en de app-shell hoeft niet te weten dat de scene een
+   * keer 'nee' zei. Weigeren liet `contentFillRef` uit de pas lopen, waardoor
+   * Escape niet meer terugging. */
+  private canFull(): boolean {
+    const it = this.current
+    return !(it && isSound(it.itemType) && !thumbRef(it))
+  }
+
+  /** De beeldvullend-stand zoals hij daadwerkelijk getekend moet worden. */
+  private get effFull(): boolean {
+    return this.fullscreen && this.canFull()
+  }
+
   setFullscreen(on: boolean): void {
     this.fullscreen = on
     // Masker/kader-geometrie volgt de beeldvullend-stand (afgeronde hoeken uit
@@ -451,9 +512,9 @@ export class FocusScene implements Scene {
         this.fsAnim = null
         if (this.frame) {
           this.frame.alpha = 1
-          this.frame.visible = !this.fullscreen
+          this.frame.visible = !this.effFull
         }
-        this.syncPolaroidCaption(this.fullscreen ? 0 : 1)
+        this.syncPolaroidCaption(this.effFull ? 0 : 1)
         this.refreshBlurBg()
       } else {
         const eased = easeInOutCubic(t)
@@ -466,20 +527,23 @@ export class FocusScene implements Scene {
           this.fsAnim = null
           // Rust-stand vastzetten + eventueel nagekomen textuur-maat corrigeren
           // (foto die net tíjdens de animatie inlaadde) met een exacte snap.
-          this.baseZoom = this.baseZoomFor(this.fullscreen)
+          this.baseZoom = this.baseZoomFor(this.effFull)
           this.engine.jumpCamera(0, 0, this.baseZoom)
           if (this.frame) {
             this.frame.alpha = 1
-            this.frame.visible = !this.fullscreen
+            this.frame.visible = !this.effFull
           }
-          this.syncPolaroidCaption(this.fullscreen ? 0 : 1)
+          this.syncPolaroidCaption(this.effFull ? 0 : 1)
           this.refreshBlurBg()
         }
       }
     }
 
     const item = this.current
-    if (!this.sprite || this.loaded || !item || !item.media) return
+    // `thumbRef`, niet `item.media`: een liedje toont zijn albumhoes, en een
+    // geluidsitem zonder hoes heeft géén afbeelding -- die vraagt er dus ook geen
+    // op, anders weigert de backend en blijft de textuur-cache eeuwig herproberen.
+    if (!this.sprite || this.loaded || !item || !thumbRef(item)) return
     const tex = engine.textures.get(this.currentKey, frame)
     if (tex) {
       this.sprite.texture = tex
@@ -497,7 +561,7 @@ export class FocusScene implements Scene {
       // Nu de echte foto-maat bekend is → beeldvullend opnieuw fitten. Niet tijdens
       // een lopende beeldvullend-animatie (die snapt aan het eind zelf de juiste
       // maat); anders zou jumpCamera de tween hard onderbreken.
-      if (this.fullscreen && !this.fsAnim) this.fitCamera()
+      if (this.effFull && !this.fsAnim) this.fitCamera()
     } else {
       // L3 = het detailniveau: laad de scherpe 2048-bron (niet de 1024-thumbnail).
       const src = this.backend.thumb(item.id, 2048)
@@ -531,7 +595,7 @@ export class FocusScene implements Scene {
     this.videoAspect = aspect && Number.isFinite(aspect) && aspect > 0 ? aspect : null
     // Beeldvullend op de ware verhouding — maar niet snappen tijdens de in/uit-
     // animatie (die corrigeert de maat zelf aan het eind).
-    if (this.fullscreen && !this.fsAnim) this.fitCamera()
+    if (this.effFull && !this.fsAnim) this.fitCamera()
   }
 
   /** Verberg/toon de Pixi-inhoud (poster+kader) — aan tijdens DOM-video-afspelen,

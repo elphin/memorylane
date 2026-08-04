@@ -130,6 +130,20 @@ export function thumbRef(item: Item): string | null {
   return AUDIO_EXT.has(ext) ? null : file
 }
 
+/** Titel + artiest van een geluidsitem, zoals het op elk niveau getoond wordt.
+ *
+ * Eén bron voor L2 en L3: die gaven eerder verschillende namen aan hetzelfde
+ * item (canvas toonde de bestandsnaam, focus toonde "Liedje"). Losse mp3's in
+ * bestaande vaults hebben geen caption, dus die fallback moet kloppen -- en een
+ * gesproken memo is geen liedje, dus die krijgt ook niet dat woord. */
+export function soundLabel(item: Item): { title: string; artist: string | null } {
+  const fromFile = (f: string) => f.replace(/\.[^.]+$/, '').replace(/_[0-9a-f]{8}$/i, '')
+  const fallback = item.itemType === 'audio' ? 'Geluidsopname' : 'Liedje'
+  const title =
+    item.caption?.trim() || (item.media ? fromFile(item.media).trim() : '') || fallback
+  return { title, artist: item.artist?.trim() || null }
+}
+
 export interface CanvasItem {
   eventId: string
   itemRef: string
@@ -333,6 +347,15 @@ export interface Backend {
   ): Promise<void>
   /** Zet (of wist bij `null`/leeg) de frame-stijl van een item. */
   setItemFrame(itemId: string, frame: string | null): Promise<void>
+  /** Werkt titel/artiest/link van een liedje bij. Leeg wist het veld. */
+  setSongMeta(
+    itemId: string,
+    title: string | null,
+    artist: string | null,
+    url: string | null,
+  ): Promise<void>
+  /** Opent een https-link in de SYSTEEMBROWSER (nooit in de app-webview). */
+  openExternal(url: string): Promise<void>
   search(query: string): Promise<SearchResult[]>
   /** Foto-item-ids voor de screensaver. `scopeKind`: 'all' | 'year' | 'event'
    * (met bijbehorend `scopeId`); `include` = minstens één van die tags, `exclude`
@@ -603,6 +626,30 @@ class TauriBackend implements Backend {
     await invoke('set_item_frame', { itemId, frame })
   }
 
+  async setSongMeta(
+    itemId: string,
+    title: string | null,
+    artist: string | null,
+    url: string | null,
+  ): Promise<void> {
+    const invoke = await this.api()
+    await invoke('set_song_meta', { itemId, title, artist, url })
+  }
+
+  async openExternal(url: string): Promise<void> {
+    // Alleen https: de capability staat niets anders toe, en een `spotify:`- of
+    // `file:`-URI uit onvertrouwde frontmatter mag nooit zomaar het OS in.
+    //
+    // Het scheme wordt HIER genormaliseerd, niet alleen bij de aanroeper: de
+    // opener-scope matcht met glob en glob is hoofdlettergevoelig, dus `HTTPS://`
+    // zou deze check halen en dan door de scope geweigerd worden. Die garantie
+    // hoort op de grens te staan, niet bij elke aanroeper apart.
+    const clean = url.trim().replace(/^https?:\/\//i, 'https://')
+    if (!clean.startsWith('https://')) throw new Error('alleen https-links')
+    const { openUrl } = await import('@tauri-apps/plugin-opener')
+    await openUrl(clean)
+  }
+
   async search(query: string): Promise<SearchResult[]> {
     const invoke = await this.api()
     return await invoke<SearchResult[]>('search', { query })
@@ -680,6 +727,7 @@ class MockBackend implements Backend {
   private edits = new Map<string, { caption: string | null; body: string | null }>()
   private meta = new Map<string, ItemMetadata>()
   private frames = new Map<string, string>() // itemId → frame-stijl
+  private songMeta = new Map<string, { caption?: string; artist?: string; url?: string }>()
   private featured = new Map<string, string>() // eventId → item-ref
   private yearCovers = new Map<string, string>() // yearId → item-id (vaste jaar-cover)
   private yearFactors = new Map<string, number>() // yearId → globale event-kaartschaal
@@ -947,11 +995,13 @@ class MockBackend implements Backend {
       // s0 heeft bewust frame 'polaroid': een geluidsitem moet die kader-stijl
       // negeren. Zonder dit geval blijft in de mock onzichtbaar dat een tweede
       // caption-Text het liedje-label zou overschrijven.
-      { id: `${eventId}-s0`, cover: 'hoes.jpg', media: 'bl.mp3', artist: 'The Weeknd', caption: 'Blinding Lights', frame: 'polaroid' },
+      { id: `${eventId}-s0`, cover: 'hoes.jpg', media: 'bl.mp3', artist: 'The Weeknd', caption: 'Blinding Lights', frame: 'polaroid', url: 'https://open.spotify.com/track/0VjIjW4GlUZAMYd2vXMi3b' },
       { id: `${eventId}-s1`, media: 'bl.mp3', artist: 'Fleetwood Mac', caption: 'Dreams' },
       // Bewust lang, zodat de breedte-clamp van het label echt afgaat.
       { id: `${eventId}-s2`, cover: 'hoes.jpg', artist: 'Toto met een hele lange artiestennaam', caption: 'Africa (uitgebreide albumversie)' },
-      { id: `${eventId}-s3`, caption: 'Dat nummer van die zomer' },
+      // Bewust met HOOFDLETTERS in het scheme: de opener-scope matcht met glob en
+      // glob is hoofdlettergevoelig, dus dit moet genormaliseerd worden.
+      { id: `${eventId}-s3`, caption: 'Dat nummer van die zomer', url: 'HTTPS://open.spotify.com/track/xyz' },
     ].map((s) => ({ ...s, eventId, itemType: 'song' as const, slug: s.id, timestampMs: 1_719_792_000_000 }))
     // Eén losse geluidsopname: geen liedje, wel dezelfde kaart zonder artiest.
     songs.push({
@@ -968,7 +1018,8 @@ class MockBackend implements Backend {
       .filter((it) => !this.deleted.has(it.id))
       .map((it) => {
         const frame = this.frames.get(it.id)
-        const withFrame = frame ? { ...it, frame } : it
+        const song = this.songMeta.get(it.id)
+        const withFrame = { ...it, ...(frame ? { frame } : {}), ...(song ?? {}) }
         const e = this.edits.get(it.id)
         if (!e) return withFrame
         return {
@@ -1155,6 +1206,25 @@ class MockBackend implements Backend {
     const clean = frame?.trim()
     if (clean) this.frames.set(itemId, clean)
     else this.frames.delete(itemId)
+  }
+
+  async setSongMeta(
+    itemId: string,
+    title: string | null,
+    artist: string | null,
+    url: string | null,
+  ): Promise<void> {
+    this.songMeta.set(itemId, {
+      caption: title?.trim() || undefined,
+      artist: artist?.trim() || undefined,
+      url: url?.trim() || undefined,
+    })
+  }
+
+  async openExternal(url: string): Promise<void> {
+    // In de browser-modus is er geen systeembrowser om naartoe te sturen; loggen
+    // is genoeg om te zien dát de knop het juiste adres doorgeeft.
+    console.info('[mock] zou extern openen:', url)
   }
   async search(query: string): Promise<SearchResult[]> {
     const q = query.toLowerCase().trim()

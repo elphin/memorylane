@@ -98,6 +98,10 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        // Voor "openen in Spotify/YouTube": de link gaat naar de SYSTEEMBROWSER.
+        // `window.open` zou de app-webview zelf wegnavigeren -- zonder terugknop,
+        // met de hele canvas-app kwijt. De capability is beperkt tot https.
+        .plugin(tauri_plugin_opener::init())
         .register_asynchronous_uri_scheme_protocol("thumb", move |ctx, request, responder| {
             let job = ThumbJob {
                 app: ctx.app_handle().clone(),

@@ -244,9 +244,12 @@ grid-packing én de LOD-lader raakt.
   daar twee fases lang ongebruikt liggen). Cargo + npm + init in `lib.rs` + capability.
   **Let op de vorm:** de platte string `"opener:allow-open-url"` geeft de permissie **zonder** scope;
   scopen vereist de objectvorm `{"identifier": "opener:allow-open-url", "allow": [{"url": "…"}]}`
-  met **glob**-syntax — en `https://*` matcht géén `https://open.spotify.com/track/…` (de slashes).
-  De exacte glob wordt handmatig geverifieerd met een echte Spotify- én YouTube-URL. `http://`
-  wordt bij opslaan genormaliseerd naar `https://`.
+  met **glob**-syntax.
+  **Correctie na de bouw:** eerder stond hier dat `https://*` geen pad met slashes zou matchen.
+  Dat klopt niet — de plugin gebruikt `Pattern::matches()` met `MatchOptions::new()`, en daarin is
+  `require_literal_separator: false`, dus `*` loopt gewoon over `/` heen. Wat wél telt: glob is
+  **hoofdlettergevoelig**, dus `HTTPS://…` wordt geweigerd. Daarom normaliseert `normalizeLink()`
+  het scheme (en `http://` → `https://`) vóór zowel opslaan als openen.
 - **Bewerken (anders is `set_song_meta` een wees):** `AppShell.tsx:2461` splitst nu binair op
   `isText`; alles wat geen text/link is gaat naar het metadata-paneel dat alleen
   caption/datum/plaats/mensen/tags + `frame` kent. Er komt een derde tak voor `song` → eigen

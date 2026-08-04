@@ -4,7 +4,7 @@
 // de backend (write-through naar `_canvas.json`).
 
 import { CanvasTextMetrics, Container, Graphics, Sprite, Text, Texture } from 'pixi.js'
-import { thumbRef, type Backend, type CanvasLayoutInput, type EventDetail, type Item } from '../../lib/backend'
+import { soundLabel, thumbRef, type Backend, type CanvasLayoutInput, type EventDetail, type Item } from '../../lib/backend'
 import { isSound } from './types'
 import { resolveFrameStyle, resolveTheme } from '../../theme/resolve'
 import type { FrameStyle, ResolvedTheme } from '../../theme/tokens'
@@ -587,12 +587,7 @@ export class EventScene implements Scene {
    * maar staat áltijd aan: bij een liedje is de tekst de kern van de kaart, niet
    * versiering. Zonder titel valt hij terug op de bestandsnaam. */
   private buildSongLabel(container: Container, item: Item): Text {
-    // Zonder titel: de bestandsnaam, maar zonder extensie en zonder de `_a1b2c3d4`-
-    // suffix die de import erachter zet. Losse mp3's in bestaande vaults hebben geen
-    // caption, en `oma-vertelt_a1b2c3d4.mp3` op een kaart is geen verbetering.
-    const fromFile = (f: string) => f.replace(/\.[^.]+$/, '').replace(/_[0-9a-f]{8}$/i, '')
-    const title = (item.caption ?? (item.media ? fromFile(item.media) : null) ?? 'Liedje').trim()
-    const artist = item.artist?.trim()
+    const { title, artist } = soundLabel(item)
     const cut = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1).trimEnd()}…` : s)
     const label = artist ? `${cut(title, 30)}\n${cut(artist, 30)}` : cut(title, 34)
     const el = new Text({
