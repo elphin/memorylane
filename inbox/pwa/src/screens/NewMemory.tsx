@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { Pairing } from '../store/db'
-import { deleteDraft, getMedia, listDrafts, putMedia, saveDraft, type Draft } from '../store/db'
+import type { OutboxEntry, Pairing } from '../store/db'
+import { deleteDraft, getMedia, listDrafts, patchOutbox, putMedia, saveDraft, type Draft } from '../store/db'
+import { prepareNew, prepareReplace } from '../upload/queue'
 import { formatBytes, formatDateShort, todayISO, uuid } from '../util'
 import { DatePicker } from './DatePicker'
 import { InstallHint } from './InstallHint'
@@ -17,17 +18,24 @@ function emptyDraft(): Draft {
 
 export function NewMemoryScreen({
   pairing,
+  editOf,
   onExpired,
   onFinished,
   nav,
 }: {
   pairing: Pairing
+  /** Aanpas-modus: een al verstuurde (nog niet geïmporteerde) memory. Wijzigingen
+   * worden bewaard in `editOf.edit` (niet als concept) en bij versturen vervangt
+   * de nieuwe versie de oude in de brievenbus. */
+  editOf?: OutboxEntry
   onExpired: () => void
-  /** Naar het overzicht na een geslaagde verzending. */
+  /** Naar het overzicht (na versturen, of na het weggooien van wijzigingen). */
   onFinished: () => void
   nav: ReactNode
 }) {
-  const [draft, setDraft] = useState<Draft>(emptyDraft)
+  const editing = !!editOf
+  const [draft, setDraft] = useState<Draft>(() => (editOf ? (editOf.edit ?? editOf.draft!) : emptyDraft()))
+  const [dirty, setDirty] = useState(false) // aanpas-modus: alleen echte wijzigingen bewaren
   const [thumbs, setThumbs] = useState<Record<string, string>>({}) // fileId → object-URL
   const [picker, setPicker] = useState<null | 'start' | 'end'>(null)
   const [phase, setPhase] = useState<'form' | 'uploading'>('form')
@@ -39,6 +47,10 @@ export function NewMemoryScreen({
   // uit de opgeslagen media-blobs (object-URL's overleven een herlaad niet, dus
   // zonder dit tonen herstelde foto's een lege placeholder i.p.v. de foto).
   useEffect(() => {
+    if (editOf) {
+      void loadThumbs(draft)
+      return
+    }
     void listDrafts().then(async (all) => {
       // Alleen concepten mét inhoud tellen; lege rijen (uit oudere sessies)
       // opruimen zodat listDrafts niet vervuilt en het herstel eenduidig is.
@@ -47,15 +59,20 @@ export function NewMemoryScreen({
       const keep = withContent[0] // listDrafts is op updatedAt aflopend gesorteerd
       if (!keep) return
       setDraft(keep)
-      const t: Record<string, string> = {}
-      for (const m of keep.media) {
-        if (!m.mime.startsWith('image/')) continue
-        const blob = await getMedia(keep.id, m.fileId)
-        if (blob) t[m.fileId] = URL.createObjectURL(blob)
-      }
-      setThumbs(t)
+      await loadThumbs(keep)
     })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  async function loadThumbs(d: Draft): Promise<void> {
+    const t: Record<string, string> = {}
+    for (const m of d.media) {
+      if (!m.mime.startsWith('image/')) continue
+      const blob = await getMedia(d.id, m.fileId)
+      if (blob) t[m.fileId] = URL.createObjectURL(blob)
+    }
+    setThumbs(t)
+  }
 
   // Object-URL's opruimen bij het verlaten van het scherm (geen geheugenlek).
   const thumbsRef = useRef(thumbs)
@@ -85,13 +102,24 @@ export function NewMemoryScreen({
   // ophoping van lege rijen).
   useEffect(() => {
     if (phase === 'uploading') return
+    if (editOf) {
+      if (!dirty) return
+      const t = setTimeout(
+        () => void patchOutbox(editOf.memoryId, { edit: { ...draft, updatedAt: new Date().toISOString() } }),
+        300,
+      )
+      return () => clearTimeout(t)
+    }
     const empty = draft.title.trim() === '' && draft.note.trim() === '' && draft.media.length === 0
     if (empty) return
     const t = setTimeout(() => void saveDraft({ ...draft, updatedAt: new Date().toISOString() }), 300)
     return () => clearTimeout(t)
-  }, [draft, phase])
+  }, [draft, phase, dirty, editOf])
 
-  const patch = (p: Partial<Draft>): void => setDraft((d) => ({ ...d, ...p }))
+  const patch = (p: Partial<Draft>): void => {
+    setDirty(true)
+    setDraft((d) => ({ ...d, ...p }))
+  }
 
   async function addFiles(files: FileList | null): Promise<void> {
     if (!files) return
@@ -105,7 +133,13 @@ export function NewMemoryScreen({
       }
       if (f.size === 0) continue // 0-byte bestand overslaan
       const fileId = uuid()
-      await putMedia(draft.id, fileId, f)
+      try {
+        await putMedia(draft.id, fileId, f)
+      } catch {
+        // Meestal: opslag vol (QuotaExceededError). Wat al binnen is, blijft staan.
+        setFileError(`"${f.name}" past niet meer op je telefoon — de opslag voor deze app is vol. Verstuur of verwijder eerst een andere memory.`)
+        break
+      }
       additions.push({ fileId, name: f.name, mime: f.type || 'application/octet-stream', plainBytes: f.size })
       newThumbs[fileId] = URL.createObjectURL(f)
     }
@@ -124,6 +158,12 @@ export function NewMemoryScreen({
   // Wis het concept (blobs incl.) en begin fris. Ook de uitweg voor een concept
   // dat na een eerdere verzending is blijven hangen.
   async function discardDraft(): Promise<void> {
+    if (editOf) {
+      if (!confirm('Je wijzigingen weggooien? De verstuurde versie blijft gewoon staan.')) return
+      await patchOutbox(editOf.memoryId, { edit: undefined })
+      onFinished()
+      return
+    }
     if (!confirm('Dit concept weggooien? De foto’s en tekst worden gewist.')) return
     await deleteDraft(draft.id)
     for (const url of Object.values(thumbs)) URL.revokeObjectURL(url)
@@ -151,23 +191,24 @@ export function NewMemoryScreen({
       <>
         {nav}
         <UploadView
-          draft={draft}
           pairing={pairing}
+          // Het concept verhuist bij de start (in één transactie) naar de outbox;
+          // daar blijft het staan tot de desktop de import bevestigt.
+          prepare={() => (editOf ? prepareReplace(pairing, editOf.memoryId, draft) : prepareNew(draft))}
           onExpired={onExpired}
-          onUploaded={async () => {
-            // Meteen na een geslaagde upload: concept + blobs weg, zodat het niet
-            // opnieuw opduikt (ook niet na een herlaad) en niet nog eens te
-            // versturen is.
-            await deleteDraft(draft.id)
-            for (const url of Object.values(thumbs)) URL.revokeObjectURL(url)
-            setThumbs({})
-          }}
           onDashboard={onFinished}
-          onDone={() => {
-            setDraft(emptyDraft())
-            setPhase('form')
-          }}
-          onKeepDraft={() => setPhase('form')}
+          onDone={
+            editing
+              ? undefined
+              : () => {
+                  for (const url of Object.values(thumbs)) URL.revokeObjectURL(url)
+                  setThumbs({})
+                  setDraft(emptyDraft())
+                  setDirty(false)
+                  setPhase('form')
+                }
+          }
+          onBack={() => setPhase('form')}
         />
       </>
     )
@@ -182,7 +223,16 @@ export function NewMemoryScreen({
         </div>
       )}
       <div className="screen stack">
-        <InstallHint />
+        {editing ? (
+          <div>
+            <h2 className="serif dash-title">Memory aanpassen</h2>
+            <p className="muted" style={{ marginTop: 2 }}>
+              Na versturen vervangt deze versie de oude in je brievenbus.
+            </p>
+          </div>
+        ) : (
+          <InstallHint />
+        )}
         <div>
           <label className="label" htmlFor="titel">
             Titel
@@ -270,13 +320,13 @@ export function NewMemoryScreen({
           />
         </div>
 
-        {hasContent && (
+        {(hasContent || editing) && (
           <button
             className="muted"
             onClick={() => void discardDraft()}
             style={{ background: 'none', border: 0, textDecoration: 'underline', cursor: 'pointer', fontSize: 13, padding: 4, alignSelf: 'center' }}
           >
-            Concept weggooien
+            {editing ? 'Wijzigingen weggooien' : 'Concept weggooien'}
           </button>
         )}
 
@@ -287,7 +337,7 @@ export function NewMemoryScreen({
             disabled={!canSave || !online}
             onClick={() => setPhase('uploading')}
           >
-            Bewaar in MemoryLane
+            {editing ? 'Wijzigingen versturen' : 'Bewaar in MemoryLane'}
             {summary && <div style={{ fontWeight: 400, fontSize: 13, opacity: 0.9 }}>{summary}</div>}
           </button>
           {!canSave && <div className="muted" style={{ textAlign: 'center', marginTop: 6 }}>Geef je herinnering een titel.</div>}

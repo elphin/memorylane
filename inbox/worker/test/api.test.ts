@@ -349,3 +349,24 @@ describe('cron-opruiming', () => {
     expect((await env.BUCKET.list({ prefix: memoryPrefix(m.mailboxId, memoryId) })).objects).toHaveLength(0)
   })
 })
+
+describe('tombstone-bewaartermijn', () => {
+  it('geïmporteerde memory blijft na 31 dagen bekend, na 366 dagen weg', async () => {
+    const m = (await register()).m
+    const memoryId = crypto.randomUUID()
+    await SELF.fetch(`${BASE}/api/memories`, {
+      ...j({ memoryId, files: [], envelopeBytes: 40 }),
+      headers: { 'content-type': 'application/json', ...upload(m) },
+    })
+    await putObjects(m, memoryId, { envelope: 40 })
+    await SELF.fetch(`${BASE}/api/memories/${memoryId}/complete`, { method: 'POST', headers: upload(m) })
+    await SELF.fetch(`${BASE}/api/memories/${memoryId}/ack`, { method: 'POST', headers: owner(m) })
+
+    await runCron(env, Date.now() + 31 * 86400 * 1000)
+    const kept = await (await SELF.fetch(`${BASE}/api/outbox`, { headers: upload(m) })).json<{ status: string }[]>()
+    expect(kept.map((r) => r.status)).toEqual(['imported'])
+
+    await runCron(env, Date.now() + 366 * 86400 * 1000)
+    expect(await (await SELF.fetch(`${BASE}/api/outbox`, { headers: upload(m) })).json<unknown[]>()).toEqual([])
+  })
+})

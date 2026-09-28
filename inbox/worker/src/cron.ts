@@ -1,14 +1,15 @@
 // Dagelijkse opruiming (§5.7). Bij lage volumes ruim binnen de subrequest-limiet;
 // per verlopen memory eerst R2, dan de D1-rijen (§11).
 
-import { READY_RETENTION_DAYS, type Env } from './config'
+import { IMPORTED_TOMBSTONE_DAYS, READY_RETENTION_DAYS, type Env } from './config'
 import { deletePrefix } from './r2'
 import { memoryPrefix } from './util'
 
 export async function runCron(env: Env, now = Date.now()): Promise<void> {
   const day = 86400 * 1000
   const cutUploading = new Date(now - 7 * day).toISOString() // verlopen uploads
-  const cutReady = new Date(now - READY_RETENTION_DAYS * day).toISOString() // bewaartermijn ready + tombstones
+  const cutReady = new Date(now - READY_RETENTION_DAYS * day).toISOString() // bewaartermijn ready
+  const cutTombstone = new Date(now - IMPORTED_TOMBSTONE_DAYS * day).toISOString()
 
   // 1+2) uploading > 7 dagen én ready > 30 dagen: R2-objecten + rijen weg.
   const stale = await env.DB.prepare(
@@ -26,9 +27,9 @@ export async function runCron(env: Env, now = Date.now()): Promise<void> {
     ])
   }
 
-  // 3) tombstones (imported) ouder dan 30 dagen → rij weg (R2 was al leeg).
+  // 3) tombstones (imported) ouder dan IMPORTED_TOMBSTONE_DAYS → rij weg (R2 was al leeg).
   await env.DB.prepare("DELETE FROM memories WHERE status = 'imported' AND imported_at < ?1")
-    .bind(cutReady)
+    .bind(cutTombstone)
     .run()
 
   // 4) oude rate-limit-vensters (> 2 dagen) opruimen.

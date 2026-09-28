@@ -1,13 +1,32 @@
 // Upload-flow (§6.5): concept → envelope + media versleutelen → aankondigen
 // (presign) → PUT naar R2 met voortgang → complete (met resume bij ontbrekende
 // bestanden). De app moet open blijven; de versleutelde bytes leven kort in het
-// geheugen (de plaintext staat veilig in IndexedDB, dus opnieuw proberen kan).
+// geheugen.
+//
+// Wat er verstuurd wordt, blijft als snapshot (`draft` + media-blobs) in de
+// outbox-rij staan tot de desktop de import bevestigt. Verloopt een memory in de
+// brievenbus, dan is hij dus opnieuw te versturen, en tot de import is hij aan te
+// passen (= vervangen door een nieuwe versie).
 
-import { createMemory, completeMemory, ApiError } from '../api/client'
+import { createMemory, completeMemory, deleteMemory, fetchOutbox, ApiError } from '../api/client'
 import { encryptBlob, randomNonce } from '../crypto/blob'
 import { buildEnvelopeBytes } from '../crypto/envelope'
-import { getMedia, putOutbox, type Draft, type Pairing } from '../store/db'
+import {
+  deleteMediaIfUnused,
+  deleteOutbox,
+  getMedia,
+  getOutbox,
+  listOutbox,
+  moveDraftToOutbox,
+  patchOutbox,
+  replaceOutbox,
+  type Draft,
+  type OutboxEntry,
+  type Pairing,
+} from '../store/db'
 import { hexToBytes } from '../crypto/vectors'
+import { uuid } from '../util'
+import { READY_RETENTION_DAYS, reconcile } from './reconcile'
 
 export interface Progress {
   phase: 'encrypt' | 'upload' | 'finalize' | 'done'
@@ -18,6 +37,18 @@ export interface Progress {
 }
 
 const ENVELOPE = 'envelope'
+
+// Uploads die nu in deze app lopen. Het dashboard gebruikt dit om een
+// 'uploading'-rij zonder lopende upload als onderbroken te tonen.
+const active = new Set<string>()
+export const isUploading = (memoryId: string): boolean => active.has(memoryId)
+
+/** Kan niet meer aangepast worden: de desktop heeft 'm al binnengehaald. */
+export class AlreadyImportedError extends Error {
+  constructor() {
+    super('Deze memory is intussen thuis geïmporteerd. Aanpassen doe je nu in MemoryLane op de computer.')
+  }
+}
 
 /** PUT één blob naar een presigned R2-URL via XHR (fetch heeft geen upload-
  * voortgang). Vaste content-type (§6.5): de Worker signt 'm bewust niet mee. */
@@ -34,27 +65,153 @@ function xhrPut(url: string, body: Blob, onProgress: (sent: number) => void): Pr
   })
 }
 
-/** Voer de hele upload uit voor `draft`. `memoryId` mag hergebruikt worden bij
- * opnieuw proberen (idempotent op de server). Roept `onProgress` door. */
-export async function runUpload(
-  draft: Draft,
-  pairing: Pairing,
-  memoryId: string,
-  onProgress: (p: Progress) => void,
-): Promise<void> {
+// ---- Thumbnails (om de memory later te kunnen inzien) ----
+
+const THUMB_PX = 320
+
+function canvasToJpeg(src: CanvasImageSource, w: number, h: number): Promise<Blob | null> {
+  const scale = Math.min(1, THUMB_PX / Math.max(w, h))
+  const canvas = document.createElement('canvas')
+  canvas.width = Math.max(1, Math.round(w * scale))
+  canvas.height = Math.max(1, Math.round(h * scale))
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return Promise.resolve(null)
+  ctx.drawImage(src, 0, 0, canvas.width, canvas.height)
+  return new Promise((resolve) => canvas.toBlob((b) => resolve(b), 'image/jpeg', 0.8))
+}
+
+async function imageThumb(blob: Blob): Promise<Blob | null> {
+  const bmp = await createImageBitmap(blob)
+  try {
+    return await canvasToJpeg(bmp, bmp.width, bmp.height)
+  } finally {
+    bmp.close()
+  }
+}
+
+/** Eerste frame van een video; lukt dat niet binnen een paar seconden, dan geen thumb. */
+function videoThumb(blob: Blob): Promise<Blob | null> {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(blob)
+    const v = document.createElement('video')
+    let settled = false
+    const finish = (b: Blob | null): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      URL.revokeObjectURL(url)
+      v.removeAttribute('src')
+      v.load()
+      resolve(b)
+    }
+    const timer = setTimeout(() => finish(null), 2500)
+    v.muted = true
+    v.playsInline = true
+    v.preload = 'auto'
+    v.onloadeddata = () => {
+      v.currentTime = Math.min(0.5, (v.duration || 1) / 2)
+    }
+    v.onseeked = () => {
+      canvasToJpeg(v, v.videoWidth, v.videoHeight).then(finish, () => finish(null))
+    }
+    v.onerror = () => finish(null)
+    v.src = url
+  })
+}
+
+/** Thumbnails voor alle media van een concept. Best-effort: een mislukte thumb
+ * wordt gewoon overgeslagen. */
+export async function makeThumbs(draft: Draft, existing: Record<string, Blob> = {}): Promise<Record<string, Blob>> {
+  const out: Record<string, Blob> = {}
+  // iOS laadt video's zonder tik soms niet; dan wacht elke video de hele timeout.
+  // Na dit budget slaan we verdere video-thumbs over zodat versturen snel start.
+  const videoDeadline = Date.now() + 6000
+  for (const m of draft.media) {
+    if (m.mime.startsWith('video/') && !existing[m.fileId] && Date.now() > videoDeadline) continue
+    if (existing[m.fileId]) {
+      out[m.fileId] = existing[m.fileId]
+      continue
+    }
+    try {
+      const blob = await getMedia(draft.id, m.fileId)
+      if (!blob) continue
+      const t = m.mime.startsWith('image/') ? await imageThumb(blob) : m.mime.startsWith('video/') ? await videoThumb(blob) : null
+      if (t) out[m.fileId] = t
+    } catch {
+      /* geen thumb — niet erg */
+    }
+  }
+  return out
+}
+
+/** Vraag de browser de opslag niet op te ruimen (iOS wist anders na 7 dagen
+ * zonder gebruik alles wat een niet-geïnstalleerde web-app bewaart). */
+function askPersistentStorage(): void {
+  void navigator.storage?.persist?.().catch(() => false)
+}
+
+function snapshotRow(memoryId: string, draft: Draft, thumbs: Record<string, Blob>, createdAt: string): OutboxEntry {
+  return {
+    memoryId,
+    title: draft.title.trim(),
+    startAt: draft.startAt,
+    mediaCount: draft.media.length,
+    createdAt,
+    status: 'uploading',
+    draft: { ...draft, updatedAt: new Date().toISOString() },
+    thumbs,
+  }
+}
+
+// ---- Voorbereiden: de outbox-rij (met snapshot) staat er vóór de upload ----
+
+/** Nieuw concept versturen: concept → outbox-rij (één transactie). Geeft het memoryId. */
+export async function prepareNew(draft: Draft): Promise<string> {
+  askPersistentStorage()
+  const thumbs = await makeThumbs(draft) // vóór de transactie: async werk erin sluit 'm af
+  const memoryId = uuid()
+  await moveDraftToOutbox(draft.id, snapshotRow(memoryId, draft, thumbs, new Date().toISOString()))
+  return memoryId
+}
+
+/** Aangepaste versie versturen: oude versie uit de brievenbus halen en de rij
+ * vervangen door een nieuwe met een NIEUW memoryId (de desktop onthoudt per
+ * memoryId wat hij al heeft geïmporteerd). Weigert als de oude al thuis is. */
+export async function prepareReplace(pairing: Pairing, oldMemoryId: string, draft: Draft): Promise<string> {
+  const old = await getOutbox(oldMemoryId)
+  if (!old) throw new Error('Deze memory staat niet meer op je telefoon.')
+  if (old.status === 'imported') throw new AlreadyImportedError()
+
+  // Eerst kijken, dan intrekken; `was` vangt een import die er net tussen kwam.
+  const remote = (await fetchOutbox(pairing)).find((r) => r.memoryId === oldMemoryId)
+  if (remote?.status === 'imported' || (await deleteMemory(pairing, oldMemoryId)) === 'imported') {
+    await markImported(old)
+    throw new AlreadyImportedError()
+  }
+
+  const thumbs = await makeThumbs(draft, old.thumbs)
+  const memoryId = uuid()
+  await replaceOutbox(oldMemoryId, snapshotRow(memoryId, draft, thumbs, old.createdAt))
+  return memoryId
+}
+
+// ---- De upload zelf ----
+
+/** Verstuur de snapshot van outbox-rij `memoryId`. Opnieuw aanroepen met
+ * hetzelfde id is veilig (idempotent op de server; de desktop importeert een
+ * memoryId maar één keer). */
+export async function runUpload(pairing: Pairing, memoryId: string, onProgress: (p: Progress) => void): Promise<void> {
+  const row = await getOutbox(memoryId)
+  const draft = row?.draft
+  if (!draft) throw new Error('De inhoud van deze memory is niet op je telefoon bewaard.')
+  if (active.has(memoryId)) throw new Error('Deze memory wordt al verstuurd.')
+  active.add(memoryId)
   const master = hexToBytes(pairing.masterKeyHex)
   const createdAt = new Date().toISOString()
-  const outbox = (status: 'uploading' | 'ready' | 'failed') =>
-    putOutbox({
-      memoryId,
-      title: draft.title.trim(),
-      startAt: draft.startAt,
-      mediaCount: draft.media.length,
-      createdAt,
-      status,
-    })
 
   try {
+    await patchOutbox(memoryId, { status: 'uploading' })
+
     // 1) Versleutel envelope + elk mediabestand (één tegelijk; ciphertext in het
     //    geheugen tot de upload klaar is). Voortgang op basis van plaintext-omvang,
     //    zodat de balk ook tijdens deze (voor grote foto's zware) fase beweegt.
@@ -80,8 +237,23 @@ export async function runUpload(
     const bytesTotal = envBytes.length + files.reduce((s, f) => s + f.bytes, 0)
 
     // 2) Aankondigen → presigned PUT-URLs (idempotent: alleen nog-niet-geüploade).
-    await outbox('uploading')
-    let { uploadUrls } = await createMemory(pairing, memoryId, files, envBytes.length)
+    //    409 = staat al klaar of is al geïmporteerd (bv. antwoord eerder verloren):
+    //    dan de serverstatus overnemen i.p.v. een fout te tonen.
+    let uploadUrls: Record<string, string>
+    try {
+      ;({ uploadUrls } = await createMemory(pairing, memoryId, files, envBytes.length))
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 409) {
+        const remote = (await fetchOutbox(pairing)).find((r) => r.memoryId === memoryId)
+        if (remote && remote.status !== 'uploading') {
+          if (remote.status === 'imported') await markImported(row!)
+          else await patchOutbox(memoryId, reconcile({ ...row!, status: 'uploading' }, remote, false) ?? {})
+          onProgress({ phase: 'done', fileIndex: 0, fileCount: 0, bytesSent: 1, bytesTotal: 1 })
+          return
+        }
+      }
+      throw e
+    }
 
     // 3) Upload met voortgang. Per fileId bijhouden hoeveel bytes verstuurd zijn
     //    (gecapt op de blobgrootte); de balk = som over alle bestanden, geklemd op
@@ -126,12 +298,57 @@ export async function runUpload(
     }
     if (result.status !== 'ready') throw new Error('De brievenbus kon de upload niet afronden.')
 
-    await outbox('ready')
+    // Verloop lokaal schatten; het dashboard neemt de serverwaarde over zodra het ververst.
+    const now = Date.now()
+    await patchOutbox(memoryId, {
+      status: 'ready',
+      readyAt: new Date(now).toISOString(),
+      expiresAt: new Date(now + READY_RETENTION_DAYS * 86400 * 1000).toISOString(),
+    })
     onProgress({ phase: 'done', fileIndex: files.length, fileCount: files.length, bytesSent: bytesTotal, bytesTotal })
   } catch (e) {
     // Laat de outbox niet eeuwig op 'uploading' staan. 401 (verlopen token) laten
     // we met rust: de UI stuurt de gebruiker naar opnieuw-koppelen.
-    if (!(e instanceof ApiError && e.status === 401)) await outbox('failed').catch(() => {})
+    if (!(e instanceof ApiError && e.status === 401)) await patchOutbox(memoryId, { status: 'failed' }).catch(() => {})
     throw e
+  } finally {
+    active.delete(memoryId)
   }
+}
+
+// ---- Afstemmen met de server + opruimen ----
+
+/** Haal de serverstatus op en werk de lokale rijen bij. Geïmporteerde memories
+ * geven hun media-blobs vrij (tekst + thumbs blijven om te kunnen inzien).
+ * Faalt de server-call, dan gooit dit (401 → opnieuw koppelen). */
+export async function syncOutbox(pairing: Pairing): Promise<void> {
+  const remote = await fetchOutbox(pairing)
+  const rmap = new Map(remote.map((r) => [r.memoryId, r]))
+  for (const { memoryId } of await listOutbox()) {
+    // Vers lezen: een upload die net klaar is mag niet met een oude status
+    // overschreven worden.
+    const l = await getOutbox(memoryId)
+    if (!l) continue
+    const patch = reconcile(l, rmap.get(memoryId), active.has(memoryId))
+    if (!patch) continue
+    if (patch.status === 'imported') await markImported(l)
+    else await patchOutbox(memoryId, patch)
+  }
+}
+
+/** Rij op 'imported' en de media-blobs vrijgeven (tekst + thumbs blijven). Een
+ * nog niet verstuurde `edit` blijft bewaard om thuis over te nemen. */
+async function markImported(e: OutboxEntry): Promise<void> {
+  await patchOutbox(e.memoryId, { status: 'imported' })
+  if (e.draft) await deleteMediaIfUnused(e.draft.id, e.memoryId)
+}
+
+/** Haal een memory weg: uit de brievenbus (als die er nog is) en van de telefoon.
+ * Lukt intrekken op de server niet, dan laten we de rij staan — anders komt hij
+ * thuis alsnog binnen terwijl hij hier weg lijkt. Alleen bij 'gone' (server kent
+ * 'm niet meer) en 'imported' is de server niet nodig. */
+export async function removeEntry(pairing: Pairing, entry: OutboxEntry): Promise<void> {
+  if (entry.status !== 'imported' && entry.status !== 'gone') await deleteMemory(pairing, entry.memoryId)
+  await deleteOutbox(entry.memoryId)
+  if (entry.draft) await deleteMediaIfUnused(entry.draft.id)
 }

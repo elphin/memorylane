@@ -1,27 +1,42 @@
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { Draft, OutboxEntry, Pairing } from '../store/db'
-import { deleteOutbox, listDrafts, listOutbox, putOutbox } from '../store/db'
-import { ApiError, deleteMemory, fetchOutbox } from '../api/client'
+import { listDrafts, listOutbox } from '../store/db'
+import { ApiError } from '../api/client'
+import { syncOutbox } from '../upload/queue'
 import { formatDateShort } from '../util'
-import { IconAlert, IconCheck, IconClock, IconPlus, IconTrash } from '../icons'
+import { IconPlay, IconPlus } from '../icons'
+import { statusView } from './status'
 
-type StatusKind = 'pending' | 'done' | 'fail'
-const STATUS: Record<OutboxEntry['status'], { label: string; kind: StatusKind; Icon: typeof IconClock }> = {
-  uploading: { label: 'Bezig met versturen…', kind: 'pending', Icon: IconClock },
-  ready: { label: 'Wacht op thuis-import', kind: 'pending', Icon: IconClock },
-  imported: { label: 'Geïmporteerd — veilig thuis', kind: 'done', Icon: IconCheck },
-  failed: { label: 'Versturen mislukt', kind: 'fail', Icon: IconAlert },
+/** Kleine voorvertoning (eerste foto/video-thumb) voor een kaart. */
+function CardThumb({ entry }: { entry: OutboxEntry }) {
+  const [url, setUrl] = useState<string | null>(null)
+  const first = entry.draft?.media[0]
+  const blob = first ? entry.thumbs?.[first.fileId] : undefined
+  useEffect(() => {
+    if (!blob) return
+    const u = URL.createObjectURL(blob)
+    setUrl(u)
+    return () => URL.revokeObjectURL(u)
+  }, [blob])
+  if (!first) return null
+  return (
+    <div className="memory-thumb" aria-hidden>
+      {url ? <img src={url} alt="" /> : first.mime.startsWith('video/') ? <IconPlay size={20} /> : null}
+    </div>
+  )
 }
 
 export function DashboardScreen({
   pairing,
   onNew,
+  onOpen,
   onExpired,
   nav,
 }: {
   pairing: Pairing
   onNew: () => void
+  onOpen: (memoryId: string) => void
   onExpired: () => void
   nav: ReactNode
 }) {
@@ -30,22 +45,13 @@ export function DashboardScreen({
   const [loaded, setLoaded] = useState(false)
 
   async function refresh(): Promise<void> {
-    const local = await listOutbox()
-    setItems(local)
+    setItems(await listOutbox())
     // Openstaand concept (met inhoud) bovenaan tonen als "verder schrijven".
     const drafts = await listDrafts()
     setDraft(drafts.find((d) => d.title.trim() !== '' || d.note.trim() !== '' || d.media.length > 0) ?? null)
     setLoaded(true)
     try {
-      const remote = await fetchOutbox(pairing)
-      const rmap = new Map(remote.map((r) => [r.memoryId, r.status]))
-      for (const l of local) {
-        const rs = rmap.get(l.memoryId)
-        if (rs && rs !== l.status) {
-          l.status = rs
-          await putOutbox(l)
-        }
-      }
+      await syncOutbox(pairing)
       setItems(await listOutbox())
     } catch (e) {
       if (e instanceof ApiError && e.status === 401) onExpired()
@@ -57,20 +63,11 @@ export function DashboardScreen({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  async function remove(m: OutboxEntry): Promise<void> {
-    try {
-      await deleteMemory(pairing, m.memoryId)
-    } catch {
-      /* al weg op de server → lokaal opruimen kan alsnog */
-    }
-    await deleteOutbox(m.memoryId)
-    void refresh()
-  }
-
+  const views = items.map((m) => ({ m, s: statusView(m) }))
   const groups = [
-    { key: 'pending', title: 'Nog te importeren', items: items.filter((i) => i.status === 'uploading' || i.status === 'ready') },
-    { key: 'failed', title: 'Niet gelukt', items: items.filter((i) => i.status === 'failed') },
-    { key: 'imported', title: 'Geïmporteerd', items: items.filter((i) => i.status === 'imported') },
+    { key: 'attention', title: 'Aandacht nodig', items: views.filter((v) => v.s.kind === 'fail' || v.s.kind === 'warn') },
+    { key: 'pending', title: 'Nog te importeren', items: views.filter((v) => v.s.kind === 'pending') },
+    { key: 'imported', title: 'Geïmporteerd', items: views.filter((v) => v.s.kind === 'done') },
   ].filter((g) => g.items.length > 0)
 
   const isEmpty = loaded && items.length === 0 && !draft
@@ -114,27 +111,21 @@ export function DashboardScreen({
         {groups.map((g) => (
           <div key={g.key} className="stack" style={{ marginTop: 4 }}>
             <div className="section-label">{g.title}</div>
-            {g.items.map((m) => {
-              const s = STATUS[m.status]
-              return (
-                <div key={m.memoryId} className="card memory-card">
-                  <div className="memory-main">
-                    <div className="memory-title">{m.title || '(zonder titel)'}</div>
-                    <div className="muted">
-                      {formatDateShort(m.startAt)} · {m.mediaCount} bestand{m.mediaCount === 1 ? '' : 'en'}
-                    </div>
-                    <div className={`status status-${s.kind}`}>
-                      <s.Icon size={15} /> {s.label}
-                    </div>
+            {g.items.map(({ m, s }) => (
+              <button key={m.memoryId} className="card memory-card memory-card-link" onClick={() => onOpen(m.memoryId)}>
+                <CardThumb entry={m} />
+                <div className="memory-main" style={{ flex: 1 }}>
+                  <div className="memory-title">{m.title || '(zonder titel)'}</div>
+                  <div className="muted">
+                    {formatDateShort(m.startAt)} · {m.mediaCount} bestand{m.mediaCount === 1 ? '' : 'en'}
                   </div>
-                  {m.status !== 'imported' && (
-                    <button className="icon-btn" aria-label="Verwijderen" onClick={() => void remove(m)}>
-                      <IconTrash size={19} />
-                    </button>
-                  )}
+                  <div className={`status status-${s.kind}`}>
+                    <s.Icon size={15} /> {s.label}
+                  </div>
                 </div>
-              )
-            })}
+                <span className="memory-cta" aria-hidden>›</span>
+              </button>
+            ))}
           </div>
         ))}
       </div>

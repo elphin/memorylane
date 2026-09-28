@@ -22,6 +22,10 @@ export interface Env {
 // Hoe lang een klaarstaande (ready) memory in de brievenbus blijft voordat de
 // dagelijkse cron hem opruimt. De telefoon krijgt de verloopdatum via /api/outbox.
 export const READY_RETENTION_DAYS = 30
+// Hoe lang een geïmporteerde memory als tombstone (alleen de D1-rij) blijft. Ruim
+// langer dan de telefoon offline kan zijn: zonder tombstone kan de telefoon
+// "al geïmporteerd" niet meer onderscheiden van "verlopen".
+export const IMPORTED_TOMBSTONE_DAYS = 365
 
 const GiB = 1024 * 1024 * 1024
 const MiB = 1024 * 1024

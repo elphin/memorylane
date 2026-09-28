@@ -75,14 +75,23 @@ export async function completeMemory(p: Pairing, memoryId: string): Promise<Comp
   return { status: 'ready' }
 }
 
-export async function deleteMemory(p: Pairing, memoryId: string): Promise<void> {
-  await req(p, `/api/memories/${memoryId}`, { method: 'DELETE' })
+export type RemoteStatus = 'uploading' | 'ready' | 'imported'
+
+/** Trek een memory in. Geeft terug wat hij op de server was (`null` = bestond
+ * niet, `undefined` = oudere Worker die dat niet meldt). */
+export async function deleteMemory(p: Pairing, memoryId: string): Promise<RemoteStatus | null | undefined> {
+  const res = await req(p, `/api/memories/${memoryId}`, { method: 'DELETE' })
+  const b = (await res.json().catch(() => ({}))) as { was?: RemoteStatus | null }
+  return b.was
 }
 
 export interface RemoteOutbox {
   memoryId: string
-  status: 'uploading' | 'ready' | 'imported'
+  status: RemoteStatus
   createdAt: string
+  /** Ontbreken bij een oudere Worker. */
+  readyAt?: string | null
+  expiresAt?: string | null
 }
 export async function fetchOutbox(p: Pairing): Promise<RemoteOutbox[]> {
   const res = await req(p, '/api/outbox')

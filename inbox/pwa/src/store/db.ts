@@ -28,13 +28,29 @@ export interface Draft {
   updatedAt: string
 }
 
+export type OutboxStatus = 'uploading' | 'ready' | 'imported' | 'failed' | 'gone'
+
 export interface OutboxEntry {
   memoryId: string
   title: string
   startAt: string
   mediaCount: number
   createdAt: string
-  status: 'uploading' | 'ready' | 'imported' | 'failed'
+  /** 'gone' = de server kent 'm niet meer (verlopen, of thuis verwijderd). */
+  status: OutboxStatus
+  /** Wat er verstuurd is. De media-blobs blijven onder `draft.id` in de
+   * media-store staan tot de desktop de import bevestigt, zodat een verlopen
+   * memory opnieuw verstuurd kan worden. Ontbreekt bij rijen van vóór deze versie. */
+  draft?: Draft
+  /** Kleine JPEG per foto/video (fileId → blob): blijft na import bewaard om
+   * de memory te kunnen inzien als de originele blobs al zijn opgeruimd. */
+  thumbs?: Record<string, Blob>
+  readyAt?: string
+  /** Wanneer de brievenbus 'm opruimt (van de server; lokaal geschat als die
+   * het nog niet heeft gemeld). */
+  expiresAt?: string
+  /** Aanpassingen die nog niet verstuurd zijn (autosave in aanpas-modus). */
+  edit?: Draft
 }
 
 interface MediaBlob {
@@ -118,6 +134,55 @@ export async function deleteMedia(draftId: string, fileId: string): Promise<void
 // ---- outbox ----
 export async function putOutbox(e: OutboxEntry): Promise<void> {
   await (await db()).put('outbox', e)
+}
+/** Pure samenvoeg-regel van `patchOutbox`: velden uit `patch` winnen, `undefined`
+ * wist, alles wat niet in `patch` staat (snapshot, thumbs) blijft. */
+export function mergeOutbox(cur: OutboxEntry, patch: Partial<OutboxEntry>): OutboxEntry {
+  const next: OutboxEntry = { ...cur, ...patch, memoryId: cur.memoryId }
+  for (const k of Object.keys(patch) as (keyof OutboxEntry)[]) if (patch[k] === undefined) delete next[k]
+  return next
+}
+/** Werk velden van een bestaande rij bij (lezen + schrijven in één transactie),
+ * zodat een statuswijziging nooit de bewaarde `draft`/`thumbs` overschrijft.
+ * Een `undefined`-waarde in `patch` wist dat veld. Geen rij → no-op. */
+export async function patchOutbox(memoryId: string, patch: Partial<OutboxEntry>): Promise<OutboxEntry | null> {
+  const tx = (await db()).transaction('outbox', 'readwrite')
+  const cur = await tx.store.get(memoryId)
+  if (!cur) {
+    await tx.done
+    return null
+  }
+  const next = mergeOutbox(cur, patch)
+  await tx.store.put(next)
+  await tx.done
+  return next
+}
+/** Concept → outbox in één transactie: de rij met snapshot erin, de concept-rij
+ * eruit. De media-blobs blijven staan (ze horen nu bij de outbox-rij). */
+export async function moveDraftToOutbox(draftId: string, entry: OutboxEntry): Promise<void> {
+  const tx = (await db()).transaction(['drafts', 'outbox'], 'readwrite')
+  await tx.objectStore('outbox').put(entry)
+  await tx.objectStore('drafts').delete(draftId)
+  await tx.done
+}
+/** Oude rij vervangen door een nieuwe (aanpassen = nieuw memoryId) in één transactie. */
+export async function replaceOutbox(oldMemoryId: string, entry: OutboxEntry): Promise<void> {
+  const tx = (await db()).transaction('outbox', 'readwrite')
+  await tx.store.delete(oldMemoryId)
+  await tx.store.put(entry)
+  await tx.done
+}
+/** Verwijder de media-blobs van `draftId`, tenzij een concept of een andere
+ * outbox-rij ze nog gebruikt. */
+export async function deleteMediaIfUnused(draftId: string, exceptMemoryId?: string): Promise<void> {
+  const d = await db()
+  if (await d.get('drafts', draftId)) return
+  const rows = await d.getAll('outbox')
+  if (rows.some((r) => r.memoryId !== exceptMemoryId && r.draft?.id === draftId)) return
+  const keys = await d.getAllKeysFromIndex('media', 'draftId', draftId)
+  const tx = d.transaction('media', 'readwrite')
+  for (const k of keys) await tx.store.delete(k)
+  await tx.done
 }
 export async function getOutbox(memoryId: string): Promise<OutboxEntry | null> {
   return (await (await db()).get('outbox', memoryId)) ?? null
