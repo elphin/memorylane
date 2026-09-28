@@ -55,6 +55,14 @@ export async function authMailbox(
   c: Context<{ Bindings: Env }>,
   kind: 'owner' | 'upload' | 'any',
 ): Promise<string> {
+  return (await authMailboxRole(c, kind)).mailboxId
+}
+
+/** Als `authMailbox`, maar geeft ook terug met welk token (rol) is ingelogd. */
+export async function authMailboxRole(
+  c: Context<{ Bindings: Env }>,
+  kind: 'owner' | 'upload' | 'any',
+): Promise<{ mailboxId: string; role: 'owner' | 'upload' }> {
   const env = c.env
   const now = Date.now()
   const mailboxId = c.req.header('X-Mailbox')
@@ -87,5 +95,5 @@ export async function authMailbox(
   await env.DB.prepare('UPDATE mailboxes SET last_seen_at = ?1 WHERE id = ?2')
     .bind(new Date(now).toISOString(), mailboxId)
     .run()
-  return mailboxId
+  return { mailboxId, role: okOwner ? 'owner' : 'upload' }
 }

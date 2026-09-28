@@ -330,6 +330,67 @@ describe('outbox-verloop + delete-status', () => {
   })
 })
 
+describe('import-lock', () => {
+  async function readyMemory(m: Mailbox): Promise<string> {
+    const memoryId = crypto.randomUUID()
+    await SELF.fetch(`${BASE}/api/memories`, {
+      ...j({ memoryId, files: [], envelopeBytes: 40 }),
+      headers: { 'content-type': 'application/json', ...upload(m) },
+    })
+    await putObjects(m, memoryId, { envelope: 40 })
+    await SELF.fetch(`${BASE}/api/memories/${memoryId}/complete`, { method: 'POST', headers: upload(m) })
+    return memoryId
+  }
+
+  it('telefoon kan niet intrekken terwijl de desktop importeert; desktop wel', async () => {
+    const m = (await register()).m
+    const memoryId = await readyMemory(m)
+    expect((await SELF.fetch(`${BASE}/api/memories/${memoryId}/urls`, { headers: owner(m) })).status).toBe(200)
+
+    const del = await SELF.fetch(`${BASE}/api/memories/${memoryId}`, { method: 'DELETE', headers: upload(m) })
+    expect(del.status).toBe(409)
+    expect(await del.json()).toMatchObject({ error: { code: 'importing' } })
+    // Nog gewoon klaar voor de desktop.
+    expect((await SELF.fetch(`${BASE}/api/memories/${memoryId}/urls`, { headers: owner(m) })).status).toBe(200)
+
+    const own = await SELF.fetch(`${BASE}/api/memories/${memoryId}`, { method: 'DELETE', headers: owner(m) })
+    expect(await own.json()).toEqual({ ok: true, was: 'ready' })
+    expect((await env.BUCKET.list({ prefix: memoryPrefix(m.mailboxId, memoryId) })).objects).toHaveLength(0)
+  })
+
+  it('verlopen lock geeft de memory weer vrij voor de telefoon', async () => {
+    const m = (await register()).m
+    const memoryId = await readyMemory(m)
+    await env.DB.prepare('UPDATE memories SET import_started_at = ?1 WHERE id = ?2')
+      .bind(new Date(Date.now() - 3 * 3600 * 1000).toISOString(), memoryId)
+      .run()
+    const del = await SELF.fetch(`${BASE}/api/memories/${memoryId}`, { method: 'DELETE', headers: upload(m) })
+    expect(await del.json()).toEqual({ ok: true, was: 'ready' })
+  })
+
+  it('urls op een niet-klare memory → 404 en geen lock', async () => {
+    const m = (await register()).m
+    const memoryId = crypto.randomUUID()
+    await SELF.fetch(`${BASE}/api/memories`, {
+      ...j({ memoryId, files: [], envelopeBytes: 40 }),
+      headers: { 'content-type': 'application/json', ...upload(m) },
+    })
+    expect((await SELF.fetch(`${BASE}/api/memories/${memoryId}/urls`, { headers: owner(m) })).status).toBe(404)
+    const del = await SELF.fetch(`${BASE}/api/memories/${memoryId}`, { method: 'DELETE', headers: upload(m) })
+    expect(await del.json()).toEqual({ ok: true, was: 'uploading' })
+  })
+
+  it('lijst voor de desktop geeft expiresAt mee', async () => {
+    const m = (await register()).m
+    await readyMemory(m)
+    const list = await (await SELF.fetch(`${BASE}/api/memories?status=ready`, { headers: owner(m) })).json<
+      { expiresAt: string | null }[]
+    >()
+    expect(list).toHaveLength(1)
+    expect(typeof list[0].expiresAt).toBe('string')
+  })
+})
+
 describe('cron-opruiming', () => {
   it('verlopen upload (>7d) wordt opgeruimd', async () => {
     const m = (await register()).m

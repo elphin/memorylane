@@ -26,6 +26,10 @@ export const READY_RETENTION_DAYS = 30
 // langer dan de telefoon offline kan zijn: zonder tombstone kan de telefoon
 // "al geïmporteerd" niet meer onderscheiden van "verlopen".
 export const IMPORTED_TOMBSTONE_DAYS = 365
+// Hoe lang na het begin van een desktop-import (GET /urls) de telefoon een memory
+// niet mag intrekken of vervangen. Ruim, zodat ook grote video's via een trage
+// lijn binnen het venster vallen; een afgebroken import geeft 'm daarna weer vrij.
+export const IMPORT_LOCK_MINUTES = 120
 
 const GiB = 1024 * 1024 * 1024
 const MiB = 1024 * 1024

@@ -4,8 +4,8 @@
 
 import { Hono } from 'hono'
 import type { Env } from './config'
-import { LIMITS, mailboxLimitBytes } from './config'
-import { authMailbox, underRateLimit } from './auth'
+import { IMPORT_LOCK_MINUTES, LIMITS, READY_RETENTION_DAYS, mailboxLimitBytes } from './config'
+import { authMailbox, authMailboxRole, underRateLimit } from './auth'
 import { fail } from './http'
 import { isUuid, memoryPrefix, nowIso, objKey } from './util'
 import { presignGet, presignPut } from './presign'
@@ -150,16 +150,18 @@ memories.get('/', async (c) => {
   const mailboxId = await authMailbox(c, 'owner')
   requireReadyStatus(c.req.query('status'))
   const rows = await c.env.DB.prepare(
-    "SELECT id, file_count, total_bytes, created_at FROM memories WHERE mailbox_id = ?1 AND status = 'ready' ORDER BY created_at",
+    "SELECT id, file_count, total_bytes, created_at, ready_at FROM memories WHERE mailbox_id = ?1 AND status = 'ready' ORDER BY created_at",
   )
     .bind(mailboxId)
-    .all<{ id: string; file_count: number; total_bytes: number; created_at: string }>()
+    .all<{ id: string; file_count: number; total_bytes: number; created_at: string; ready_at: string | null }>()
   return c.json(
     rows.results.map((r) => ({
       memoryId: r.id,
       fileCount: r.file_count,
       totalBytes: r.total_bytes,
       createdAt: r.created_at,
+      // Voor de verloop-waarschuwing op de desktop.
+      expiresAt: readyExpiry(r.ready_at),
     })),
   )
 })
@@ -181,10 +183,14 @@ memories.get('/:id/urls', async (c) => {
   const mailboxId = await authMailbox(c, 'owner')
   const memoryId = c.req.param('id')
   if (!isUuid(memoryId)) fail(400, 'bad_request', 'Ongeldige memoryId.')
-  const mem = await c.env.DB.prepare('SELECT status FROM memories WHERE mailbox_id = ?1 AND id = ?2')
-    .bind(mailboxId, memoryId)
-    .first<{ status: Status }>()
-  if (!mem || mem.status !== 'ready') fail(404, 'not_ready', 'Memory niet klaar voor download.')
+  // Markeer het begin van de import (lock voor de telefoon, zie DELETE). Alleen
+  // op een 'ready' memory; 0 rijen geraakt = niet (meer) klaar.
+  const claim = await c.env.DB.prepare(
+    "UPDATE memories SET import_started_at = ?3 WHERE mailbox_id = ?1 AND id = ?2 AND status = 'ready'",
+  )
+    .bind(mailboxId, memoryId, nowIso())
+    .run()
+  if (claim.meta.changes === 0) fail(404, 'not_ready', 'Memory niet klaar voor download.')
   const fileRows = await c.env.DB.prepare(
     'SELECT id, r2_key FROM files WHERE mailbox_id = ?1 AND memory_id = ?2',
   )
@@ -219,7 +225,7 @@ memories.post('/:id/ack', async (c) => {
 
 // DELETE /api/memories/:id — upload of owner. Intrekken vóór import.
 memories.delete('/:id', async (c) => {
-  const mailboxId = await authMailbox(c, 'any')
+  const { mailboxId, role } = await authMailboxRole(c, 'any')
   const memoryId = c.req.param('id')
   if (!isUuid(memoryId)) fail(400, 'bad_request', 'Ongeldige memoryId.')
   const mem = await c.env.DB.prepare('SELECT status FROM memories WHERE mailbox_id = ?1 AND id = ?2')
@@ -231,14 +237,44 @@ memories.delete('/:id', async (c) => {
     await c.env.DB.prepare('DELETE FROM memories WHERE mailbox_id = ?1 AND id = ?2').bind(mailboxId, memoryId).run()
     return c.json({ ok: true, was: 'imported' })
   }
-  await deletePrefix(c.env, memoryPrefix(mailboxId, memoryId))
-  await c.env.DB.batch([
-    c.env.DB.prepare('DELETE FROM files WHERE mailbox_id = ?1 AND memory_id = ?2').bind(mailboxId, memoryId),
-    c.env.DB.prepare('DELETE FROM memories WHERE mailbox_id = ?1 AND id = ?2').bind(mailboxId, memoryId),
-  ])
+
+  // Eerst de D1-rij claimen, conditioneel en atomair: alleen als de status nog
+  // dezelfde is en (voor de telefoon) de desktop 'm niet net aan het importeren
+  // is. Zo kan een import die tussen onze SELECT en deze DELETE begint niet meer
+  // samenvallen met intrekken → geen dubbele memory thuis. De desktop (owner) mag
+  // altijd intrekken (weggooien bij nieuwe koppelcode/ontkoppelen).
+  const lockSince = new Date(Date.now() - IMPORT_LOCK_MINUTES * 60 * 1000).toISOString()
+  const claim = await c.env.DB.prepare(
+    `DELETE FROM memories WHERE mailbox_id = ?1 AND id = ?2 AND status = ?3
+       AND (?4 = 'owner' OR import_started_at IS NULL OR import_started_at < ?5)`,
+  )
+    .bind(mailboxId, memoryId, mem.status, role, lockSince)
+    .run()
+  if (claim.meta.changes === 0) {
+    const now = await c.env.DB.prepare('SELECT status FROM memories WHERE mailbox_id = ?1 AND id = ?2')
+      .bind(mailboxId, memoryId)
+      .first<{ status: Status }>()
+    if (now?.status === 'imported') return c.json({ ok: true, was: 'imported' })
+    if (now) fail(409, 'importing', 'Deze memory wordt nu thuis geïmporteerd. Probeer het straks opnieuw.')
+    return c.json({ ok: true, was: null }) // net door iemand anders verwijderd
+  }
+  // Rij is van ons: nu de bestanden (R2) en file-rijen opruimen. Faalt R2 hier
+  // (storing/limiet), dan is intrekken tóch gelukt: de memory kan niet meer
+  // geïmporteerd worden. Hooguit blijven er versleutelde blobs liggen.
+  try {
+    await deletePrefix(c.env, memoryPrefix(mailboxId, memoryId))
+  } catch (e) {
+    console.error('R2-opruiming na intrekken mislukt:', memoryId, e)
+  }
+  await c.env.DB.prepare('DELETE FROM files WHERE mailbox_id = ?1 AND memory_id = ?2').bind(mailboxId, memoryId).run()
   // `was` laat de telefoon zien of een vervang-actie te laat kwam (al geïmporteerd).
   return c.json({ ok: true, was: mem.status })
 })
+
+/** Wanneer de cron een klaarstaande memory opruimt (null als readyAt onbekend). */
+export function readyExpiry(readyAt: string | null): string | null {
+  return readyAt ? new Date(Date.parse(readyAt) + READY_RETENTION_DAYS * 86400 * 1000).toISOString() : null
+}
 
 function requireReadyStatus(status: string | undefined): void {
   if (status !== undefined && status !== 'ready') fail(400, 'bad_status', 'Alleen status=ready wordt ondersteund.')

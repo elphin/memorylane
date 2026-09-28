@@ -42,6 +42,7 @@ export interface ReadyMemory {
   fileCount: number
   totalBytes: number
   createdAt: string
+  expiresAt: string | null
 }
 
 // GET /api/memories/:id/urls (owner) → de map direct: { envelope: url, [fileId]: url }

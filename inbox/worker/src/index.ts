@@ -4,11 +4,11 @@
 
 import { Hono } from 'hono'
 import type { ContentfulStatusCode } from 'hono/utils/http-status'
-import { READY_RETENTION_DAYS, type Env } from './config'
+import type { Env } from './config'
 import { ApiError } from './http'
 import { authMailbox } from './auth'
 import { mailboxes } from './mailboxes'
-import { memories } from './memories'
+import { memories, readyExpiry } from './memories'
 import { runCron } from './cron'
 
 const VERSION = '0.1.0'
@@ -28,7 +28,6 @@ app.get('/api/outbox', async (c) => {
   )
     .bind(mailboxId)
     .all<{ id: string; status: string; created_at: string; ready_at: string | null }>()
-  const retentionMs = READY_RETENTION_DAYS * 86400 * 1000
   return c.json(
     rows.results.map((r) => ({
       memoryId: r.id,
@@ -36,8 +35,7 @@ app.get('/api/outbox', async (c) => {
       createdAt: r.created_at,
       readyAt: r.ready_at,
       // Zodat de telefoon ruim vóór de cron-opruiming kan waarschuwen.
-      expiresAt:
-        r.status === 'ready' && r.ready_at ? new Date(Date.parse(r.ready_at) + retentionMs).toISOString() : null,
+      expiresAt: r.status === 'ready' ? readyExpiry(r.ready_at) : null,
     })),
   )
 })
