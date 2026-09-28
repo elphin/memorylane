@@ -4,7 +4,7 @@
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { getMedia, getOutbox, type OutboxEntry, type Pairing } from '../store/db'
-import { removeEntry } from '../upload/queue'
+import { onOutboxChange, removeEntry } from '../upload/queue'
 import { ApiError } from '../api/client'
 import { formatDateShort } from '../util'
 import { IconFile, IconPlay } from '../icons'
@@ -65,8 +65,13 @@ export function MemoryDetail({
       }
       if (alive) setMedia(shown)
     })()
+    // Status actueel houden als de achtergrond-hervatting deze memory oppakt.
+    const unsub = onOutboxChange(() => {
+      void getOutbox(memoryId).then((e) => alive && e && setEntry(e))
+    })
     return () => {
       alive = false
+      unsub()
       for (const u of urls) URL.revokeObjectURL(u)
     }
   }, [memoryId])
@@ -102,7 +107,15 @@ export function MemoryDetail({
       onBack()
     } catch (e) {
       if (e instanceof ApiError && e.status === 401) return onExpired()
-      setError('Verwijderen lukte niet — de brievenbus is niet bereikbaar. Probeer het straks opnieuw.')
+      // Netwerkfout = kale TypeError; anders (bv. 409 "wordt nu thuis
+      // geïmporteerd", of "wordt nu verstuurd") de eigen melding tonen.
+      setError(
+        e instanceof TypeError
+          ? 'Verwijderen lukte niet — de brievenbus is niet bereikbaar. Probeer het straks opnieuw.'
+          : e instanceof Error
+            ? e.message
+            : String(e),
+      )
     } finally {
       setBusy(false)
     }

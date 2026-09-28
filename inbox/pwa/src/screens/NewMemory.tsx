@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { OutboxEntry, Pairing } from '../store/db'
 import { deleteDraft, getMedia, listDrafts, patchOutbox, putMedia, saveDraft, type Draft } from '../store/db'
-import { prepareNew, prepareReplace } from '../upload/queue'
+import { holdForEdit, prepareNew, prepareReplace } from '../upload/queue'
 import { formatBytes, formatDateShort, todayISO, uuid } from '../util'
 import { DatePicker } from './DatePicker'
 import { InstallHint } from './InstallHint'
@@ -73,6 +73,9 @@ export function NewMemoryScreen({
     }
     setThumbs(t)
   }
+
+  // Aanpas-modus: deze memory niet vanzelf (oud) laten versturen zolang je 'm bewerkt.
+  useEffect(() => (editOf ? holdForEdit(editOf.memoryId) : undefined), [editOf])
 
   // Object-URL's opruimen bij het verlaten van het scherm (geen geheugenlek).
   const thumbsRef = useRef(thumbs)

@@ -43,6 +43,21 @@ const ENVELOPE = 'envelope'
 const active = new Set<string>()
 export const isUploading = (memoryId: string): boolean => active.has(memoryId)
 
+// Memories die nu verwijderd of vervangen worden. Een upload mag daar niet meer
+// aan beginnen (anders maakt hij een net ingetrokken memory op de server opnieuw
+// aan en komt die thuis alsnog binnen). `active` en `blocked` sluiten elkaar
+// uit: beide worden synchroon (zonder await ertussen) gecontroleerd en gezet.
+const blocked = new Set<string>()
+
+/** Reserveer een memory voor verwijderen/vervangen. Weigert als hij nu
+ * verstuurd wordt. Geeft een functie terug die de reservering weer opheft. */
+function claimForChange(memoryId: string): () => void {
+  if (active.has(memoryId)) throw new Error('Deze memory wordt nu verstuurd — wacht even tot dat klaar is.')
+  if (blocked.has(memoryId)) throw new Error('Hier wordt al aan gewerkt.')
+  blocked.add(memoryId)
+  return () => blocked.delete(memoryId)
+}
+
 /** Kan niet meer aangepast worden: de desktop heeft 'm al binnengehaald. */
 export class AlreadyImportedError extends Error {
   constructor() {
@@ -178,6 +193,15 @@ export async function prepareNew(draft: Draft): Promise<string> {
  * vervangen door een nieuwe met een NIEUW memoryId (de desktop onthoudt per
  * memoryId wat hij al heeft geïmporteerd). Weigert als de oude al thuis is. */
 export async function prepareReplace(pairing: Pairing, oldMemoryId: string, draft: Draft): Promise<string> {
+  const release = claimForChange(oldMemoryId)
+  try {
+    return await replaceClaimed(pairing, oldMemoryId, draft)
+  } finally {
+    release()
+  }
+}
+
+async function replaceClaimed(pairing: Pairing, oldMemoryId: string, draft: Draft): Promise<string> {
   const old = await getOutbox(oldMemoryId)
   if (!old) throw new Error('Deze memory staat niet meer op je telefoon.')
   if (old.status === 'imported') throw new AlreadyImportedError()
@@ -201,15 +225,19 @@ export async function prepareReplace(pairing: Pairing, oldMemoryId: string, draf
  * hetzelfde id is veilig (idempotent op de server; de desktop importeert een
  * memoryId maar één keer). */
 export async function runUpload(pairing: Pairing, memoryId: string, onProgress: (p: Progress) => void): Promise<void> {
-  const row = await getOutbox(memoryId)
-  const draft = row?.draft
-  if (!draft) throw new Error('De inhoud van deze memory is niet op je telefoon bewaard.')
+  // Synchroon, vóór de eerste await: zie `blocked`.
+  if (blocked.has(memoryId)) throw new Error('Deze memory wordt net verwijderd of aangepast.')
   if (active.has(memoryId)) throw new Error('Deze memory wordt al verstuurd.')
   active.add(memoryId)
   const master = hexToBytes(pairing.masterKeyHex)
   const createdAt = new Date().toISOString()
 
   try {
+    // Pas ná het reserveren lezen: bestaat de rij niet meer (net verwijderd of
+    // vervangen), dan niets versturen.
+    const row = await getOutbox(memoryId)
+    const draft = row?.draft
+    if (!draft) throw new Error('De inhoud van deze memory is niet op je telefoon bewaard.')
     await patchOutbox(memoryId, { status: 'uploading' })
 
     // 1) Versleutel envelope + elk mediabestand (één tegelijk; ciphertext in het
@@ -348,7 +376,69 @@ async function markImported(e: OutboxEntry): Promise<void> {
  * thuis alsnog binnen terwijl hij hier weg lijkt. Alleen bij 'gone' (server kent
  * 'm niet meer) en 'imported' is de server niet nodig. */
 export async function removeEntry(pairing: Pairing, entry: OutboxEntry): Promise<void> {
-  if (entry.status !== 'imported' && entry.status !== 'gone') await deleteMemory(pairing, entry.memoryId)
-  await deleteOutbox(entry.memoryId)
-  if (entry.draft) await deleteMediaIfUnused(entry.draft.id)
+  const release = claimForChange(entry.memoryId)
+  try {
+    // Vers lezen: de status kan veranderd zijn sinds het scherm 'm laadde.
+    const cur = (await getOutbox(entry.memoryId)) ?? entry
+    if (cur.status !== 'imported' && cur.status !== 'gone') await deleteMemory(pairing, cur.memoryId)
+    await deleteOutbox(cur.memoryId)
+    if (cur.draft) await deleteMediaIfUnused(cur.draft.id)
+  } finally {
+    release()
+  }
+}
+
+// ---- Onderbroken uploads vanzelf hervatten ----
+
+// Eén automatische poging per memory per app-sessie: een upload die om een
+// blijvende reden faalt, blijft zo niet eindeloos opnieuw proberen.
+const autoTried = new Set<string>()
+let resuming = false
+
+// Memories die nu in de aanpas-modus open staan: die versturen we niet vanzelf,
+// anders vertrekt de oude versie terwijl je 'm aan het aanpassen bent.
+const held = new Set<string>()
+export function holdForEdit(memoryId: string): () => void {
+  held.add(memoryId)
+  return () => held.delete(memoryId)
+}
+
+// Schermen die willen weten dat de achtergrond-hervatting een rij veranderde.
+// Een set i.p.v. één callback: een scherm dat later opent (terwijl de lus al
+// loopt) moet ook bijgewerkt worden.
+const outboxListeners = new Set<() => void>()
+export function onOutboxChange(cb: () => void): () => void {
+  outboxListeners.add(cb)
+  return () => outboxListeners.delete(cb)
+}
+const notifyOutbox = (): void => outboxListeners.forEach((l) => l())
+
+/** Verstuur mislukte/onderbroken memories opnieuw op de achtergrond (zelfde
+ * memoryId: de desktop importeert er nooit twee van). Niet voor 'gone' (kan thuis
+ * bewust verwijderd zijn) en niet als er onverstuurde wijzigingen klaarstaan.
+ * `onChange` laat het scherm verversen; 401 gaat omhoog (opnieuw koppelen). */
+export async function autoResume(pairing: Pairing): Promise<void> {
+  if (resuming || !navigator.onLine) return
+  resuming = true
+  try {
+    for (const { memoryId } of await listOutbox()) {
+      const e = await getOutbox(memoryId) // vers: kan intussen veranderd zijn
+      if (!e || e.status !== 'failed' || !e.draft || e.edit) continue
+      if (autoTried.has(memoryId) || active.has(memoryId) || blocked.has(memoryId) || held.has(memoryId)) continue
+      autoTried.add(memoryId)
+      const run = runUpload(pairing, memoryId, () => {})
+      notifyOutbox() // toont nu "Bezig met versturen…"
+      try {
+        await run
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 401) throw err
+        /* blijft 'failed'; handmatig opnieuw versturen kan altijd */
+      } finally {
+        notifyOutbox()
+      }
+      if (!navigator.onLine) break
+    }
+  } finally {
+    resuming = false
+  }
 }

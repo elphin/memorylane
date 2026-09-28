@@ -1,9 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { Draft, OutboxEntry, Pairing } from '../store/db'
 import { listDrafts, listOutbox } from '../store/db'
 import { ApiError } from '../api/client'
-import { syncOutbox } from '../upload/queue'
+import { autoResume, onOutboxChange, syncOutbox } from '../upload/queue'
 import { formatDateShort } from '../util'
 import { IconPlay, IconPlus } from '../icons'
 import { statusView } from './status'
@@ -43,23 +43,44 @@ export function DashboardScreen({
   const [items, setItems] = useState<OutboxEntry[]>([])
   const [draft, setDraft] = useState<Draft | null>(null)
   const [loaded, setLoaded] = useState(false)
+  const mounted = useRef(true)
+
+  const reload = async (): Promise<void> => {
+    const list = await listOutbox()
+    if (mounted.current) setItems(list)
+  }
 
   async function refresh(): Promise<void> {
-    setItems(await listOutbox())
+    await reload()
     // Openstaand concept (met inhoud) bovenaan tonen als "verder schrijven".
     const drafts = await listDrafts()
     setDraft(drafts.find((d) => d.title.trim() !== '' || d.note.trim() !== '' || d.media.length > 0) ?? null)
     setLoaded(true)
     try {
       await syncOutbox(pairing)
-      setItems(await listOutbox())
+      await reload()
+      // Onderbroken uploads (app op slot, geen bereik) vanzelf afmaken.
+      await autoResume(pairing)
     } catch (e) {
       if (e instanceof ApiError && e.status === 401) onExpired()
     }
   }
 
   useEffect(() => {
+    mounted.current = true
     void refresh()
+    // Terug in de app (iOS houdt 'm in het geheugen) → status bijwerken en
+    // eventueel onderbroken uploads hervatten.
+    const onVisible = (): void => {
+      if (document.visibilityState === 'visible') void refresh()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    const unsub = onOutboxChange(() => void reload())
+    return () => {
+      mounted.current = false
+      document.removeEventListener('visibilitychange', onVisible)
+      unsub()
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
