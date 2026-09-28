@@ -153,7 +153,9 @@ describe('create → complete → list → urls → ack', () => {
     const count2 = await SELF.fetch(`${BASE}/api/memories/count?status=ready`, { headers: owner(m) })
     expect(await count2.json<{ count: number }>()).toEqual({ count: 0 })
     const outbox = await SELF.fetch(`${BASE}/api/outbox`, { headers: upload(m) })
-    expect(await outbox.json<{ status: string }[]>()).toEqual([{ memoryId, status: 'imported', createdAt: expect.any(String) }])
+    expect(await outbox.json<{ status: string }[]>()).toEqual([
+      { memoryId, status: 'imported', createdAt: expect.any(String), readyAt: expect.any(String), expiresAt: null },
+    ])
 
     // Ack nogmaals → idempotent 200.
     const ack2 = await SELF.fetch(`${BASE}/api/memories/${memoryId}/ack`, { method: 'POST', headers: owner(m) })
@@ -283,6 +285,48 @@ describe('mailbox verwijderen', () => {
     expect(await count('SELECT COUNT(*) AS n FROM mailboxes WHERE id = ?1')).toBe(0)
     expect((await env.BUCKET.list({ prefix: `mb/${m.mailboxId}/` })).objects).toHaveLength(0)
     expect((await SELF.fetch(`${BASE}/api/outbox`, { headers: upload(m) })).status).toBe(401)
+  })
+})
+
+describe('outbox-verloop + delete-status', () => {
+  it('ready → expiresAt = readyAt + 30 dagen; DELETE meldt de vorige status', async () => {
+    const m = (await register()).m
+    const memoryId = crypto.randomUUID()
+    await SELF.fetch(`${BASE}/api/memories`, {
+      ...j({ memoryId, files: [], envelopeBytes: 40 }),
+      headers: { 'content-type': 'application/json', ...upload(m) },
+    })
+    const up = await (await SELF.fetch(`${BASE}/api/outbox`, { headers: upload(m) })).json<
+      { status: string; readyAt: string | null; expiresAt: string | null }[]
+    >()
+    expect(up[0]).toMatchObject({ status: 'uploading', readyAt: null, expiresAt: null })
+
+    await putObjects(m, memoryId, { envelope: 40 })
+    await SELF.fetch(`${BASE}/api/memories/${memoryId}/complete`, { method: 'POST', headers: upload(m) })
+    const [row] = await (await SELF.fetch(`${BASE}/api/outbox`, { headers: upload(m) })).json<
+      { status: string; readyAt: string; expiresAt: string }[]
+    >()
+    expect(row.status).toBe('ready')
+    expect(Date.parse(row.expiresAt) - Date.parse(row.readyAt)).toBe(30 * 86400 * 1000)
+
+    const del = await SELF.fetch(`${BASE}/api/memories/${memoryId}`, { method: 'DELETE', headers: upload(m) })
+    expect(await del.json()).toEqual({ ok: true, was: 'ready' })
+    const again = await SELF.fetch(`${BASE}/api/memories/${memoryId}`, { method: 'DELETE', headers: upload(m) })
+    expect(await again.json()).toEqual({ ok: true, was: null })
+  })
+
+  it('DELETE op een geïmporteerde memory meldt was=imported', async () => {
+    const m = (await register()).m
+    const memoryId = crypto.randomUUID()
+    await SELF.fetch(`${BASE}/api/memories`, {
+      ...j({ memoryId, files: [], envelopeBytes: 40 }),
+      headers: { 'content-type': 'application/json', ...upload(m) },
+    })
+    await putObjects(m, memoryId, { envelope: 40 })
+    await SELF.fetch(`${BASE}/api/memories/${memoryId}/complete`, { method: 'POST', headers: upload(m) })
+    await SELF.fetch(`${BASE}/api/memories/${memoryId}/ack`, { method: 'POST', headers: owner(m) })
+    const del = await SELF.fetch(`${BASE}/api/memories/${memoryId}`, { method: 'DELETE', headers: upload(m) })
+    expect(await del.json()).toEqual({ ok: true, was: 'imported' })
   })
 })
 

@@ -4,7 +4,7 @@
 
 import { Hono } from 'hono'
 import type { ContentfulStatusCode } from 'hono/utils/http-status'
-import type { Env } from './config'
+import { READY_RETENTION_DAYS, type Env } from './config'
 import { ApiError } from './http'
 import { authMailbox } from './auth'
 import { mailboxes } from './mailboxes'
@@ -24,11 +24,22 @@ app.route('/api/memories', memories)
 app.get('/api/outbox', async (c) => {
   const mailboxId = await authMailbox(c, 'upload')
   const rows = await c.env.DB.prepare(
-    'SELECT id, status, created_at FROM memories WHERE mailbox_id = ?1 ORDER BY created_at',
+    'SELECT id, status, created_at, ready_at FROM memories WHERE mailbox_id = ?1 ORDER BY created_at',
   )
     .bind(mailboxId)
-    .all<{ id: string; status: string; created_at: string }>()
-  return c.json(rows.results.map((r) => ({ memoryId: r.id, status: r.status, createdAt: r.created_at })))
+    .all<{ id: string; status: string; created_at: string; ready_at: string | null }>()
+  const retentionMs = READY_RETENTION_DAYS * 86400 * 1000
+  return c.json(
+    rows.results.map((r) => ({
+      memoryId: r.id,
+      status: r.status,
+      createdAt: r.created_at,
+      readyAt: r.ready_at,
+      // Zodat de telefoon ruim vóór de cron-opruiming kan waarschuwen.
+      expiresAt:
+        r.status === 'ready' && r.ready_at ? new Date(Date.parse(r.ready_at) + retentionMs).toISOString() : null,
+    })),
+  )
 })
 
 // Nette 404 voor onbekende API-routes.

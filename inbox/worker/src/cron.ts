@@ -1,14 +1,14 @@
 // Dagelijkse opruiming (§5.7). Bij lage volumes ruim binnen de subrequest-limiet;
 // per verlopen memory eerst R2, dan de D1-rijen (§11).
 
-import type { Env } from './config'
+import { READY_RETENTION_DAYS, type Env } from './config'
 import { deletePrefix } from './r2'
 import { memoryPrefix } from './util'
 
 export async function runCron(env: Env, now = Date.now()): Promise<void> {
   const day = 86400 * 1000
   const cutUploading = new Date(now - 7 * day).toISOString() // verlopen uploads
-  const cutReady = new Date(now - 30 * day).toISOString() // bewaartermijn ready + tombstones
+  const cutReady = new Date(now - READY_RETENTION_DAYS * day).toISOString() // bewaartermijn ready + tombstones
 
   // 1+2) uploading > 7 dagen én ready > 30 dagen: R2-objecten + rijen weg.
   const stale = await env.DB.prepare(

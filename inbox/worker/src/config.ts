@@ -19,6 +19,10 @@ export interface Env {
   R2_ACCOUNT_ID: string
 }
 
+// Hoe lang een klaarstaande (ready) memory in de brievenbus blijft voordat de
+// dagelijkse cron hem opruimt. De telefoon krijgt de verloopdatum via /api/outbox.
+export const READY_RETENTION_DAYS = 30
+
 const GiB = 1024 * 1024 * 1024
 const MiB = 1024 * 1024
 

@@ -57,4 +57,13 @@ export interface OutboxEntry {
   memoryId: string
   status: 'uploading' | 'ready' | 'imported'
   createdAt: string
+  readyAt: string | null
+  /** Alleen bij status 'ready': wanneer de cron 'm opruimt (readyAt + retentie). */
+  expiresAt: string | null
+}
+
+// DELETE /api/memories/:id → wat de memory vóór het verwijderen was (null = onbekend).
+export interface DeleteMemoryResponse {
+  ok: true
+  was: 'uploading' | 'ready' | 'imported' | null
 }

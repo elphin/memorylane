@@ -225,18 +225,19 @@ memories.delete('/:id', async (c) => {
   const mem = await c.env.DB.prepare('SELECT status FROM memories WHERE mailbox_id = ?1 AND id = ?2')
     .bind(mailboxId, memoryId)
     .first<{ status: Status }>()
-  if (!mem) return c.json({ ok: true }) // niets te doen
+  if (!mem) return c.json({ ok: true, was: null }) // niets te doen
   if (mem.status === 'imported') {
     // Tombstone: alleen de rij weg (R2 is al leeg).
     await c.env.DB.prepare('DELETE FROM memories WHERE mailbox_id = ?1 AND id = ?2').bind(mailboxId, memoryId).run()
-    return c.json({ ok: true })
+    return c.json({ ok: true, was: 'imported' })
   }
   await deletePrefix(c.env, memoryPrefix(mailboxId, memoryId))
   await c.env.DB.batch([
     c.env.DB.prepare('DELETE FROM files WHERE mailbox_id = ?1 AND memory_id = ?2').bind(mailboxId, memoryId),
     c.env.DB.prepare('DELETE FROM memories WHERE mailbox_id = ?1 AND id = ?2').bind(mailboxId, memoryId),
   ])
-  return c.json({ ok: true })
+  // `was` laat de telefoon zien of een vervang-actie te laat kwam (al geïmporteerd).
+  return c.json({ ok: true, was: mem.status })
 })
 
 function requireReadyStatus(status: string | undefined): void {
