@@ -28,6 +28,7 @@ import { EventScene } from '../render/scenes/event'
 import type { NodePosition } from '../render/scenes/scene'
 import { Screensaver } from './Screensaver'
 import { SettingsPhone } from './SettingsPhone'
+import { PhoneInboxBanner, usePhoneInbox } from './PhoneInbox'
 import { FocusVideoLayer } from './FocusVideoLayer'
 import { MusicLayer, PauseIcon, PlayIcon, type NowPlaying } from './MusicLayer'
 import { FocusScene } from '../render/scenes/focus'
@@ -98,6 +99,10 @@ interface MetaForm {
 
 /** App-voorkeuren (UI, geen vault-data) — bewaard in localStorage. */
 interface Settings {
+  /** Memories van je telefoon bij het opstarten vanzelf binnenhalen. Standaard
+   * aan: de brievenbus ruimt klaarstaande memories na 30 dagen op, en wie niet
+   * aan de knop denkt, raakte ze zo kwijt. */
+  phoneAutoImport: boolean
   /** Mag de app bij een geplakte link online de titel, artiest en albumhoes
    * opzoeken? Standaard aan; uit betekent: alleen wat je zelf typt. */
   musicLookup: boolean
@@ -178,6 +183,7 @@ interface Settings {
 }
 
 const DEFAULT_SETTINGS: Settings = {
+  phoneAutoImport: true,
   musicLookup: true,
   musicVolume: 60,
   musicAuto: 'diavoorstelling',
@@ -2425,6 +2431,17 @@ export function AppShell() {
     }
   }
 
+  // Telefoon-brievenbus: melding bij klaarstaande (bijna verlopen) memories en,
+  // als de instelling aan staat, vanzelf importeren bij het opstarten.
+  const phoneInbox = usePhoneInbox({
+    backend: backendRef.current,
+    ready: phase === 'ready' || phase === 'empty',
+    autoImport: settings.phoneAutoImport,
+    onImported: () => void rebuildLifeline(),
+    onLifeline: () => levelRef.current === 'lifeline' && !enteringRef.current,
+    notify: (msg) => setToast(msg),
+  })
+
   // Toon het materialisatie-overzicht alleen als er echt iets gebeurde: bestanden
   // aangemaakt of problemen. Losse foto's zijn puur informatief (staan wél in het
   // overzicht als 't verschijnt), maar triggeren 'm niet — anders komt-ie elke
@@ -3096,7 +3113,10 @@ export function AppShell() {
           onReindex={() => void reindexVault()}
           onResetSettings={resetAppSettings}
           backend={backendRef.current}
-          onImported={() => void rebuildLifeline()}
+          onImported={() => {
+            void rebuildLifeline()
+            phoneInbox.refresh() // melding onderin mag niet blijven zeggen dat ze klaarstaan
+          }}
         />
       )}
       <AnimatePresence>
@@ -3224,6 +3244,14 @@ export function AppShell() {
           </button>
         )}
       {toast && <div style={toastStyle(u)}>{toast}</div>}
+      {phoneInbox.banner && (
+        <PhoneInboxBanner
+          banner={phoneInbox.banner}
+          onImport={phoneInbox.importNow}
+          onShow={phoneInbox.showImported}
+          onDismiss={phoneInbox.dismiss}
+        />
+      )}
       {/* Tagfilter op de jaar-tijdlijn. Alleen zichtbaar als dit jaar tags heeft; de
           chips komen uit de ONGEFILTERDE lijst, zodat je altijd kunt wisselen en niet
           alleen kunt wissen. Actief filter blijft in beeld — je mag nooit met een
@@ -4532,7 +4560,12 @@ function SettingsPanel({
           {tab === 'telefoon' && (
             <>
               {backend ? (
-                <SettingsPhone backend={backend} onImported={onImported} />
+                <SettingsPhone
+                  backend={backend}
+                  onImported={onImported}
+                  autoImport={settings.phoneAutoImport}
+                  onAutoImportChange={(v) => onChange({ phoneAutoImport: v })}
+                />
               ) : (
                 <div style={{ color: u.textMuted, fontSize: 13 }}>Backend nog niet gereed…</div>
               )}

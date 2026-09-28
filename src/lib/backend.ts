@@ -290,6 +290,13 @@ export interface InboxStatus {
   pairedAt?: string
 }
 
+/** Klaarstaande memories in de brievenbus + het vroegste verloopmoment
+ * (RFC 3339; ontbreekt bij een oudere brievenbus-server). */
+export interface PendingSummary {
+  count: number
+  soonestExpiresAt?: string | null
+}
+
 /** Resultaat van pairen/roteren: de QR-payload + korte mailbox-id (éénmalig). */
 export interface PairResult {
   qrPayload: string
@@ -426,6 +433,8 @@ export interface Backend {
   inboxShowQr(): Promise<PairResult>
   /** Aantal klaarstaande memories (badge). Werpt bij offline/niet-gekoppeld. */
   inboxPendingCount(): Promise<number>
+  /** Aantal klaarstaande memories + vroegste verloop (voor de melding in de hoofd-UI). */
+  inboxPendingSummary(): Promise<PendingSummary>
   /** Nieuwe koppelcode (roteert upload-token + masterKey). Werpt `pending:<n>`
    * zolang er nog te importeren memories staan. */
   inboxRotateUploadToken(): Promise<PairResult>
@@ -764,6 +773,10 @@ class TauriBackend implements Backend {
   async inboxPendingCount(): Promise<number> {
     const invoke = await this.api()
     return await invoke<number>('inbox_pending_count')
+  }
+  async inboxPendingSummary(): Promise<PendingSummary> {
+    const invoke = await this.api()
+    return await invoke<PendingSummary>('inbox_pending_summary')
   }
   async inboxRotateUploadToken(): Promise<PairResult> {
     const invoke = await this.api()
@@ -1464,6 +1477,9 @@ class MockBackend implements Backend {
     throw new Error('Alleen in de desktop-app.')
   }
   async inboxPendingCount(): Promise<number> {
+    throw new Error('niet gekoppeld')
+  }
+  async inboxPendingSummary(): Promise<PendingSummary> {
     throw new Error('niet gekoppeld')
   }
   async inboxRotateUploadToken(): Promise<PairResult> {

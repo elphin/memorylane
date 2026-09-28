@@ -13,6 +13,7 @@ mod store;
 use base64::Engine;
 use rand::RngCore;
 use serde::Serialize;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{AppHandle, State, Window};
 
 use crate::commands::VaultService;
@@ -187,6 +188,44 @@ pub async fn inbox_pending_count() -> Result<u32, String> {
         .map_err(|e| format!("taak-fout: {e}"))?
 }
 
+/// Klaarstaande memories + het vroegste verloopmoment (voor de melding in de
+/// hoofd-UI). `soonest_expires_at` is None bij een oudere Worker.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingSummary {
+    pub count: u32,
+    pub soonest_expires_at: Option<String>,
+}
+
+#[tauri::command]
+pub async fn inbox_pending_summary() -> Result<PendingSummary, String> {
+    let p = store::load()?.ok_or("Niet gekoppeld.")?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let rows = api::list_ready(&p.server_url, &p.mailbox_id, &p.owner_token)?;
+        Ok(summarize(&rows))
+    })
+    .await
+    .map_err(|e| format!("taak-fout: {e}"))?
+}
+
+fn summarize(rows: &[api::ReadyRow]) -> PendingSummary {
+    // ISO-8601 in UTC (toISOString) sorteert als tekst chronologisch.
+    let soonest = rows.iter().filter_map(|r| r.expires_at.clone()).min();
+    PendingSummary { count: rows.len() as u32, soonest_expires_at: soonest }
+}
+
+// Er loopt een import. Twee tegelijk (auto-import bij opstart + de knop in
+// Instellingen) zouden elk hun eigen ledger laden en dezelfde memory twee keer
+// in de vault schrijven.
+static IMPORTING: AtomicBool = AtomicBool::new(false);
+
+struct ImportGuard;
+impl Drop for ImportGuard {
+    fn drop(&mut self) {
+        IMPORTING.store(false, Ordering::SeqCst);
+    }
+}
+
 /// Nieuwe koppelcode: roteert upload-token én masterKey. Weigert (`pending:<n>`)
 /// zolang er nog `ready`-memories onder de oude sleutel staan — de frontend biedt
 /// dan importeren of expliciet weggooien aan.
@@ -266,6 +305,10 @@ pub async fn inbox_import(
         .current_vault()
         .map_err(|_| "Kies eerst een vault-map in Instellingen → Opslag.".to_string())?;
     let pairing = store::load()?.ok_or("Niet gekoppeld.")?;
+    if IMPORTING.swap(true, Ordering::SeqCst) {
+        return Err("Er loopt al een import van je telefoon.".into());
+    }
+    let _guard = ImportGuard;
     let report = tauri::async_runtime::spawn_blocking(move || import::run(&app, &window, &vault_root, &pairing))
         .await
         .map_err(|e| format!("taak-fout: {e}"))??;
@@ -294,6 +337,19 @@ mod tests {
     #[test]
     fn qr_payload_shape() {
         assert_eq!(qr("https://h", "mb-1", "tok", "keyb64"), "https://h/#v=1&mb=mb-1&t=tok&k=keyb64");
+    }
+
+    #[test]
+    fn summarize_picks_soonest_expiry() {
+        let row = |id: &str, exp: Option<&str>| api::ReadyRow { memory_id: id.into(), expires_at: exp.map(Into::into) };
+        let s = summarize(&[
+            row("a", Some("2026-10-20T10:00:00.000Z")),
+            row("b", None),
+            row("c", Some("2026-10-02T09:00:00.000Z")),
+        ]);
+        assert_eq!(s.count, 3);
+        assert_eq!(s.soonest_expires_at.as_deref(), Some("2026-10-02T09:00:00.000Z"));
+        assert!(summarize(&[]).soonest_expires_at.is_none());
     }
 
     #[test]

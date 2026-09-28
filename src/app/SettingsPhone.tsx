@@ -64,7 +64,18 @@ const DEFAULT_SERVER = ((import.meta.env.VITE_INBOX_SERVER_URL as string | undef
 const DEFAULT_INVITE = ((import.meta.env.VITE_INBOX_INVITE_CODE as string | undefined) ?? '').trim()
 const HAS_DEFAULTS = DEFAULT_SERVER !== '' && DEFAULT_INVITE !== ''
 
-export function SettingsPhone({ backend, onImported }: { backend: Backend; onImported?: () => void }) {
+export function SettingsPhone({
+  backend,
+  onImported,
+  autoImport,
+  onAutoImportChange,
+}: {
+  backend: Backend
+  onImported?: () => void
+  /** Instelling "vanzelf importeren bij opstarten" (weggelaten = niet tonen). */
+  autoImport?: boolean
+  onAutoImportChange?: (v: boolean) => void
+}) {
   // Actief UI-palet (volgt THEME.uiMode van het app-thema).
   const u = ui()
   const [status, setStatus] = useState<InboxStatus | null>(null)
@@ -410,6 +421,24 @@ export function SettingsPhone({ backend, onImported }: { backend: Backend; onImp
           </div>
         )}
       </div>
+
+      {onAutoImportChange && (
+        <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginTop: 14, cursor: 'pointer' }}>
+          <input
+            type="checkbox"
+            checked={!!autoImport}
+            onChange={(e) => onAutoImportChange(e.target.checked)}
+            style={{ marginTop: 2 }}
+          />
+          <span>
+            <span style={{ fontSize: 13, color: u.text }}>Vanzelf importeren bij het opstarten</span>
+            <span style={{ ...desc(u), display: 'block', marginTop: 2 }}>
+              Memories van je telefoon komen dan binnen zodra je MemoryLane opent. Staat dit uit, dan krijg je een
+              melding — de brievenbus bewaart ze 30 dagen.
+            </span>
+          </span>
+        </label>
+      )}
 
       {/* Rotate-bevestiging bij nog-pending memories */}
       {pending !== null && pending > 0 && (

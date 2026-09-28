@@ -126,13 +126,18 @@ pub fn count_ready(server: &str, mailbox_id: &str, owner_token: &str) -> Result<
     Ok(resp.json::<CountResp>().map_err(|e| format!("antwoord lezen: {e}"))?.count)
 }
 
-/// GET /api/memories?status=ready — owner. Alleen de memoryId's (voor discard).
-pub fn list_ready_ids(server: &str, mailbox_id: &str, owner_token: &str) -> Result<Vec<String>, String> {
-    #[derive(Deserialize)]
-    struct MemRow {
-        #[serde(rename = "memoryId")]
-        memory_id: String,
-    }
+/// Eén klaarstaande memory uit de lijst.
+#[derive(Deserialize)]
+pub struct ReadyRow {
+    #[serde(rename = "memoryId")]
+    pub memory_id: String,
+    /// Wanneer de brievenbus 'm opruimt (ontbreekt bij een oudere Worker).
+    #[serde(rename = "expiresAt", default)]
+    pub expires_at: Option<String>,
+}
+
+/// GET /api/memories?status=ready — owner. De klaarstaande memories.
+pub fn list_ready(server: &str, mailbox_id: &str, owner_token: &str) -> Result<Vec<ReadyRow>, String> {
     let resp = client()?
         .get(format!("{server}/api/memories?status=ready"))
         .header("X-Mailbox", mailbox_id)
@@ -140,12 +145,12 @@ pub fn list_ready_ids(server: &str, mailbox_id: &str, owner_token: &str) -> Resu
         .send()
         .map_err(neterr)?;
     let resp = check(resp)?;
-    Ok(resp
-        .json::<Vec<MemRow>>()
-        .map_err(|e| format!("antwoord lezen: {e}"))?
-        .into_iter()
-        .map(|m| m.memory_id)
-        .collect())
+    resp.json::<Vec<ReadyRow>>().map_err(|e| format!("antwoord lezen: {e}"))
+}
+
+/// Alleen de memoryId's (voor discard en import).
+pub fn list_ready_ids(server: &str, mailbox_id: &str, owner_token: &str) -> Result<Vec<String>, String> {
+    Ok(list_ready(server, mailbox_id, owner_token)?.into_iter().map(|m| m.memory_id).collect())
 }
 
 /// DELETE /api/memories/:id — owner. Trekt één memory in.

@@ -186,6 +186,7 @@ pub fn run() {
             inbox::inbox_status,
             inbox::inbox_show_qr,
             inbox::inbox_pending_count,
+            inbox::inbox_pending_summary,
             inbox::inbox_rotate_upload_token,
             inbox::inbox_discard_pending,
             inbox::inbox_unpair,

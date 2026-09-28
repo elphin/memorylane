@@ -20,6 +20,11 @@ use crate::vault::writer;
 pub struct VaultService {
     conn: Mutex<Connection>,
     vault_path: Mutex<Option<PathBuf>>,
+    /// Houdt scan + load van één herindexering bij elkaar. Zonder dit kan een
+    /// trage rescan (bv. na een import op de achtergrond) zijn oudere momentopname
+    /// laden ná een snellere rescan van een verse bewerking, waardoor die bewerking
+    /// uit de index verdwijnt terwijl hij wel op schijf staat.
+    rescan_lock: Mutex<()>,
 }
 
 impl VaultService {
@@ -29,6 +34,7 @@ impl VaultService {
         Ok(VaultService {
             conn: Mutex::new(conn),
             vault_path: Mutex::new(None),
+            rescan_lock: Mutex::new(()),
         })
     }
 
@@ -59,6 +65,7 @@ impl VaultService {
         } else {
             vault::MaterializationReport::default()
         };
+        let _scan = self.rescan_lock.lock().map_err(lock_err)?;
         let model = vault::scan(path);
         let summary = IndexSummary::from_model(&model, report);
         {
@@ -165,6 +172,7 @@ impl VaultService {
     /// Herindexeert het huidige vault-pad (na een structurele wijziging).
     pub(crate) fn rescan(&self) -> Result<(), String> {
         let path = self.current_vault()?;
+        let _scan = self.rescan_lock.lock().map_err(lock_err)?;
         let model = vault::scan(&path);
         let mut conn = self.conn.lock().map_err(lock_err)?;
         index::load(&mut conn, &model).map_err(|e| e.to_string())
